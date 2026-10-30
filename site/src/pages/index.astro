@@ -1,0 +1,461 @@
+---
+import '@fontsource-variable/bricolage-grotesque/standard.css';
+import '@fontsource/ibm-plex-mono/400.css';
+import '@fontsource/ibm-plex-mono/600.css';
+import { Code } from 'astro:components';
+
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const docs = (path = '') => `${base}/docs/${path}`;
+const repo = 'https://github.com/flowcopilot/audioflow';
+
+// Turn timeline: 0 s is the moment the session accepts the utterance.
+// The 0.3 s and 0.8 s marks are measured (Apple M5, Qwen3-ASR 0.6B, Qwen3 0.6B).
+const start = -1.2;
+const end = 2.0;
+const x = (t: number) => ((t - start) / (end - start)) * 100;
+const ticks = [-1, -0.5, 0, 0.5, 1, 1.5, 2];
+
+function wave(from: number, to: number, seed: number, step = 0.03) {
+  const bars = [];
+  let s = seed;
+  for (let t = from; t < to; t += step) {
+    s = (s * 9301 + 49297) % 233280;
+    const noise = s / 233280;
+    const envelope = Math.sin(((t - from) / (to - from)) * Math.PI) ** 0.6;
+    bars.push({ left: x(t), height: 12 + envelope * (30 + noise * 58) });
+  }
+  return bars;
+}
+
+const voice = wave(-1.15, -0.05, 7);
+const audio = wave(0.8, 2.05, 31);
+const words = ['Sure,', 'the', 'next', 'train', 'leaves', 'at', 'ten', 'past', 'four.', 'Want', 'a', 'reminder?'];
+
+const sessions = ['<0.412.0>', '<0.418.0>', '<0.425.0>', '<0.431.0>', '<0.440.0>', '<0.447.0>'];
+const servings = [
+  { name: 'Whisper', role: 'Speech recognition' },
+  { name: 'Qwen3', role: 'Reply text' },
+  { name: 'Kokoro', role: 'Speech synthesis' },
+];
+
+const sessionCode = `{:ok, session} = AudioFlow.start_session(
+  stt: {AudioFlow.NxAdapter, serving: MyApp.Whisper, ...},
+  llm: {AudioFlow.Adapters.ChatHTTP, endpoint: url, model: "qwen3"},
+  tts: {AudioFlow.NxAdapter, serving: MyApp.Kokoro, ...},
+  output: {AudioFlow.Playback, playback},
+  history: [max_turns: 8]
+)
+
+{:ok, turn} = AudioFlow.submit(session, %AudioFlow.Audio{data: pcm, sample_rate: 16_000})
+
+receive do
+  {AudioFlow, ^session, ^turn, event} -> handle(event)
+end
+
+# The user speaks again: stop the reply and flush the speaker.
+AudioFlow.cancel(session)`;
+
+const features = [
+  { title: 'A process per conversation', body: 'Each session is supervised. One crash ends one conversation, not the server.', href: 'guides/sessions/' },
+  { title: 'Interrupt at any time', body: 'Cancel kills the turn task and flushes queued audio. Silero voice detection does it for you on barge-in.', href: 'guides/membrane-input/' },
+  { title: 'Native inference', body: 'Whisper, Qwen3, Kokoro, VITS, CLIP, and BLIP run through Bumblebee, EXLA, and Transmuter.', href: 'guides/local-models/' },
+  { title: 'Any language model server', body: 'Stream chat completions from llama.cpp or a cloud endpoint, with strict byte limits.', href: 'guides/http-inference/' },
+  { title: 'Routes across nodes', body: 'Send requests to bounded workers on other Erlang nodes. Change routes while sessions stay open.', href: 'guides/routing/' },
+  { title: 'Images and video', body: 'Describe RGB frames from MP4 files or cameras, and talk about them in later voice turns.', href: 'guides/images/' },
+  { title: 'Memory with limits', body: 'History keeps complete turn pairs, capped by count and by bytes.', href: 'guides/history/' },
+  { title: 'Back pressure everywhere', body: 'Every output chunk waits for an acknowledgement. Queues have fixed sizes.', href: 'guides/output/' },
+];
+
+const comparison = [
+  { c: 1, af: 1.5, pc: 1.7 },
+  { c: 2, af: 1.35, pc: 1.78 },
+  { c: 4, af: 2.63, pc: 2.59 },
+  { c: 8, af: 5.34, pc: 5.19 },
+];
+const maxP50 = 7;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AudioFlow: voice agents on the BEAM</title>
+    <meta name="description" content="AudioFlow is an Elixir runtime for voice, image, and video agents. One OTP process per conversation, shared native models, and interruption built in." />
+    <link rel="icon" href={`${base}/favicon.svg`} type="image/svg+xml" />
+    <meta property="og:title" content="AudioFlow: voice agents on the BEAM" />
+    <meta property="og:description" content="An Elixir runtime for voice, image, and video agents." />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <header class="nav wrap">
+      <a class="brand" href={`${base}/`} aria-label="AudioFlow home">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#5B2E91" /><g stroke="#7CE0C3" stroke-width="2.4" stroke-linecap="round"><path d="M8 14v4" /><path d="M12 10v12" /><path d="M16 7v18" /><path d="M20 11v10" /><path d="M24 14v4" /></g></svg>
+        AudioFlow
+      </a>
+      <nav aria-label="Main">
+        <a href={docs()}>Docs</a>
+        <a href={docs('quickstart/')}>Quickstart</a>
+        <a href={docs('validation/pipecat-comparison/')}>Benchmarks</a>
+        <a href={repo}>GitHub</a>
+      </nav>
+    </header>
+
+    <main id="main">
+      <section class="hero wrap">
+        <h1>Voice agents that run on the BEAM.</h1>
+        <div class="hero-side">
+          <p class="lede">
+            AudioFlow is an Elixir runtime for voice, image, and video agents. Each conversation is an OTP
+            process. Speech recognition, language, and speech models run as shared services, on the same
+            node or across a cluster.
+          </p>
+          <div class="actions">
+            <a class="btn primary" href={docs('quickstart/')}>Start the quickstart</a>
+            <a class="btn" href={repo}>View the source</a>
+          </div>
+        </div>
+      </section>
+
+      <section class="console-wrap wrap" aria-labelledby="timeline-title">
+        <figure class="console">
+          <figcaption id="timeline-title" class="console-head">
+            <span>One voice turn in the chat example</span>
+            <span class="console-meta">Apple M5, Qwen3-ASR 0.6B and Qwen3 0.6B, after the first turn</span>
+          </figcaption>
+
+          <div class="tracks" role="img" aria-label="Timeline of one turn. You stop speaking at 0 seconds. The first reply text arrives at 0.3 seconds. The first reply audio arrives at 0.8 seconds.">
+            <div class="ruler" aria-hidden="true">
+              {ticks.map((t) => (
+                <span class="tick" style={`left:${x(t)}%`}>{t === 0 ? '0 s' : `${t > 0 ? '+' : ''}${t}`}</span>
+              ))}
+            </div>
+
+            <div class="track">
+              <span class="track-name">You</span>
+              <div class="lane">
+                {voice.map((b) => <i class="bar voice" style={`left:${b.left}%;height:${b.height}%`} />)}
+              </div>
+            </div>
+            <div class="track">
+              <span class="track-name">Reply text</span>
+              <div class="lane">
+                <div class="words" style={`left:${x(0.3)}%`}>
+                  {words.map((w) => <span class="word">{w}</span>)}
+                </div>
+              </div>
+            </div>
+            <div class="track">
+              <span class="track-name">Reply audio</span>
+              <div class="lane">
+                {audio.map((b) => <i class="bar out" style={`left:${b.left}%;height:${b.height}%`} />)}
+              </div>
+            </div>
+
+            <div class="overlay" aria-hidden="true">
+              <div class="marker m0" style={`left:${x(0)}%`}><b>Turn accepted</b></div>
+              <div class="marker m1" style={`left:${x(0.3)}%`}><b>First text 0.3 s</b></div>
+              <div class="marker m2" style={`left:${x(0.8)}%`}><b>First audio 0.8 s</b></div>
+              <div class="playhead"></div>
+            </div>
+          </div>
+        </figure>
+      </section>
+
+      <section class="shared wrap" aria-labelledby="shared-title">
+        <div class="shared-text">
+          <h2 id="shared-title">A process for each conversation. One copy of each model.</h2>
+          <p>
+            Sessions hold the turn, the history, and the output queue. Model weights load once into <code>Nx.Serving</code>
+            processes that every session shares. Add sessions without adding GPU
+            memory, and move a model to another node without changing a session.
+          </p>
+          <a class="text-link" href={docs('guides/local-models/')}>How shared models work</a>
+        </div>
+        <svg class="fan" viewBox="0 0 560 330" role="img" aria-label="Six session processes connect to three shared model services: Whisper, Qwen3, and Kokoro.">
+          {sessions.map((pid, i) => {
+            const y = 25 + i * 56;
+            return (
+              <g>
+                {servings.map((_, j) => {
+                  const ty = 55 + j * 110;
+                  return <path class="wire" d={`M150 ${y} C 260 ${y}, 290 ${ty}, 380 ${ty}`} />;
+                })}
+                <rect class="pid" x="10" y={y - 17} width="140" height="34" rx="17" />
+                <text class="pid-text" x="80" y={y + 5} text-anchor="middle">{pid}</text>
+              </g>
+            );
+          })}
+          {servings.map((s, j) => {
+            const y = 55 + j * 110;
+            return (
+              <g>
+                <rect class="serving" x="380" y={y - 38} width="170" height="76" rx="10" />
+                <text class="serving-name" x="400" y={y - 3}>{s.name}</text>
+                <text class="serving-role" x="400" y={y + 20}>{s.role}</text>
+              </g>
+            );
+          })}
+        </svg>
+      </section>
+
+      <section class="code wrap" aria-labelledby="code-title">
+        <div class="code-text">
+          <h2 id="code-title">Mix native and remote models in one session.</h2>
+          <p>
+            Each stage is an adapter. Point speech recognition at a local Whisper serving, the reply at a
+            llama.cpp server, and speech at Kokoro. Swap any of them later without changing the session.
+          </p>
+          <p>
+            The owner process receives every transcript, text chunk, and audio chunk as a message. One call
+            stops the reply and empties the speaker queue.
+          </p>
+          <a class="text-link" href={docs('guides/sessions/')}>Read about sessions</a>
+        </div>
+        <div class="code-block">
+          <Code code={sessionCode} lang="elixir" theme="github-dark-dimmed" />
+        </div>
+      </section>
+
+      <section class="features wrap" aria-labelledby="features-title">
+        <h2 id="features-title">What you get</h2>
+        <ul>
+          {features.map((f) => (
+            <li>
+              <a href={docs(f.href)}>
+                <h3>{f.title}</h3>
+                <p>{f.body}</p>
+              </a>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section class="bench wrap" aria-labelledby="bench-title">
+        <div class="bench-text">
+          <h2 id="bench-title">Measured against Pipecat.</h2>
+          <p>
+            Both frameworks ran the same Silero, Whisper tiny, Qwen3-0.6B, and Kokoro services on one CPU,
+            over 128 measured turns. Every turn completed, and transcripts and replies matched.
+          </p>
+          <p class="fine">
+            This compares orchestration over one inference engine. Pipecat called the models through local
+            pipes, so its result includes that transfer cost.
+          </p>
+          <a class="text-link" href={docs('validation/pipecat-comparison/')}>See the method and full results</a>
+        </div>
+        <figure class="chart">
+          <figcaption>Median time to first output, in seconds</figcaption>
+          <div class="legend" aria-hidden="true"><span class="k af">AudioFlow</span><span class="k pc">Pipecat</span></div>
+          <table>
+            <thead>
+              <tr><th scope="col">Simultaneous turns</th><th scope="col">AudioFlow</th><th scope="col">Pipecat</th></tr>
+            </thead>
+            <tbody>
+              {comparison.map((r) => (
+                <tr>
+                  <th scope="row">{r.c}</th>
+                  <td><span class="hbar af" style={`width:${(r.af / maxP50) * 100}%`}></span><span class="v">{r.af.toFixed(2)}</span></td>
+                  <td><span class="hbar pc" style={`width:${(r.pc / maxP50) * 100}%`}></span><span class="v">{r.pc.toFixed(2)}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </figure>
+      </section>
+
+      <section class="start wrap" aria-labelledby="start-title">
+        <h2 id="start-title">Run the demo in a minute.</h2>
+        <p>The core needs no model downloads. Add <code>AUDIOFLOW_ML=1</code> when you want real models.</p>
+        <pre class="shell"><code><span class="c">$</span> git clone {repo}.git
+<span class="c">$</span> cd audioflow && mix deps.get
+<span class="c">$</span> mix run examples/demo.exs</code></pre>
+        <div class="actions">
+          <a class="btn primary" href={docs()}>Read the docs</a>
+          <a class="btn" href={docs('chat-example/')}>Try the voice chat</a>
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot wrap">
+      <span>AudioFlow, built with Elixir, Nx, and Membrane.</span>
+      <nav aria-label="Footer">
+        <a href={docs()}>Docs</a>
+        <a href={repo}>GitHub</a>
+        <a href={`${repo}/issues`}>Issues</a>
+      </nav>
+    </footer>
+  </body>
+</html>
+
+<style is:global>
+  :root {
+    --paper: #f3f1fa;
+    --ink: #1d1638;
+    --plum: #5b2e91;
+    --signal: #0b8a6d;
+    --signal-bright: #7ce0c3;
+    --muted: #5f5880;
+    --rule: #d9d4ea;
+    --console: #1d1638;
+    --sans: 'Bricolage Grotesque Variable', system-ui, sans-serif;
+    --mono: 'IBM Plex Mono', ui-monospace, monospace;
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 400 1.0625rem/1.6 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  :focus-visible { outline: 3px solid var(--plum); outline-offset: 3px; border-radius: 4px; }
+  code { font-family: var(--mono); font-size: 0.9em; }
+  .wrap { width: min(1160px, 100% - 3rem); margin-inline: auto; }
+  .skip { position: absolute; left: -999px; }
+  .skip:focus { left: 1rem; top: 1rem; background: var(--ink); color: var(--paper); padding: 0.5rem 1rem; z-index: 10; }
+
+  /* Navigation */
+  .nav { display: flex; align-items: center; justify-content: space-between; padding-block: 1.5rem; gap: 1rem; }
+  .brand { display: inline-flex; align-items: center; gap: 0.6rem; font-weight: 700; font-size: 1.2rem; text-decoration: none; letter-spacing: -0.02em; }
+  .brand svg { width: 30px; height: 30px; }
+  .nav nav { display: flex; gap: 1.75rem; flex-wrap: wrap; }
+  .nav nav a { text-decoration: none; color: var(--muted); font-weight: 500; }
+  .nav nav a:hover { color: var(--ink); }
+
+  /* Hero */
+  .hero { display: grid; grid-template-columns: 1.35fr 1fr; gap: 3rem; align-items: end; padding-block: 4.5rem 3rem; }
+  h1 {
+    margin: 0;
+    font-size: clamp(3rem, 7.4vw, 6.25rem);
+    line-height: 0.92;
+    font-weight: 800;
+    font-stretch: 75%;
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+  }
+  .lede { margin: 0 0 1.75rem; font-size: 1.15rem; color: var(--muted); max-width: 34rem; }
+  .actions { display: flex; gap: 0.75rem; flex-wrap: wrap; }
+  .btn {
+    display: inline-block; padding: 0.8rem 1.3rem; border-radius: 999px; text-decoration: none;
+    font-weight: 600; border: 1.5px solid var(--ink);
+  }
+  .btn.primary { background: var(--plum); border-color: var(--plum); color: #fff; }
+  .btn.primary:hover { background: #4a2378; }
+  .btn:not(.primary):hover { background: var(--ink); color: var(--paper); }
+
+  /* Timeline console: the one loud element on the page. */
+  .console { margin: 0; background: var(--console); color: #ece9f5; border-radius: 20px; padding: 1.5rem 1.75rem 2rem; overflow: hidden; }
+  .console-head { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; font-weight: 600; margin-bottom: 1.25rem; }
+  .console-meta { color: #9890b3; font-weight: 400; font-size: 0.9rem; }
+  .tracks { position: relative; padding-left: 7.5rem; }
+  .ruler { position: relative; height: 1.6rem; border-bottom: 1px solid #3b3457; margin-bottom: 0.5rem; }
+  .tick { position: absolute; transform: translateX(-50%); font: 0.75rem var(--mono); color: #7d759c; }
+  .track { position: relative; display: flex; align-items: center; height: 5.25rem; border-bottom: 1px solid #2b2447; }
+  .track-name { position: absolute; left: -7.5rem; width: 7rem; font-size: 0.9rem; color: #c9c3dc; }
+  .lane { position: relative; width: 100%; height: 100%; }
+  .bar { position: absolute; bottom: 50%; width: 0.55%; min-width: 2px; border-radius: 2px; transform: translateY(50%); }
+  .bar.voice { background: #9a6fd6; }
+  .bar.out { background: var(--signal-bright); }
+  .words { position: absolute; top: 50%; right: 0; transform: translateY(-50%); display: flex; gap: 0.3rem; overflow: hidden; mask-image: linear-gradient(to right, #000 80%, transparent); }
+  .word { font: 0.8rem var(--mono); color: #e3d6f7; background: #2e2450; padding: 0.15rem 0.35rem; border-radius: 4px; white-space: nowrap; }
+  .overlay { position: absolute; top: 1.6rem; bottom: 0; left: 7.5rem; right: 0; pointer-events: none; }
+  .marker { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1.5px dashed #f2c66d; }
+  .marker b { position: absolute; bottom: -1.75rem; left: 0.35rem; white-space: nowrap; font: 600 0.78rem var(--mono); color: #f2c66d; }
+  .m0 { border-left-color: #7d759c; }
+  .m0 b { color: #9890b3; left: auto; right: 0.35rem; }
+  .playhead { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; background: #fff; opacity: 0; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .lane { clip-path: inset(0 100% 0 0); animation: reveal 2.6s cubic-bezier(0.3, 0, 0.3, 1) 0.4s forwards; }
+    .playhead { animation: sweep 2.6s cubic-bezier(0.3, 0, 0.3, 1) 0.4s forwards; }
+    .marker { opacity: 0; animation: appear 0.3s ease-out forwards; }
+    .m0 { animation-delay: 1.4s; }
+    .m1 { animation-delay: 1.65s; }
+    .m2 { animation-delay: 2s; }
+  }
+  @keyframes reveal { to { clip-path: inset(0 0 0 0); } }
+  @keyframes sweep {
+    0% { opacity: 0.9; left: 0; }
+    95% { opacity: 0.9; }
+    100% { opacity: 0; left: 100%; }
+  }
+  @keyframes appear { to { opacity: 1; } }
+
+  /* Sections */
+  main > section:not(.hero):not(.console-wrap) { padding-block: 6rem 0; }
+  h2 {
+    margin: 0 0 1rem; font-size: clamp(1.9rem, 3.6vw, 2.75rem); line-height: 1.02; font-weight: 750;
+    font-stretch: 82%; letter-spacing: -0.025em; text-wrap: balance;
+  }
+  section p { max-width: 36rem; }
+  .text-link { font-weight: 600; color: var(--plum); text-underline-offset: 0.2em; }
+
+  .shared { display: grid; grid-template-columns: 1fr 1.15fr; gap: 3rem; align-items: center; }
+  .fan { width: 100%; height: auto; }
+  .wire { fill: none; stroke: #b9aee0; stroke-width: 1.25; }
+  .pid { fill: #fff; stroke: var(--rule); }
+  .pid-text { font: 13px var(--mono); fill: var(--muted); }
+  .serving { fill: var(--plum); }
+  .serving-name { font: 700 19px var(--sans); fill: #fff; }
+  .serving-role { font: 13px var(--sans); fill: #d8c9f0; }
+
+  .code { display: grid; grid-template-columns: 0.85fr 1.15fr; gap: 3rem; align-items: start; }
+  .code-block pre.astro-code { margin: 0; padding: 1.5rem; border-radius: 14px; font: 0.86rem/1.65 var(--mono); overflow-x: auto; }
+
+  .features ul { list-style: none; margin: 2rem 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1.5px solid var(--ink); }
+  .features li { border-bottom: 1px solid var(--rule); }
+  .features li:not(:nth-child(4n)) { border-right: 1px solid var(--rule); }
+  .features a { display: block; height: 100%; padding: 1.5rem 1.25rem 1.75rem; text-decoration: none; }
+  .features a:hover { background: #e9e4f6; }
+  .features h3 { margin: 0 0 0.5rem; font-size: 1.15rem; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
+  .features p { margin: 0; color: var(--muted); font-size: 0.97rem; }
+
+  .bench { display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: start; }
+  .fine { font-size: 0.93rem; color: var(--muted); }
+  .chart { margin: 0; background: #fff; border: 1px solid var(--rule); border-radius: 14px; padding: 1.5rem; }
+  .chart figcaption { font-weight: 600; margin-bottom: 0.5rem; }
+  .legend { display: flex; gap: 1.25rem; font-size: 0.9rem; color: var(--muted); margin-bottom: 1rem; }
+  .k::before { content: ''; display: inline-block; width: 0.75rem; height: 0.75rem; border-radius: 2px; margin-right: 0.4rem; vertical-align: -1px; }
+  .k.af::before, .hbar.af { background: var(--plum); }
+  .k.pc::before, .hbar.pc { background: #b9aee0; }
+  .chart table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  .chart th, .chart td { padding: 0.55rem 0; text-align: left; border-top: 1px solid #eeebf6; }
+  .chart thead th { font-size: 0.85rem; font-weight: 500; color: var(--muted); border-top: 0; }
+  .chart tbody th { width: 5.5rem; font-weight: 600; padding-left: 0.25rem; }
+  .chart td { width: 42%; padding-right: 1rem; white-space: nowrap; }
+  .hbar { display: inline-block; height: 0.8rem; border-radius: 2px; vertical-align: middle; margin-right: 0.5rem; }
+  .v { font: 0.85rem var(--mono); }
+
+  .start { text-align: left; padding-bottom: 2rem; }
+  .shell { background: var(--console); color: #ece9f5; padding: 1.25rem 1.5rem; border-radius: 14px; font: 0.95rem/1.8 var(--mono); max-width: 36rem; overflow-x: auto; margin: 1.5rem 0; }
+  .shell .c { color: var(--signal-bright); user-select: none; }
+
+  .foot { display: flex; justify-content: space-between; gap: 1rem; flex-wrap: wrap; padding-block: 4rem 3rem; margin-top: 4rem; border-top: 1px solid var(--rule); color: var(--muted); font-size: 0.93rem; }
+  .foot nav { display: flex; gap: 1.5rem; }
+  .foot a { text-decoration: none; }
+  .foot a:hover { color: var(--ink); }
+
+  @media (max-width: 900px) {
+    .hero, .shared, .code, .bench { grid-template-columns: 1fr; }
+    .hero { padding-block: 2.5rem 2rem; gap: 1.5rem; }
+    .features ul { grid-template-columns: repeat(2, 1fr); }
+    .features li:not(:nth-child(4n)) { border-right: 0; }
+    .features li:nth-child(odd) { border-right: 1px solid var(--rule); }
+    .nav nav a:not(:first-child):not(:last-child) { display: none; }
+  }
+  @media (max-width: 640px) {
+    .tracks { padding-left: 0; padding-top: 0.5rem; }
+    .track { flex-direction: column; align-items: stretch; height: 6rem; }
+    .track-name { position: static; width: auto; font-size: 0.8rem; padding-top: 0.4rem; }
+    .overlay { left: 0; top: 2.1rem; }
+    .word { font-size: 0.65rem; }
+    .marker b { font-size: 0.65rem; }
+    .features ul { grid-template-columns: 1fr; }
+    .features li:nth-child(odd) { border-right: 0; }
+    .console { padding: 1.25rem 1rem 2.25rem; }
+  }
+</style>
