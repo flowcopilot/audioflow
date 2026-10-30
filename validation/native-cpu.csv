@@ -1,0 +1,5 @@
+phase,run,status,concurrency,duration_us,first_transcript_us,first_text_us,first_audio_us,error
+warmup,1,ok,1,11952128,888410,7294366,11951597,
+measured,1,ok,1,3956209,481178,2290147,3955167,
+measured,2,ok,1,3728968,409497,1999431,3728371,
+measured,3,ok,1,3203722,349448,2025409,3203196,
