@@ -20,10 +20,10 @@ defmodule AudioFlowUI.MCPTest do
 
     partial = Map.update!(voice(), "edges", &Enum.drop(&1, -1))
 
-    assert {:ok, %{structured: %{"errors" => [~s(missing edge "llm" -> "tts")]}}} =
+    assert {:ok, %{structured: %{"errors" => [~s(node "tts" has no path from an input node)]}}} =
              call_tool(client, "save_graph", %{"graph" => partial})
 
-    assert {:ok, %{is_error: true, text: ~s(missing edge "llm" -> "tts")}} =
+    assert {:ok, %{is_error: true, text: ~s(node "tts" has no path from an input node)}} =
              call_tool(client, "run_graph", %{"id" => "voice", "text" => "Hi"})
 
     assert {:ok, %{structured: %{"errors" => []}}} =

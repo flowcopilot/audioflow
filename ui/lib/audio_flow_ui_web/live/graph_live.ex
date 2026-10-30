@@ -228,6 +228,11 @@ defmodule AudioFlowUIWeb.GraphLive do
     """
   end
 
+  defp event_text(%{"text" => text}), do: text
+  defp event_text(%{"bytes" => bytes, "sample_rate" => rate}), do: "#{bytes} bytes at #{rate} Hz"
+  defp event_text(%{"width" => width, "height" => height}), do: "#{width}×#{height} image"
+  defp event_text(%{"dimensions" => dimensions}), do: "#{dimensions} dimensions"
+
   defp run_result(%{run: nil} = assigns), do: ~H""
 
   defp run_result(%{run: :running} = assigns),
@@ -242,7 +247,7 @@ defmodule AudioFlowUIWeb.GraphLive do
       <p>{@result["reply"]}</p>
       <ol class="flex flex-col gap-1 font-mono text-xs text-muted-foreground">
         <li :for={event <- @result["events"]}>
-          {event["type"]}: {event["text"] || "#{event["bytes"]} bytes at #{event["sample_rate"]} Hz"}
+          {event["node"]} {event["type"]}: {event_text(event)}
         </li>
       </ol>
       <p class="text-xs text-muted-foreground">

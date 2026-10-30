@@ -25,7 +25,7 @@ defmodule AudioFlowUIWeb.WebTest do
 
     {:ok, _} = AudioFlowUI.Graphs.put(Map.update!(voice(), "edges", &Enum.drop(&1, -1)))
     refute has_element?(canvas, ~s(path[id="llm->tts"]))
-    assert render(canvas) =~ ~s(missing edge &quot;llm&quot; -&gt; &quot;tts&quot;)
+    assert render(canvas) =~ ~s(node &quot;tts&quot; has no path from an input node)
   end
 
   test "a text run shows the reply", %{conn: conn} do

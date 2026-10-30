@@ -51,8 +51,11 @@ defmodule AudioFlowUI.MCP.SaveGraph do
     and its validation errors are returned, so you can build it in steps. The graph is an object: \
     "id" (lowercase letters, digits, "_" and "-"), "name", "nodes" (each with "id", "type", \
     optional "options" and "position" {"x", "y"}), "edges" (each with "from" and "to" node ids), \
-    and "settings" ("history", "timeout_ms", "max_events"). A graph runs as one session: \
-    input -> STT or vision -> LLM -> TTS. Call list_node_types for the types.\
+    and "settings" ("history", "timeout_ms", "max_events"). A valid graph has an input node, \
+    no cycles, and a path from an input to each node. A node can have several sources and \
+    targets. A "join" node runs once on the output of all its sources; a "stream" node runs \
+    for each value. With "history", one node that accepts history gets the conversation. \
+    Call list_node_types for the types.\
     """,
     annotations: [idempotent: true]
 
@@ -101,9 +104,9 @@ defmodule AudioFlowUI.MCP.RunGraph do
   use Sake.Tool,
     name: "run_graph",
     description: """
-    Runs one text turn of a saved, valid graph and returns the reply, the events of each stage, \
-    and timing metrics in microseconds. The graph needs a text input node. Audio events give \
-    the PCM size only.\
+    Runs one text turn of a saved, valid graph and returns the reply, the events of each node, \
+    and timing metrics in microseconds. The graph needs a text input node. Audio, image, and \
+    vector events give their size only.\
     """,
     annotations: [open_world: true]
 

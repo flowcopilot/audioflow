@@ -67,6 +67,9 @@ config :audio_flow_ui, :nodes, [
 ]
 ```
 
-A graph runs as one `AudioFlow.Session`. Thus it must have the session shape:
-input, then STT or vision, then one LLM, then one TTS. The validation tells
+A graph runs as one `AudioFlow.Session`. It needs an input node and no
+cycles, and each node needs a path from an input node. A node can have
+several sources and targets. A join node, such as STT or an LLM, runs once on
+the output of all its sources. A stream node, such as TTS, runs for each
+value, so speech starts before the reply is complete. The validation tells
 which node or edge is not correct.

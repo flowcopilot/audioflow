@@ -34,6 +34,9 @@ defmodule AudioFlowUI do
       "description" => spec.description,
       "input" => spec.input && Atom.to_string(spec.input),
       "output" => spec.output && Atom.to_string(spec.output),
+      "input_mode" => Atom.to_string(spec.input_mode),
+      "event" => spec.event && Atom.to_string(spec.event),
+      "history" => spec.history,
       "options" => Enum.map(spec.options, &json_option/1)
     }
   end
