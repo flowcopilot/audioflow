@@ -138,6 +138,20 @@ defmodule AudioFlowUIWeb.EditorTest do
     assert graph()["name"] == "Phone agent"
   end
 
+  test "New graph makes an empty graph with a unique id and opens it", %{conn: conn} do
+    {:ok, list, _} = live(conn, "/")
+
+    assert {:error, {:live_redirect, %{to: "/graphs/graph"}}} =
+             list |> element("button", "New graph") |> render_click()
+
+    {:ok, list, _} = live(conn, "/")
+
+    assert {:error, {:live_redirect, %{to: "/graphs/graph-2"}}} =
+             list |> element("button", "New graph") |> render_click()
+
+    assert {:ok, %{"nodes" => [], "edges" => []}} = AudioFlowUI.Graphs.get("graph-2")
+  end
+
   defp graph, do: elem(AudioFlowUI.Graphs.get("voice"), 1)
   defp stored_node(id), do: Enum.find(graph()["nodes"], &(&1["id"] == id))
 

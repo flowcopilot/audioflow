@@ -9,6 +9,14 @@ defmodule AudioFlowUIWeb.GraphsLive do
   end
 
   @impl true
+  def handle_event("new_graph", _params, socket) do
+    taken = for graph <- AudioFlowUI.Graphs.list(), do: graph["id"]
+    id = AudioFlowUI.GraphEdits.unique("graph", taken)
+    {:ok, _} = AudioFlowUI.Graphs.put(%{"id" => id, "name" => "Untitled graph"})
+    {:noreply, push_navigate(socket, to: "/graphs/#{id}")}
+  end
+
+  @impl true
   def handle_info({event, _}, socket) when event in [:graph_saved, :graph_deleted],
     do: {:noreply, assign(socket, graphs: graphs())}
 
@@ -20,7 +28,16 @@ defmodule AudioFlowUIWeb.GraphsLive do
     ~H"""
     <main class="mx-auto flex max-w-3xl flex-col gap-6 p-8">
       <header class="flex flex-col gap-1">
-        <h1 class="text-xl font-semibold">Agent graphs</h1>
+        <div class="flex items-center justify-between gap-4">
+          <h1 class="text-xl font-semibold">Agent graphs</h1>
+          <button
+            type="button"
+            phx-click="new_graph"
+            class="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground"
+          >
+            New graph
+          </button>
+        </div>
         <p class="text-sm text-muted-foreground">
           Coding agents can edit these graphs through MCP:
           <code class="rounded bg-muted px-1 py-0.5 font-mono text-xs">
@@ -30,7 +47,8 @@ defmodule AudioFlowUIWeb.GraphsLive do
       </header>
 
       <p :if={@graphs == []} class="text-sm text-muted-foreground">
-        No graphs. Ask a coding agent to make one with the <code>save_graph</code> tool.
+        No graphs. Make one with New graph, or ask a coding agent to use the <code>save_graph</code>
+        tool.
       </p>
 
       <ul class="flex flex-col gap-2">
