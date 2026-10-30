@@ -386,10 +386,63 @@ terminal metrics include `first_description_us`. Image-only sessions can omit
 `{:error, {:unsupported_input, stage}}`.
 
 Audio and image turns share one active-turn limit. Both support cancellation,
-deadlines, and output limits. A decoded video frame can use the same image
-input. The transport must select frames and handle `{:error, :busy}`. The runtime
-does not buffer a video stream or track motion between frames. Each frame is
-described independently. Enable history to retain their descriptions between turns.
+deadlines, and output limits. An image can include an integer `:pts` in
+nanoseconds. The session adds this time to the description sent to the LLM and
+saved in history. The `:description` event keeps the original model text.
+
+## Video input
+
+With `AUDIOFLOW_MEDIA=1`, `AudioFlow.Video.frames/2` reads H.264 video from a
+local MP4 file. It also accepts an application-supplied Membrane raw-video
+source, such as a camera source. It converts selected frames to packed RGB:
+
+```elixir
+for frame <- AudioFlow.Video.frames("input.mp4",
+      interval_ms: 1_000, width: 384, height: 384) do
+  {:ok, turn} = AudioFlow.submit(session, frame)
+  # Wait for this turn to finish before you read the next frame.
+end
+```
+
+The interval is the minimum time between selected frames. The reader uses
+presentation timestamps, rather than frame counts. By default, time starts at
+the first decoded frame. Set `normalize_timestamps?: false` to keep decoder
+timestamps, including MP4 composition offsets. These times do not account for
+MP4 edit lists or provide audio and video synchronization.
+
+The default track is the H.264 track with the lowest ID. Use `:track_id` to
+select another H.264 track. Other tracks, including audio, are discarded. Files
+with metadata at either end are supported. Unsupported tracks and decode errors
+produce errors; they do not end the calling process when you use the manual API.
+
+The reader allows one pending read and uses small RGB queues. The default frame
+limit is 6,291,456 bytes. Set `:max_frame_bytes` to change it. Optional `:width`
+and `:height` values must be positive even integers. Scaling keeps the aspect
+ratio and adds padding. The frame limit applies after scaling. Decoder working
+memory and MP4 indexes are separate from this limit. Decoding follows demand;
+the reader does not pace frames against a clock.
+
+`frames/2` closes the reader at EOF, on an early halt, or after a consumer error.
+It raises on a read error. Its `:timeout_ms` option sets the limit for each read
+(30 seconds by default). For manual control, use
+`Video.start_link(location: path)` or `Video.start_link(source: source)`, then
+`Video.next_frame(reader, timeout_ms)` and `Video.close(reader)`. A reader also
+stops when its owner exits.
+
+The video example uses shared BLIP, Qwen3, and Kokoro services. It waits for one
+frame turn before it reads another. History supplies the previous description
+for comparison. It saves descriptions, replies, timings, and speech PCM:
+
+```sh
+AUDIOFLOW_ML=1 AUDIOFLOW_MEDIA=1 mix run examples/video.exs input.mp4 output
+```
+
+`AUDIOFLOW_VIDEO_INTERVAL_MS` sets the interval (1,000 by default), and
+`AUDIOFLOW_VIDEO_FRAMES` sets the frame limit (16 by default). This is sampled
+frame analysis. It does not track objects or motion between frames. A two-scene
+model check produced correct individual descriptions, but Qwen3-0.6B added an
+unsupported action during comparison. Model output needs assessment for the
+intended use.
 
 ## Model routing and distributed workers
 
@@ -696,7 +749,6 @@ VAD, transport, and playback device delays are excluded from these measurements.
 - Measure interruption through a real playback device with loopback audio.
 - Benchmark the full media path with multiple inputs and concurrent sessions.
 - Compare that path against Pipecat with the same workload.
-- Add video frame capture and temporal analysis.
 
 ## API references
 

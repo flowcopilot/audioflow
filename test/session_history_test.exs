@@ -68,13 +68,16 @@ defmodule AudioFlow.SessionHistoryTest do
       end)
 
     assert complete(session, "u1") == [%{role: :user, content: "u1"}]
-    {:ok, turn} = AudioFlow.submit(session, %Image{data: <<0, 0, 0>>, width: 1, height: 1})
+
+    {:ok, turn} =
+      AudioFlow.submit(session, %Image{data: <<0, 0, 0>>, width: 1, height: 1, pts: 1_500_000_000})
+
     assert_receive {:prompt, messages}
 
     assert messages == [
              %{role: :user, content: "u1"},
              %{role: :assistant, content: "First reply. "},
-             %{role: :user, content: "Two cats."}
+             %{role: :user, content: "At video time 1500 ms: Two cats."}
            ]
 
     assert_receive {AudioFlow, ^session, ^turn, {:done, _}}
@@ -82,7 +85,7 @@ defmodule AudioFlow.SessionHistoryTest do
     assert complete(session, "u2") == [
              %{role: :user, content: "u1"},
              %{role: :assistant, content: "First reply. "},
-             %{role: :user, content: "Two cats."},
+             %{role: :user, content: "At video time 1500 ms: Two cats."},
              %{role: :assistant, content: "a"},
              %{role: :user, content: "u2"}
            ]

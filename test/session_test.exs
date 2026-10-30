@@ -234,7 +234,8 @@ defmodule AudioFlow.SessionTest do
           %{image | width: 0},
           %{image | height: -1},
           %{image | data: <<255, 0>>},
-          %{image | data: :invalid}
+          %{image | data: :invalid},
+          %{image | pts: 1.5}
         ] do
       assert {:error, :invalid_image} = AudioFlow.submit(session, invalid)
     end

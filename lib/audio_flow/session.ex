@@ -258,6 +258,7 @@ defmodule AudioFlow.Session do
       end)
 
       transcript = Process.get(key) |> Enum.reverse() |> Enum.join("") |> String.trim()
+      transcript = input_context(input, transcript)
 
       if transcript != "" do
         prompt =
@@ -293,6 +294,13 @@ defmodule AudioFlow.Session do
       Process.delete(key)
     end
   end
+
+  defp input_context(_, ""), do: ""
+
+  defp input_context(%Image{pts: pts}, text) when is_integer(pts),
+    do: "At video time #{div(pts, 1_000_000)} ms: #{text}"
+
+  defp input_context(_, text), do: text
 
   defp record_context(%{history: nil, active: active}, _, _), do: {:ok, active}
 
