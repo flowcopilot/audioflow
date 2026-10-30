@@ -12,11 +12,13 @@ needs an Apple Silicon Mac with macOS 26.2 or later.
 
 ## Run
 
-Requirements: the tool versions in the repository `mise.toml`, Node.js 20 or
-later, [uv](https://docs.astral.sh/uv/) for model downloads and Qwen3-ASR, and
-`espeak-ng` for Kokoro (`brew install espeak-ng`).
+The repository `mise.toml` pins Erlang, Elixir, Node.js, and
+[uv](https://docs.astral.sh/uv/). uv downloads the reply models and runs
+Qwen3-ASR. Kokoro also needs `espeak-ng`, which mise does not provide.
 
 ```sh
+mise install
+brew install espeak-ng
 cd examples/chat
 mix setup
 mix phx.server
