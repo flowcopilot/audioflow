@@ -1,3 +1,7 @@
 [tools]
 erlang = "29.1.2"
 elixir = "1.20.4-otp-29"
+# examples/chat: asset build, model downloads, and the Qwen3-ASR sidecar.
+# Kokoro also needs espeak-ng, which mise does not provide: brew install espeak-ng
+node = "24.22.2"
+uv = "0.13.6"
