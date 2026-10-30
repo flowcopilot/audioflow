@@ -1,0 +1,14 @@
+/* The pinned shadcn theme and Vega style, as the live_shadcn README requires. */
+@import "./upstream/theme/globals.css";
+@import "./upstream/styles/vega.css";
+
+@source "../js";
+@source "../../lib/audio_flow_ui_web";
+@source "../../deps/live_shadcn/packages/live_shadcn/priv/registry";
+@source "../../deps/live_ai_elements/packages/live_ai_elements/lib";
+
+:root {
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: ui-monospace, monospace;
+}

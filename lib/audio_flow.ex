@@ -5,6 +5,8 @@ defmodule AudioFlow do
   Each session sends `{AudioFlow, session_pid, turn_ref, event}` to its owner.
   Events are `{:transcript, text}`, `{:description, text}`, `{:text, text}`, `{:audio, audio}`,
   `{:done, metrics}`, `{:cancelled, metrics}`, or `{:error, reason, metrics}`.
+  A session that runs an `AudioFlow.Graph` sends node outputs as
+  `{kind, value, node_id}`, where kind can also be `:image` or `:vector`.
   """
 
   def start_session(options) do

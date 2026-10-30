@@ -1,0 +1,33 @@
+{
+  "name": "audioflow_ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:css && npm run build:js",
+    "build:css": "tailwindcss --input=css/app.css --output=../priv/static/assets/app.css",
+    "build:js": "rolldown -c rolldown.config.mjs"
+  },
+  "dependencies": {
+    "@floating-ui/dom": "^1.8.0",
+    "@rive-app/webgl2": "2.34.1",
+    "embla-carousel": "8.5.2",
+    "embla-carousel-autoplay": "8.5.2",
+    "live_ai_elements": "file:../deps/live_ai_elements/packages/live_ai_elements",
+    "live_base": "file:../deps/live_base/packages/live_base",
+    "media-chrome": "^4.19.2",
+    "motion": "13.1.1",
+    "phoenix": "file:../deps/phoenix",
+    "phoenix_html": "file:../deps/phoenix_html",
+    "phoenix_live_view": "file:../deps/phoenix_live_view",
+    "shadcn": "^4.19.0",
+    "tw-animate-css": "^1.4.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.0",
+    "rolldown": "^1.2.5",
+    "tailwindcss": "^4.3.0"
+  },
+  "allowScripts": {
+    "@parcel/watcher@2.5.1": true
+  }
+}
