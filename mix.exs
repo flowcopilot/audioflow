@@ -35,7 +35,8 @@ defmodule AudioFlow.MixProject do
         []
       end
 
-    ml ++
+    [{:finch, "~> 0.24.0"}] ++
+      ml ++
       if(enabled?("AUDIOFLOW_MEDIA"),
         do: [
           {:membrane_core, "~> 1.3"},

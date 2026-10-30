@@ -2,7 +2,8 @@
 # Kokoro is the default TTS engine and needs espeak-ng for English text.
 # Set AUDIOFLOW_TTS=vits to use VITS. To use another engine, set
 # AUDIOFLOW_TTS_CONFIG to a script that starts a service and returns an adapter.
-# Set AUDIOFLOW_LLM to a repository supported by Bumblebee.
+# Set AUDIOFLOW_LLM to a repository supported by Bumblebee, or a remote model ID
+# with AUDIOFLOW_LLM_ENGINE=http and AUDIOFLOW_CHAT_ENDPOINT.
 llm_repository = System.fetch_env!("AUDIOFLOW_LLM")
 
 {tts, tts_children, tts_metadata} =
@@ -52,30 +53,77 @@ whisper_revision = "169d4a4341b33bc18d8881c4b69c2e104e1cc0af"
     model_options: [backend: EXLA.Backend]
   )
 
-llm_revision =
-  System.get_env("AUDIOFLOW_LLM_REVISION") ||
-    if(llm_repository == "Qwen/Qwen3-0.6B", do: "c1899de289a04d12100db370d81485cdf75e47ca")
+{llm_adapter, llm_children, llm_metadata, mode} =
+  case System.get_env("AUDIOFLOW_LLM_ENGINE", "nx") do
+    "nx" ->
+      revision =
+        System.get_env("AUDIOFLOW_LLM_REVISION") ||
+          if(llm_repository == "Qwen/Qwen3-0.6B", do: "c1899de289a04d12100db370d81485cdf75e47ca")
 
-llm_load = if llm_revision, do: [revision: llm_revision], else: []
+      load = if revision, do: [revision: revision], else: []
 
-{:ok, llm} =
-  AudioFlow.Models.language_model(llm_repository,
-    load_options: llm_load,
-    model_options: [backend: EXLA.Backend],
-    generation_options: [max_new_tokens: 64, strategy: %{type: :greedy_search}]
-  )
+      {:ok, llm} =
+        AudioFlow.Models.language_model(llm_repository,
+          load_options: load,
+          model_options: [backend: EXLA.Backend],
+          generation_options: [max_new_tokens: 64, strategy: %{type: :greedy_search}]
+        )
 
-prompt =
-  if String.starts_with?(llm_repository, "Qwen/Qwen3"),
-    do: &AudioFlow.Prompt.qwen3/1,
-    else: &Function.identity/1
+      prompt =
+        if String.starts_with?(llm_repository, "Qwen/Qwen3"),
+          do: &AudioFlow.Prompt.qwen3/1,
+          else: &Function.identity/1
+
+      adapter =
+        {AudioFlow.NxAdapter,
+         serving: AudioFlow.LLM, input: prompt, output: &AudioFlow.NxAdapter.sentences/1}
+
+      {adapter, [AudioFlow.Models.child_spec(AudioFlow.LLM, llm)],
+       %{
+         engine: "nx",
+         repository: llm_repository,
+         revision: revision,
+         max_new_tokens: 64,
+         strategy: "greedy_search",
+         prompt:
+           if(String.starts_with?(llm_repository, "Qwen/Qwen3"),
+             do: "qwen3_no_think",
+             else: "plain"
+           )
+       }, "native_inference"}
+
+    "http" ->
+      key =
+        if System.get_env("AUDIOFLOW_CHAT_API_KEY"),
+          do: fn -> System.fetch_env!("AUDIOFLOW_CHAT_API_KEY") end
+
+      adapter =
+        {AudioFlow.Adapters.ChatHTTP,
+         endpoint: System.fetch_env!("AUDIOFLOW_CHAT_ENDPOINT"),
+         model: llm_repository,
+         api_key: key,
+         timeout_ms: 120_000,
+         parameters: %{temperature: 0, max_tokens: 64}}
+
+      {adapter, [],
+       %{
+         engine: "http",
+         model: llm_repository,
+         source_repository: System.get_env("AUDIOFLOW_LLM_SOURCE"),
+         revision: System.get_env("AUDIOFLOW_LLM_REVISION"),
+         max_tokens: 64,
+         temperature: 0
+       }, "hybrid_inference"}
+
+    _ ->
+      raise "AUDIOFLOW_LLM_ENGINE must be nx or http"
+  end
 
 {:ok, _supervisor} =
   Supervisor.start_link(
     [
-      AudioFlow.Models.child_spec(AudioFlow.Whisper, whisper),
-      AudioFlow.Models.child_spec(AudioFlow.LLM, llm)
-    ] ++ tts_children,
+      AudioFlow.Models.child_spec(AudioFlow.Whisper, whisper)
+    ] ++ llm_children ++ tts_children,
     strategy: :one_for_one
   )
 
@@ -85,26 +133,17 @@ options = [
      serving: AudioFlow.Whisper,
      input: &AudioFlow.NxAdapter.whisper_input/1,
      output: &AudioFlow.NxAdapter.transcript/1},
-  llm:
-    {AudioFlow.NxAdapter,
-     serving: AudioFlow.LLM, input: prompt, output: &AudioFlow.NxAdapter.sentences/1},
+  llm: llm_adapter,
   tts: tts,
   timeout_ms: 120_000,
   max_events: 4096
 ]
 
 metadata = %{
-  mode: "native_inference",
+  mode: mode,
   hardware_label: System.get_env("AUDIOFLOW_HARDWARE"),
   whisper: %{repository: whisper_repository, revision: whisper_revision},
-  llm: %{
-    repository: llm_repository,
-    revision: llm_revision,
-    max_new_tokens: 64,
-    strategy: "greedy_search",
-    prompt:
-      if(String.starts_with?(llm_repository, "Qwen/Qwen3"), do: "qwen3_no_think", else: "plain")
-  },
+  llm: llm_metadata,
   tts: tts_metadata,
   serving: %{batch_size: 1, batch_timeout_ms: 5},
   compiler: "EXLA",

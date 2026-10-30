@@ -9,6 +9,7 @@ VITS speech synthesis, and Membrane input from
 [Brief.md](Brief.md). The native media path has a recorded-speech integration
 check. The concurrency comparison and acoustic interruption measurements still
 need work.
+HTTP language inference can use a compatible local server or cloud endpoint.
 Text embeddings, CLIP image embeddings, and BLIP image captions use shared
 native model services. Their model checks use independent PyTorch references.
 The core runs without model downloads. The demo produces fixed text and silent
@@ -162,6 +163,97 @@ Whisper input conversion requires 16 kHz PCM. Resample before submission.
 Whisper output is currently read after utterance transcription. LLM output is
 streamed and grouped into sentences before synthesis. This is not yet a
 continuous streaming speech recognizer.
+
+## HTTP language inference
+
+`AudioFlow.Adapters.ChatHTTP` implements streaming chat completions for
+compatible local servers and cloud endpoints. It uses the same adapter
+interface as the native models. No native model dependencies are required:
+
+```elixir
+llm = {AudioFlow.Adapters.ChatHTTP,
+  endpoint: "http://127.0.0.1:18082/v1/chat/completions",
+  model: "audioflow-qwen",
+  parameters: %{temperature: 0, max_tokens: 64}}
+{:ok, session} = AudioFlow.start_session(
+  Keyword.put(session_options, :llm, llm))
+```
+
+Supply the complete endpoint URL and the model ID expected by the server.
+Use HTTPS for cloud endpoints. Set `:api_key` to a string or a zero-argument
+function. For example, `fn -> System.fetch_env!("AUDIOFLOW_CHAT_API_KEY") end`
+reads the key when a request starts. Additional `:headers` can hold provider
+options. The adapter does not follow redirects or retry HTTP status errors.
+TLS uses the HTTP client's default certificate and hostname verification.
+
+Input can be one string or a list of `%{role: :user | :assistant, content: text}`
+messages. `:system` sets the system instruction. Its default requests one short
+spoken sentence. The adapter prepends this instruction once. `:parameters`
+holds provider-specific JSON fields. The adapter fixes `model`, `messages`,
+`stream: true`, and `n: 1`. The default token limit is `max_tokens: 128`.
+Supply `max_completion_tokens` instead when the provider requires that field.
+
+SSE decoding accepts split UTF-8, CR/LF line endings, comments, and multiline
+data. Output uses sentence chunks with whitespace preserved. A complete stop
+event and `[DONE]` are required before the final text fragment is emitted.
+Truncation, incomplete streams, tool calls, refusals, invalid events, and empty
+replies return errors. Earlier complete sentences can already have reached TTS.
+This adapter handles text chat. It does not implement the Responses API or
+remote STT, TTS, and tool execution.
+
+The shared Finch pool uses HTTP/1 so the output callback applies back pressure
+to socket reads. Cancellation closes the active connection. A failed output
+callback also releases the connection. The limits are:
+
+| Option | Default | Bound |
+| --- | ---: | --- |
+| `max_request_bytes` | 65,536 | Encoded request body |
+| `max_response_bytes` | 262,144 | Complete response body |
+| `max_event_bytes` | 16,384 | One SSE event |
+| `max_text_bytes` | 8,192 | Generated text |
+| `timeout_ms` | 30,000 | Budget for response reads |
+| `receive_timeout_ms` | 10,000 | Wait for a response chunk |
+| `pool_timeout_ms` | 5,000 | Wait for a connection |
+
+Connections have a five-second connection timeout. The response-read budget
+excludes pool checkout, connection setup, and time blocked in the output
+callback. Use a session or worker deadline to bound the complete operation.
+
+Run a direct text request:
+
+```sh
+AUDIOFLOW_CHAT_ENDPOINT=http://127.0.0.1:18082/v1/chat/completions \
+  AUDIOFLOW_LLM=audioflow-qwen mix run examples/http.exs "Say hello."
+```
+
+Set `AUDIOFLOW_CHAT_API_KEY` locally when authentication is required. To use
+HTTP language inference with native Whisper and Kokoro, set
+`AUDIOFLOW_LLM_ENGINE=http` and `AUDIOFLOW_CHAT_ENDPOINT` for
+`examples/local.exs` or `examples/media.exs`. `AUDIOFLOW_LLM` becomes the server's
+model ID. This mode does not load a native language model. The benchmark
+metadata uses `mode=hybrid_inference` and records the language engine as HTTP.
+Optional `AUDIOFLOW_LLM_SOURCE` and `AUDIOFLOW_LLM_REVISION` identify the deployed
+weights. The metadata does not contain the API key or endpoint query string.
+
+The real HTTP check compares streamed output through a session with an
+independent nonstreamed request to the same deterministic server:
+
+```sh
+AUDIOFLOW_HTTP_MODEL_TESTS=1 \
+  AUDIOFLOW_CHAT_ENDPOINT=http://127.0.0.1:18082/v1/chat/completions \
+  AUDIOFLOW_LLM=audioflow-qwen mix test test/chat_http_model_test.exs
+```
+
+This check uses controlled STT and TTS adapters. It validates transport output.
+Model answer accuracy requires a separate evaluation. The checked local server
+was llama.cpp 0.8.0, build 11960 (`8642541b2`), with zero GPU layers. It used
+`Qwen/Qwen3-0.6B-GGUF`, revision
+`23749fefcc72300e3a2ad315e1317431b06b590a`, file `Qwen3-0.6B-Q8_0.gguf`.
+The file SHA-256 was
+`9465e63a22add5354d9bb4b99e90117043c7124007664907259bd16d043bb031`.
+The server used four threads, two slots, a 4,096-token context, and reasoning
+disabled. Hybrid voice inference also passed with real Whisper and Kokoro.
+No hosted cloud account was used for these checks.
 
 ## Images and embeddings
 
@@ -534,12 +626,15 @@ VAD, transport, and playback device delays are excluded from these measurements.
 - Measure interruption through a real playback device with loopback audio.
 - Benchmark the full media path with multiple inputs and concurrent sessions.
 - Compare that path against Pipecat with the same workload.
-- Add conversation history and cloud inference clients.
+- Add bounded conversation history.
 - Add video frame capture and temporal analysis.
 
 ## API references
 
 - [Bumblebee audio](https://bumblebee.hexdocs.pm/Bumblebee.Audio.html)
+- [Chat completion stream protocol](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)
+- [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
+- [Finch streaming](https://hexdocs.pm/finch/Finch.html#stream_while/5)
 - [Bumblebee text generation](https://bumblebee.hexdocs.pm/Bumblebee.Text.html)
 - [Nx.Serving](https://nx.hexdocs.pm/Nx.Serving.html)
 - [Membrane sinks](https://membrane-core.hexdocs.pm/Membrane.Sink.html)

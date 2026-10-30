@@ -43,7 +43,17 @@ defmodule AudioFlow.BenchmarkReport do
     versions =
       :application.loaded_applications()
       |> Enum.filter(fn {name, _, _} ->
-        name in [:audio_flow, :nx, :axon, :bumblebee, :exla, :transmuter, :membrane_core]
+        name in [
+          :audio_flow,
+          :nx,
+          :axon,
+          :bumblebee,
+          :exla,
+          :transmuter,
+          :membrane_core,
+          :finch,
+          :mint
+        ]
       end)
       |> Map.new(fn {name, _, version} -> {name, to_string(version)} end)
 

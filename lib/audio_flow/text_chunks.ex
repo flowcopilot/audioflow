@@ -11,11 +11,15 @@ defmodule AudioFlow.TextChunks do
     Stream.transform(
       stream,
       fn -> "" end,
-      fn chunk, pending -> split(pending <> chunk) end,
+      fn chunk, pending -> push(pending, chunk) end,
       fn pending -> {if(pending == "", do: [], else: [pending]), ""} end,
       fn _ -> :ok end
     )
   end
+
+  @doc "Append text to an incremental buffer, returning complete sentences and the new buffer."
+  def push(pending, chunk) when is_binary(pending) and is_binary(chunk),
+    do: split(pending <> chunk)
 
   defp split(text) do
     {sentences, start} =
