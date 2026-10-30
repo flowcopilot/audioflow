@@ -31,8 +31,11 @@ For a browser chat with typed and spoken messages, see
 [examples/chat](examples/chat/README.md).
 
 To build agents as node graphs, see [ui](ui/README.md). It is a local dashboard
-with an MCP endpoint for coding agents. `AudioFlow.Graph` validates a graph and
-converts it to session options.
+with a canvas editor and an MCP endpoint for coding agents. A session runs an
+`AudioFlow.Graph` with the `:graph` option.
+
+The website and documentation are at
+https://flowcopilot.github.io/audioflow/. Their source is in [site](site/README.md).
 
 Core, ML, media, and combined ML/media builds use separate `_build` directories.
 Changing a feature flag does not remove modules used by another build profile.
