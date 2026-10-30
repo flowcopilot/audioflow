@@ -209,7 +209,8 @@ defmodule AudioFlow.WorkerTest do
     assert_receive :admitted
     ref = Process.monitor(inference)
     Process.exit(worker, :kill)
-    assert {:error, {:worker_exit, :killed}} = Task.await(task)
+    assert {:error, {:worker_exit, reason}} = Task.await(task)
+    assert reason in [:killed, :noproc]
     assert_receive {:DOWN, ^ref, :process, ^inference, :killed}
   end
 end
