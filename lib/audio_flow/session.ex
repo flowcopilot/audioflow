@@ -5,12 +5,15 @@ defmodule AudioFlow.Session do
   Options: `:stt`, `:llm`, `:tts` adapter tuples; `:owner`; `:timeout_ms`
   (30,000); `:max_input_bytes` (960,000); `:max_events` (1,024); optional
   `:output` transport tuple `{module, target}` implementing `AudioFlow.Output`.
+  An optional `:vision` adapter converts RGB images to description strings.
+  `:max_image_bytes` defaults to 6,291,456. Image-only sessions can omit `:stt`.
+  Descriptions form one LLM prompt, then follow the same speech output path.
   The session stops when its owner exits. Interrupted turns cannot deliver
   further output. Cancellation stops the caller task, but an inference engine
   may still finish a batch already submitted to shared hardware.
   """
   use GenServer, restart: :temporary
-  alias AudioFlow.{Adapter, Audio}
+  alias AudioFlow.{Adapter, Audio, Image}
 
   def start_link(options), do: GenServer.start_link(__MODULE__, options)
 
@@ -18,17 +21,29 @@ defmodule AudioFlow.Session do
   def init(options) do
     Process.flag(:trap_exit, true)
     owner = Keyword.fetch!(options, :owner)
-    adapters = Map.new([:stt, :llm, :tts], &{&1, Keyword.fetch!(options, &1)})
+    adapters = Map.new([:llm, :tts], &{&1, Keyword.fetch!(options, &1)})
+    adapters = Map.merge(adapters, Map.new(Keyword.take(options, [:stt, :vision])))
+
+    if not (Map.has_key?(adapters, :stt) or Map.has_key?(adapters, :vision)),
+      do: raise(ArgumentError, "a session requires an :stt or :vision adapter")
 
     limits =
-      Map.new([timeout_ms: 30_000, max_input_bytes: 960_000, max_events: 1_024], fn {key, default} ->
-        value = Keyword.get(options, key, default)
+      Map.new(
+        [
+          timeout_ms: 30_000,
+          max_input_bytes: 960_000,
+          max_image_bytes: 6_291_456,
+          max_events: 1_024
+        ],
+        fn {key, default} ->
+          value = Keyword.get(options, key, default)
 
-        if not (is_integer(value) and value > 0),
-          do: raise(ArgumentError, "#{key} must be positive")
+          if not (is_integer(value) and value > 0),
+            do: raise(ArgumentError, "#{key} must be positive")
 
-        {key, value}
-      end)
+          {key, value}
+        end
+      )
 
     {:ok,
      %{
@@ -43,12 +58,17 @@ defmodule AudioFlow.Session do
   end
 
   @impl true
-  def handle_call({:submit, audio}, _from, state) do
-    cond do
-      not Audio.valid?(audio) ->
-        {:reply, {:error, :invalid_audio}, state}
+  def handle_call({:submit, input}, _from, state) do
+    {valid?, stage, kind, limit} = input_spec(input, state.limits)
 
-      byte_size(audio.data) > state.limits.max_input_bytes ->
+    cond do
+      not valid? ->
+        {:reply, {:error, invalid_input(input)}, state}
+
+      not Map.has_key?(state.adapters, stage) ->
+        {:reply, {:error, {:unsupported_input, stage}}, state}
+
+      byte_size(input.data) > limit ->
         {:reply, {:error, :input_too_large}, state}
 
       state.active != nil ->
@@ -63,7 +83,7 @@ defmodule AudioFlow.Session do
           :ok ->
             task =
               Task.Supervisor.async_nolink(AudioFlow.Tasks, fn ->
-                pipeline(session, turn, audio, state.adapters, state.output)
+                pipeline(session, turn, input, stage, kind, state.adapters, state.output)
               end)
 
             timer = Process.send_after(self(), {:timeout, turn}, state.limits.timeout_ms)
@@ -175,7 +195,7 @@ defmodule AudioFlow.Session do
     flush_output(state)
   end
 
-  defp pipeline(session, turn, audio, adapters, output) do
+  defp pipeline(session, turn, input, stage, kind, adapters, output) do
     emit = fn kind, value ->
       case GenServer.call(session, {:emit, turn, kind, value}) do
         :ok -> :ok
@@ -183,13 +203,13 @@ defmodule AudioFlow.Session do
       end
     end
 
-    # STT chunks are one utterance. Do not answer each partial transcript.
+    # Input chunks describe one utterance or image. Generate only once.
     key = make_ref()
     Process.put(key, [])
 
     try do
-      Adapter.run(adapters.stt, audio, fn text ->
-        emit.(:transcript, text)
+      Adapter.run(Map.fetch!(adapters, stage), input, fn text ->
+        emit.(kind, text)
         Process.put(key, [text | Process.get(key)])
         :ok
       end)
@@ -231,7 +251,19 @@ defmodule AudioFlow.Session do
     do: AudioFlow.Output.call(state.output, :flush, [{self(), state.output_turn}])
 
   defp valid_output?(:audio, audio), do: Audio.valid?(audio)
-  defp valid_output?(kind, text) when kind in [:text, :transcript], do: is_binary(text)
+
+  defp valid_output?(kind, text) when kind in [:text, :transcript, :description],
+    do: is_binary(text)
+
+  defp input_spec(%Audio{} = audio, limits),
+    do: {Audio.valid?(audio), :stt, :transcript, limits.max_input_bytes}
+
+  defp input_spec(%Image{} = image, limits),
+    do: {Image.valid?(image), :vision, :description, limits.max_image_bytes}
+
+  defp input_spec(_, _), do: {false, nil, nil, 0}
+  defp invalid_input(%Image{}), do: :invalid_image
+  defp invalid_input(_), do: :invalid_audio
   defp now, do: System.monotonic_time(:microsecond)
   defp notify(state, event), do: send(state.owner, {AudioFlow, self(), state.active.turn, event})
 
@@ -246,6 +278,7 @@ defmodule AudioFlow.Session do
     %{
       duration_us: now() - active.started,
       first_transcript_us: active.first[:transcript],
+      first_description_us: active.first[:description],
       first_text_us: active.first[:text],
       first_audio_us: active.first[:audio],
       events: active.events

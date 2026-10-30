@@ -52,5 +52,17 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
 
       assert Enum.map(chunks, &byte_size(&1.data)) == [640, 2]
     end
+
+    test "RGB input preserves pixel order and channel order" do
+      image = %AudioFlow.Image{data: <<255, 0, 0, 0, 255, 0>>, width: 2, height: 1}
+      tensor = AudioFlow.NxAdapter.image_input(image)
+      assert Nx.shape(tensor) == {1, 2, 3}
+      assert Nx.type(tensor) == {:u, 8}
+      assert Nx.to_list(tensor) == [[[255, 0, 0], [0, 255, 0]]]
+
+      assert_raise ArgumentError, "invalid RGB image", fn ->
+        AudioFlow.NxAdapter.image_input(%{image | width: 3})
+      end
+    end
   end
 end

@@ -1,9 +1,9 @@
 defmodule AudioFlow do
   @moduledoc """
-  Supervised voice sessions with interchangeable inference engines.
+  Supervised voice and image sessions with interchangeable inference engines.
 
   Each session sends `{AudioFlow, session_pid, turn_ref, event}` to its owner.
-  Events are `{:transcript, text}`, `{:text, text}`, `{:audio, audio}`,
+  Events are `{:transcript, text}`, `{:description, text}`, `{:text, text}`, `{:audio, audio}`,
   `{:done, metrics}`, `{:cancelled, metrics}`, or `{:error, reason, metrics}`.
   """
 
@@ -13,6 +13,7 @@ defmodule AudioFlow do
   end
 
   def submit(session, %AudioFlow.Audio{} = audio), do: GenServer.call(session, {:submit, audio})
+  def submit(session, %AudioFlow.Image{} = image), do: GenServer.call(session, {:submit, image})
   def cancel(session), do: GenServer.call(session, :cancel)
   def stop_session(session), do: DynamicSupervisor.terminate_child(AudioFlow.Sessions, session)
 end

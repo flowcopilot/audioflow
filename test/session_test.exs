@@ -189,4 +189,87 @@ defmodule AudioFlow.SessionTest do
     assert_receive {:DOWN, ^session_ref, :process, ^session, :normal}
     assert_receive {:DOWN, ^worker_ref, :process, ^worker, :killed}
   end
+
+  test "an image-only session joins description chunks and speaks one response" do
+    owner = self()
+
+    options =
+      Demo.options()
+      |> Keyword.delete(:stt)
+      |> Keyword.put(
+        :vision,
+        function(fn %AudioFlow.Image{}, emit ->
+          emit.("Two cats ")
+          emit.("on a couch.")
+        end)
+      )
+      |> Keyword.put(
+        :llm,
+        function(fn prompt, emit ->
+          send(owner, {:prompt, prompt})
+          emit.("The cats are resting.")
+        end)
+      )
+
+    {:ok, session} = AudioFlow.start_session(options)
+    on_exit(fn -> if Process.alive?(session), do: AudioFlow.stop_session(session) end)
+    image = %AudioFlow.Image{data: <<255, 0, 0>>, width: 1, height: 1}
+    {:ok, turn} = AudioFlow.submit(session, image)
+    assert_receive {AudioFlow, ^session, ^turn, {:description, "Two cats "}}
+    assert_receive {AudioFlow, ^session, ^turn, {:description, "on a couch."}}
+    assert_receive {:prompt, "Two cats on a couch."}
+    assert_receive {AudioFlow, ^session, ^turn, {:text, "The cats are resting."}}
+    assert_receive {AudioFlow, ^session, ^turn, {:audio, %Audio{}}}
+    assert_receive {AudioFlow, ^session, ^turn, {:done, metrics}}
+    assert is_integer(metrics.first_description_us)
+    assert metrics.first_transcript_us == nil
+    assert metrics.first_description_us <= metrics.first_text_us
+  end
+
+  test "image input validates RGB size, rejects excess bytes, and requires a vision adapter" do
+    image = %AudioFlow.Image{data: <<255, 0, 0>>, width: 1, height: 1}
+    session = start(max_image_bytes: 2, vision: function(fn _, emit -> emit.("Red.") end))
+
+    for invalid <- [
+          %{image | width: 0},
+          %{image | height: -1},
+          %{image | data: <<255, 0>>},
+          %{image | data: :invalid}
+        ] do
+      assert {:error, :invalid_image} = AudioFlow.submit(session, invalid)
+    end
+
+    assert {:error, :input_too_large} = AudioFlow.submit(session, image)
+    without_vision = start()
+    assert {:error, {:unsupported_input, :vision}} = AudioFlow.submit(without_vision, image)
+  end
+
+  test "an image turn can be cancelled before a voice turn on the same session" do
+    owner = self()
+
+    session =
+      start(
+        vision:
+          function(fn _, _ ->
+            send(owner, {:vision_task, self()})
+
+            receive do
+              :continue -> :ok
+            end
+          end)
+      )
+
+    {:ok, first} =
+      AudioFlow.submit(session, %AudioFlow.Image{data: <<255, 0, 0>>, width: 1, height: 1})
+
+    assert_receive {:vision_task, vision_task}
+    ref = Process.monitor(vision_task)
+    assert {:error, :busy} = AudioFlow.submit(session, audio())
+    assert :ok = AudioFlow.cancel(session)
+    assert_receive {AudioFlow, ^session, ^first, {:cancelled, _}}
+    assert_receive {:DOWN, ^ref, :process, ^vision_task, :killed}
+    {:ok, second} = AudioFlow.submit(session, audio())
+    assert_receive {AudioFlow, ^session, ^second, {:transcript, "Hello"}}
+    assert_receive {AudioFlow, ^session, ^second, {:done, _}}
+  end
 end

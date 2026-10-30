@@ -4,8 +4,10 @@ defmodule AudioFlow.Adapter do
 
   Emit each output with `emit.(value)`. The callback applies back pressure.
   Return `:ok` or `{:error, reason}`. Exceptions become turn errors.
-  STT emits transcript strings, LLM emits speakable text chunks, and TTS
-  emits `AudioFlow.Audio` values. Keep model weights in shared services.
+  STT emits transcript strings, vision emits description strings, LLM emits
+  speakable text chunks, and TTS emits `AudioFlow.Audio` values. Embedding
+  adapters emit vectors for direct inference callers. Keep model weights in
+  shared services.
   """
   @callback run(input :: term(), options :: keyword(), emit :: (term() -> :ok)) ::
               :ok | {:error, term()}

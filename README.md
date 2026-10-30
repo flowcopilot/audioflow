@@ -1,6 +1,6 @@
 # AudioFlow
 
-AudioFlow is an Elixir voice agent runtime. Each conversation uses an OTP
+AudioFlow is an Elixir voice and image agent runtime. Each conversation uses an OTP
 session. Sessions share model services through an engine-independent adapter.
 
 This implements the session runtime, model routing, distributed inference workers,
@@ -9,6 +9,8 @@ VITS speech synthesis, and Membrane input from
 [Brief.md](Brief.md). The native media path has a recorded-speech integration
 check. The concurrency comparison and acoustic interruption measurements still
 need work.
+Text embeddings, CLIP image embeddings, and BLIP image captions use shared
+native model services. Their model checks use independent PyTorch references.
 The core runs without model downloads. The demo produces fixed text and silent
 PCM. Use the model examples for real inference.
 
@@ -160,6 +162,72 @@ Whisper input conversion requires 16 kHz PCM. Resample before submission.
 Whisper output is currently read after utterance transcription. LLM output is
 streamed and grouped into sentences before synthesis. This is not yet a
 continuous streaming speech recognizer.
+
+## Images and embeddings
+
+`AudioFlow.Models.text_embedding/2` builds a shared text embedding serving. Its
+defaults use attention-masked mean pooling and L2 normalization. These defaults
+match `sentence-transformers/all-MiniLM-L6-v2`, a BERT model with 384 output
+values. Other models can need different pooling, output attributes, or input
+prefixes. Set these through the serving options and the adapter input mapper.
+The library does not infer a retrieval task or add a query prefix.
+
+`AudioFlow.Models.clip_image_embedding/2` loads the CLIP vision model and its
+trained projection. It emits normalized vectors in the joint CLIP text-image
+space. The tested CLIP model emits 512 values. BERT and CLIP vectors use
+different spaces; do not compare them directly.
+`AudioFlow.Models.image_captioning/2` builds a caption serving for supported
+models such as BLIP. It generates a complete caption before returning it.
+
+All three builders accept `:load_options` for revisions and caches, and
+`:model_options` for parameter type and backend. Captioning also accepts
+`:generation_options`. Set `:compile` to bound input shapes. Text embedding
+sequence lengths can truncate long input; set the length for the chosen model
+and workload. Load the models once and use `Models.child_spec/3` to start their
+shared servings. The same `NxAdapter`, `Worker`, and `Router` interfaces apply
+to these models.
+
+Use `NxAdapter.embedding/1` to emit one portable list of numbers, or supply an
+output mapper that retains the tensor. This allows applications to keep vectors
+on the device. `NxAdapter.captions/1` emits caption strings. The examples pin
+the model revisions and use EXLA parameters:
+
+```sh
+AUDIOFLOW_ML=1 mix run examples/multimodal.exs embed "Two cats on a couch."
+AUDIOFLOW_ML=1 mix run examples/multimodal.exs image-embedding image.png
+AUDIOFLOW_ML=1 mix run examples/multimodal.exs describe image.png
+```
+
+Image modes need the FFmpeg and ffprobe CLIs. They decode the first frame to
+RGB. The models run through Bumblebee, Nx, and EXLA.
+
+A session with a `:vision` adapter can accept an `AudioFlow.Image`:
+
+```elixir
+vision = {AudioFlow.NxAdapter,
+  serving: MyApp.CaptionModel,
+  input: &AudioFlow.NxAdapter.image_input/1,
+  output: &AudioFlow.NxAdapter.captions/1}
+{:ok, session} = AudioFlow.start_session(
+  Keyword.put(session_options, :vision, vision))
+{:ok, turn} = AudioFlow.submit(session,
+  %AudioFlow.Image{data: rgb_bytes, width: width, height: height})
+```
+
+Image data must use packed RGB, with three unsigned 8-bit channels per pixel
+in row order. Its byte count must equal `width * height * 3`. The session rejects
+invalid images and images above `:max_image_bytes` (6,291,456 by default). Image
+turns emit `{:description, text}` events. All description chunks form one prompt
+for the LLM, then the reply follows the normal TTS and playback path. The
+terminal metrics include `first_description_us`. Image-only sessions can omit
+`:stt`. Submission without the required input adapter returns
+`{:error, {:unsupported_input, stage}}`.
+
+Audio and image turns share one active-turn limit. Both support cancellation,
+deadlines, and output limits. A decoded video frame can use the same image
+input. The transport must select frames and handle `{:error, :busy}`. The runtime
+does not buffer a video stream or track motion between frames. Each frame is
+described independently. There is no conversation history yet.
 
 ## Model routing and distributed workers
 
@@ -371,6 +439,22 @@ two speeds, and text input. The reference generator is
 `scripts/kokoro_reference.py`. They also check finite samples, PCM output,
 and use through a session. These model tests require espeak-ng.
 
+The multimodal model checks compare BERT and projected CLIP vectors against
+independent PyTorch outputs. They also check a real BLIP caption through an
+image session. The text model has two concurrent callers on one shared serving.
+The pinned cat image comes from the Transmuter test fixtures. FFmpeg RGB output
+must have the same SHA-256 as the reference image bytes. The reference generator
+is `scripts/multimodal_reference.py`. CLIP comparison allows small differences
+between image resize implementations; BLIP checks the complete reference text.
+These checks need FFmpeg, but no microphone or sound device.
+
+```sh
+AUDIOFLOW_ML=1 AUDIOFLOW_MODEL_TESTS=1 mix test test/multimodal_model_test.exs
+```
+
+The image session check uses real BLIP with controlled LLM and TTS adapters.
+It checks delivery through the session, rather than spoken audio quality.
+
 The full native media test is a separate opt-in check. It needs the FFmpeg CLI
 and espeak-ng. It uses the public LibriSpeech sample in the pinned Transmuter
 repository, real Silero, Whisper, Qwen3, and Kokoro models, and a Membrane test
@@ -450,8 +534,8 @@ VAD, transport, and playback device delays are excluded from these measurements.
 - Measure interruption through a real playback device with loopback audio.
 - Benchmark the full media path with multiple inputs and concurrent sessions.
 - Compare that path against Pipecat with the same workload.
-- Add embeddings and vision.
 - Add conversation history and cloud inference clients.
+- Add video frame capture and temporal analysis.
 
 ## API references
 

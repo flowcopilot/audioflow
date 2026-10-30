@@ -28,6 +28,18 @@ defmodule AudioFlow.NxAdapter do
 
   def transcript(%{chunks: chunks}), do: Enum.map(chunks, & &1.text)
 
+  @doc "Convert packed RGB bytes to an HWC unsigned 8-bit image tensor."
+  def image_input(%AudioFlow.Image{} = image) do
+    if not AudioFlow.Image.valid?(image), do: raise(ArgumentError, "invalid RGB image")
+    image.data |> Nx.from_binary(:u8) |> Nx.reshape({image.height, image.width, 3})
+  end
+
+  @doc "Emit caption strings from a Bumblebee image-to-text result."
+  def captions(%{results: results}), do: Enum.map(results, & &1.text)
+
+  @doc "Emit a portable vector from a single text or image embedding result."
+  def embedding(%{embedding: tensor}), do: [Nx.to_flat_list(tensor)]
+
   @doc "Convert floating point speech output to bounded mono s16le PCM chunks."
   def speech_audio(%{audio: samples, sampling_rate: rate}) do
     # Clamp before conversion so model overshoot cannot wrap a signed sample.
