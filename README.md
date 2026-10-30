@@ -3,8 +3,9 @@
 AudioFlow is an Elixir voice agent runtime. Each conversation uses an OTP
 session. Sessions share model services through an engine-independent adapter.
 
-This implements the session runtime, native Silero voice detection, Whisper
-and text-generation adapters, Kokoro and VITS speech synthesis, and Membrane input from
+This implements the session runtime, model routing, distributed inference workers,
+native Silero voice detection, Whisper and text-generation adapters, Kokoro and
+VITS speech synthesis, and Membrane input from
 [Brief.md](Brief.md). The native media path has a recorded-speech integration
 check. The concurrency comparison and acoustic interruption measurements still
 need work.
@@ -159,6 +160,84 @@ Whisper input conversion requires 16 kHz PCM. Resample before submission.
 Whisper output is currently read after utterance transcription. LLM output is
 streamed and grouped into sentences before synthesis. This is not yet a
 continuous streaming speech recognizer.
+
+## Model routing and distributed workers
+
+`AudioFlow.Worker` runs an adapter with a fixed limit on active requests. It
+rejects requests above that limit. It does not keep a waiting queue. Start
+shared model services first, then start their workers under a supervisor:
+
+```elixir
+llm_adapter = {AudioFlow.NxAdapter,
+  serving: AudioFlow.LLM,
+  input: &AudioFlow.Prompt.qwen3/1,
+  output: &AudioFlow.NxAdapter.sentences/1}
+
+children = [
+  {AudioFlow.Worker,
+   name: MyApp.LocalLLM, adapter: llm_adapter,
+   max_concurrency: 4, timeout_ms: 120_000},
+  {AudioFlow.Router,
+   name: MyApp.Routes,
+   routes: %{voice: [MyApp.LocalLLM, {MyApp.RemoteLLM, :"ml@worker"}]}}
+]
+{:ok, supervisor} = Supervisor.start_link(children, strategy: :one_for_one)
+
+options = Keyword.put(session_options, :llm,
+  {AudioFlow.Router, router: MyApp.Routes, route: :voice, timeout_ms: 120_000})
+{:ok, session} = AudioFlow.start_session(options)
+```
+
+The remote node must run AudioFlow and a worker named `MyApp.RemoteLLM`. Its
+adapter uses model services on that node. Erlang distribution must already
+connect the nodes. Use compatible code on trusted nodes. Inputs and outputs
+cross the connection. Model weights remain in their shared services.
+Only connected remote nodes are eligible. Reconnect a node before routing to
+it again. If a node fails while admission is in progress, the request ends with
+an error. Its admission status is unknown, so the router does not retry it.
+All engines use the same adapter interface. A worker can use `NxAdapter` or an
+application adapter for ONNX, llama.cpp, or a cloud API. Cloud clients must set
+their own connection and request timeouts.
+
+Routes rotate the starting worker for each request. A busy or unavailable worker
+is skipped. An error after admission ends the request. The router does not
+repeat partial speech on another worker. If all workers reject the request, the
+caller receives `{:error, {:no_worker_available, route, reasons}}`.
+
+Change a route while sessions remain open:
+
+```elixir
+AudioFlow.Router.put_route(MyApp.Routes, :voice, [{MyApp.RemoteLLM, :"ml@worker"}])
+```
+
+The change applies to subsequent adapter calls. Active requests keep their
+worker. An empty worker list disables the route. `:route` can also be a function
+that selects a route key from the adapter input. For example, a text-length or
+language policy can select a model without changing the session pipeline.
+
+Each output chunk waits for its caller's acknowledgement. Caller exit and
+session cancellation stop the worker task, including on a remote node. Worker
+exit or node loss ends the active request with an error. Each worker has a
+request deadline, and the router has a deadline for the complete call. Cleanup
+can take up to one additional second. A hardware batch already submitted to a
+shared serving can still run to completion. Set worker limits and deadlines to
+match measured model capacity and the session timeout.
+
+Run the local routing example without model downloads:
+
+```sh
+mix run examples/routing.exs
+```
+
+The distributed checks start a second local Erlang node. They check remote
+output, cancellation, and node loss through the worker protocol:
+
+```sh
+AUDIOFLOW_DISTRIBUTED_TESTS=1 elixir --sname audioflow_test -S mix test
+```
+
+These checks use controlled adapters. They do not measure network latency or
+model capacity across machines.
 
 ## Membrane input
 
@@ -371,7 +450,8 @@ VAD, transport, and playback device delays are excluded from these measurements.
 - Measure interruption through a real playback device with loopback audio.
 - Benchmark the full media path with multiple inputs and concurrent sessions.
 - Compare that path against Pipecat with the same workload.
-- Add model routing, embeddings, vision, and distributed worker selection.
+- Add embeddings and vision.
+- Add conversation history and cloud inference clients.
 
 ## API references
 
