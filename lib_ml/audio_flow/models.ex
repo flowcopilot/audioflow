@@ -37,6 +37,14 @@ defmodule AudioFlow.Models do
     end
   end
 
+  @doc "Build a shared Transmuter VITS or SpeechT5 speech serving."
+  def text_to_speech(repository, options \\ []) do
+    Transmuter.Audio.text_to_speech(
+      {:hf, repository},
+      Keyword.merge([defn_options: [compiler: EXLA]], options)
+    )
+  end
+
   @doc "A supervised serving with explicit queue delay and batch size."
   def child_spec(name, serving, options \\ []) do
     Supervisor.child_spec(

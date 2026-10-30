@@ -28,6 +28,37 @@ defmodule AudioFlow.NxAdapter do
 
   def transcript(%{chunks: chunks}), do: Enum.map(chunks, & &1.text)
 
+  @doc "Convert floating point speech output to bounded mono s16le PCM chunks."
+  def speech_audio(%{audio: samples, sampling_rate: rate}) do
+    # Clamp before conversion so model overshoot cannot wrap a signed sample.
+    pcm =
+      samples
+      |> Nx.flatten()
+      |> Nx.clip(-1.0, 32767 / 32768)
+      |> Nx.multiply(32768)
+      |> Nx.round()
+      |> Nx.as_type(:s16)
+      |> Nx.backend_transfer(Nx.BinaryBackend)
+      |> Nx.to_binary()
+
+    # Nx uses native byte order. PCM transport has an explicit little-endian order.
+    pcm =
+      if System.endianness() == :little,
+        do: pcm,
+        else:
+          for(<<sample::native-signed-16 <- pcm>>, into: <<>>, do: <<sample::little-signed-16>>)
+
+    for chunk <- chunks(pcm, max(2, div(rate, 50) * 2)),
+        do: %AudioFlow.Audio{data: chunk, sample_rate: rate}
+  end
+
+  defp chunks(<<>>, _size), do: []
+  defp chunks(data, size) when byte_size(data) <= size, do: [data]
+
+  defp chunks(data, size) do
+    [binary_part(data, 0, size) | chunks(binary_part(data, size, byte_size(data) - size), size)]
+  end
+
   @doc "Group a Bumblebee generation stream into speakable sentences."
   def sentences(stream) do
     Stream.transform(

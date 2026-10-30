@@ -16,12 +16,23 @@ defmodule AudioFlow.MixProject do
 
   defp paths do
     ["lib"] ++
+      if(Mix.env() == :test, do: ["test/support"], else: []) ++
       if(enabled?("AUDIOFLOW_ML"), do: ["lib_ml"], else: []) ++
       if(enabled?("AUDIOFLOW_MEDIA"), do: ["lib_media"], else: [])
   end
 
   defp deps do
-    ml = if enabled?("AUDIOFLOW_ML"), do: [{:bumblebee, "~> 0.8.0"}, {:exla, "~> 1.0"}], else: []
+    ml =
+      if enabled?("AUDIOFLOW_ML") do
+        [
+          {:bumblebee, "~> 0.8.0"},
+          {:exla, "~> 1.0"},
+          {:transmuter,
+           github: "georgeguimaraes/transmuter", ref: "231028d9ff6f53bd58fa15d9f24d632258369805"}
+        ]
+      else
+        []
+      end
 
     ml ++
       if(enabled?("AUDIOFLOW_MEDIA"),
