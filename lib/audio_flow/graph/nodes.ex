@@ -101,3 +101,58 @@ defmodule AudioFlow.Graph.Nodes.ChatHTTP do
     {AudioFlow.Adapters.ChatHTTP, adapter_options}
   end
 end
+
+defmodule AudioFlow.Graph.Nodes.Audio do
+  @moduledoc "Audio conversion nodes."
+  @behaviour AudioFlow.Graph.Node
+  alias AudioFlow.Audio
+
+  @rates [8_000, 16_000, 22_050, 24_000, 44_100, 48_000]
+
+  @impl true
+  def nodes do
+    [
+      %{
+        type: "audio.resample",
+        title: "Resample",
+        description: "Converts the complete PCM input to another sample rate.",
+        input: :audio,
+        output: :audio,
+        options: [
+          %{
+            name: :sample_rate,
+            type: {:enum, @rates},
+            default: 16_000,
+            description: "Output sample rate in Hz. Whisper needs 16000."
+          }
+        ]
+      }
+    ]
+  end
+
+  @impl true
+  def adapter("audio.resample", %{sample_rate: rate}),
+    do: {AudioFlow.Adapters.Function, [run: fn audio, emit -> emit.(resample(audio, rate)) end]}
+
+  @doc "Linear interpolation of mono signed 16-bit PCM."
+  def resample(%Audio{sample_rate: rate} = audio, rate), do: audio
+
+  def resample(%Audio{data: data, sample_rate: from}, to) do
+    samples = for <<sample::little-signed-16 <- data>>, do: sample
+    input = List.to_tuple(samples)
+    count = tuple_size(input)
+    length = if count == 0, do: 0, else: max(1, div(count * to, from))
+
+    pcm =
+      for index <- 0..(length - 1)//1, into: <<>> do
+        position = index * from / to
+        left = min(trunc(position), count - 1)
+        right = min(left + 1, count - 1)
+        weight = position - left
+        sample = round(elem(input, left) * (1 - weight) + elem(input, right) * weight)
+        <<sample::little-signed-16>>
+      end
+
+    %Audio{data: pcm, sample_rate: to}
+  end
+end

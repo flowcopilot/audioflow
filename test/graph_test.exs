@@ -286,4 +286,24 @@ defmodule AudioFlow.GraphTest do
       Graph.catalog([BadNodes])
     end
   end
+
+  test "resampling keeps the duration and interpolates between samples" do
+    pcm = for sample <- [0, 300, 600, 900], into: <<>>, do: <<sample::little-signed-16>>
+    audio = %Audio{data: pcm, sample_rate: 8_000}
+
+    assert %Audio{data: data, sample_rate: 16_000} = Graph.Nodes.Audio.resample(audio, 16_000)
+
+    assert for(<<sample::little-signed-16 <- data>>, do: sample) == [
+             0,
+             150,
+             300,
+             450,
+             600,
+             750,
+             900,
+             900
+           ]
+
+    assert Graph.Nodes.Audio.resample(audio, 8_000) == audio
+  end
 end

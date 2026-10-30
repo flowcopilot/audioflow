@@ -36,12 +36,12 @@ defmodule AudioFlow.Graph do
   """
   alias AudioFlow.Graph.Nodes
 
-  @default_nodes [Nodes.Input, Nodes.Demo, Nodes.ChatHTTP]
+  @default_nodes [Nodes.Input, Nodes.Audio, Nodes.Demo, Nodes.ChatHTTP]
   @kinds [:audio, :image, :text, :vector]
   @events [:transcript, :description, :text, :audio, :image, :vector]
   @settings %{"history" => :boolean, "timeout_ms" => :positive, "max_events" => :positive}
 
-  @doc "Builds a catalog from node modules. The default has input, demo, and HTTP LLM nodes."
+  @doc "Builds a catalog from node modules. The default has input, audio, demo, and HTTP LLM nodes."
   def catalog(modules \\ @default_nodes) do
     Enum.reduce(modules, %{}, fn module, catalog ->
       Enum.reduce(module.nodes(), catalog, fn spec, catalog ->
@@ -330,7 +330,12 @@ defmodule AudioFlow.Graph do
     end)
   end
 
-  defp setting(key, value), do: {String.to_existing_atom(key), value}
+  @setting_names %{
+    "history" => :history,
+    "timeout_ms" => :timeout_ms,
+    "max_events" => :max_events
+  }
+  defp setting(key, value), do: {Map.fetch!(@setting_names, key), value}
 
   defp topology(nodes, edges, settings) do
     inputs = for {id, %{spec: %{input: nil}}} <- nodes, do: id
