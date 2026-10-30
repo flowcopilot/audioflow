@@ -3,7 +3,8 @@ defmodule AudioFlow.Session do
   One active turn per session. Busy sessions reject input instead of queueing it.
 
   Options: `:stt`, `:llm`, `:tts` adapter tuples; `:owner`; `:timeout_ms`
-  (30,000); `:max_input_bytes` (960,000); `:max_events` (1,024).
+  (30,000); `:max_input_bytes` (960,000); `:max_events` (1,024); optional
+  `:output` transport tuple `{module, target}` implementing `AudioFlow.Output`.
   The session stops when its owner exits. Interrupted turns cannot deliver
   further output. Cancellation stops the caller task, but an inference engine
   may still finish a batch already submitted to shared hardware.
@@ -35,6 +36,8 @@ defmodule AudioFlow.Session do
        owner_ref: Process.monitor(owner),
        adapters: adapters,
        limits: limits,
+       output: Keyword.get(options, :output),
+       output_turn: nil,
        active: nil
      }}
   end
@@ -56,23 +59,47 @@ defmodule AudioFlow.Session do
         turn = make_ref()
         started = now()
 
-        task =
-          Task.Supervisor.async_nolink(AudioFlow.Tasks, fn ->
-            pipeline(session, turn, audio, state.adapters)
-          end)
+        case AudioFlow.Output.call(state.output, :start_turn, [{session, turn}]) do
+          :ok ->
+            task =
+              Task.Supervisor.async_nolink(AudioFlow.Tasks, fn ->
+                pipeline(session, turn, audio, state.adapters, state.output)
+              end)
 
-        timer = Process.send_after(self(), {:timeout, turn}, state.limits.timeout_ms)
-        active = %{turn: turn, task: task, timer: timer, started: started, first: %{}, events: 0}
-        {:reply, {:ok, turn}, %{state | active: active}}
+            timer = Process.send_after(self(), {:timeout, turn}, state.limits.timeout_ms)
+
+            active = %{
+              turn: turn,
+              task: task,
+              timer: timer,
+              started: started,
+              first: %{},
+              events: 0
+            }
+
+            {:reply, {:ok, turn}, %{state | active: active, output_turn: turn}}
+
+          {:error, reason} ->
+            {:reply, {:error, {:output, reason}}, state}
+        end
     end
   end
 
-  def handle_call(:cancel, _from, %{active: nil} = state), do: {:reply, :ok, state}
+  def handle_call(:cancel, _from, %{active: nil} = state),
+    do: {:reply, flush_output(state), state}
 
   def handle_call(:cancel, _from, state) do
     kill(state.active)
-    notify(state, {:cancelled, metrics(state.active)})
-    {:reply, :ok, %{state | active: nil}}
+    result = flush_output(state)
+
+    event =
+      case result do
+        :ok -> {:cancelled, metrics(state.active)}
+        {:error, reason} -> {:error, {:output_flush, reason}, metrics(state.active)}
+      end
+
+    notify(state, event)
+    {:reply, result, %{state | active: nil}}
   end
 
   def handle_call({:emit, turn, kind, value}, _from, %{active: %{turn: turn} = active} = state) do
@@ -97,10 +124,26 @@ defmodule AudioFlow.Session do
     Process.demonitor(ref, [:flush])
     Process.cancel_timer(state.active.timer)
 
+    result =
+      case result do
+        :ok ->
+          case AudioFlow.Output.call(state.output, :finish, [{self(), state.active.turn}]) do
+            :ok -> :ok
+            {:error, reason} -> {:error, {:output, reason}}
+          end
+
+        error ->
+          error
+      end
+
     event =
       case result do
-        :ok -> {:done, metrics(state.active)}
-        {:error, reason} -> {:error, reason, metrics(state.active)}
+        :ok ->
+          {:done, metrics(state.active)}
+
+        {:error, reason} ->
+          flush_output(state)
+          {:error, reason, metrics(state.active)}
       end
 
     notify(state, event)
@@ -112,12 +155,14 @@ defmodule AudioFlow.Session do
 
   def handle_info({:DOWN, ref, :process, _, reason}, %{active: %{task: %{ref: ref}}} = state) do
     Process.cancel_timer(state.active.timer)
+    flush_output(state)
     notify(state, {:error, {:task_exit, reason}, metrics(state.active)})
     {:noreply, %{state | active: nil}}
   end
 
   def handle_info({:timeout, turn}, %{active: %{turn: turn}} = state) do
     kill(state.active)
+    flush_output(state)
     notify(state, {:error, :timeout, metrics(state.active)})
     {:noreply, %{state | active: nil}}
   end
@@ -125,10 +170,12 @@ defmodule AudioFlow.Session do
   def handle_info(_, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_, %{active: nil}), do: :ok
-  def terminate(_, state), do: kill(state.active)
+  def terminate(_, state) do
+    if state.active, do: kill(state.active)
+    flush_output(state)
+  end
 
-  defp pipeline(session, turn, audio, adapters) do
+  defp pipeline(session, turn, audio, adapters, output) do
     emit = fn kind, value ->
       case GenServer.call(session, {:emit, turn, kind, value}) do
         :ok -> :ok
@@ -152,7 +199,15 @@ defmodule AudioFlow.Session do
       if transcript != "" do
         Adapter.run(adapters.llm, transcript, fn text ->
           emit.(:text, text)
-          Adapter.run(adapters.tts, text, &emit.(:audio, &1))
+
+          Adapter.run(adapters.tts, text, fn audio ->
+            emit.(:audio, audio)
+
+            case AudioFlow.Output.call(output, :push, [{session, turn}, audio]) do
+              :ok -> :ok
+              {:error, reason} -> throw({:output, reason})
+            end
+          end)
         end)
       end
 
@@ -165,6 +220,11 @@ defmodule AudioFlow.Session do
       Process.delete(key)
     end
   end
+
+  defp flush_output(%{output_turn: nil}), do: :ok
+
+  defp flush_output(state),
+    do: AudioFlow.Output.call(state.output, :flush, [{self(), state.output_turn}])
 
   defp valid_output?(:audio, audio), do: Audio.valid?(audio)
   defp valid_output?(kind, text) when kind in [:text, :transcript], do: is_binary(text)

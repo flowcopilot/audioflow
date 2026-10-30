@@ -5,7 +5,8 @@ session. Sessions share model services through an engine-independent adapter.
 
 This implements the session runtime, native Silero voice detection, Whisper
 and text-generation adapters, Kokoro and VITS speech synthesis, and Membrane input from
-[Brief.md](Brief.md). The full benchmark and playback path still need work.
+[Brief.md](Brief.md). The full model benchmark and acoustic interruption
+measurements still need work.
 The core runs without model downloads. The demo produces fixed text and silent
 PCM. Use the model examples for real inference.
 
@@ -38,8 +39,9 @@ AudioFlow.stop_session(session)
 The owner receives transcript, text, audio, and terminal events. See
 `AudioFlow` for the event format. Each turn has a unique reference. A session
 accepts one turn at a time. Further input returns `{:error, :busy}`. To interrupt
-a reply, call `cancel/1`, flush audio in the playback device, then submit the new
-utterance. Cancellation kills the turn task. A shared hardware batch can still
+a reply, call `cancel/1`, then submit the new utterance. With an `:output`
+transport, cancellation also flushes queued output. Without a transport, the
+caller must flush its playback device. Cancellation kills the turn task. A shared hardware batch can still
 run to completion.
 
 Input must be mono signed 16-bit little-endian PCM. Input limits, output event
@@ -170,8 +172,9 @@ Each sink keeps its own recurrent state and audio context. Only the weights are
 shared. Input must be 16 kHz. Put a resampler before the sink for other rates.
 
 After speech confirmation, the sink cancels the active reply and sends
-`{:audio_flow_speech_started, session}` to its parent. The parent must flush
-playback. After endpoint detection, it sends `{:audio_flow_input, result}`.
+`{:audio_flow_speech_started, session}` to its parent. A configured output
+transport is flushed by the session. Otherwise, the parent must flush playback.
+After endpoint detection, it sends `{:audio_flow_input, result}`.
 The parent must handle busy input. At end of stream, the sink flushes the final
 utterance. Without `vad`, each input buffer must be one complete utterance.
 
@@ -184,8 +187,70 @@ options are documented in the module. Try it with a mono 16 kHz PCM recording:
 AUDIOFLOW_ML=1 AUDIOFLOW_PCM=recording.s16le mix run examples/vad.exs
 ```
 
-The application owner must route output PCM to its playback transport. Echo
-cancellation is not included. Speaker audio can therefore trigger the detector.
+`AudioFlow.Input.attach/3` adds FFmpeg resampling and the session sink to a
+Membrane source chain. It requires a voice detector tuple. It converts supported
+mono or stereo input to mono s16le at the selected rate (16 kHz by default).
+`AudioFlow.InputPipeline` supplies this chain as a complete pipeline. The source
+can be `AudioFlow.PCMFileSource` or `Membrane.PortAudio.Source`. The file source
+reads bounded chunks and preserves sample timestamps. It rejects incomplete
+PCM frames. Set the source format to match the actual file or device.
+
+Echo cancellation is not included. Speaker audio can therefore trigger the detector.
+
+## Output transport
+
+Attach a playback process to a session:
+
+```elixir
+sink = %Membrane.PortAudio.Sink{latency: :low,
+  ringbuffer_size: 2048, portaudio_buffer_size: 256}
+{:ok, playback} = AudioFlow.Playback.start_link(sink: sink)
+{:ok, session} = AudioFlow.start_session(
+  Keyword.put(session_options, :output, {AudioFlow.Playback, playback}))
+```
+
+The sink is application-selected. A sound device opens only when PCM arrives.
+Each turn gets its own output pipeline. The queue is limited by `:max_bytes`
+(96,000 by default). One further chunk can wait for capacity. Each chunk must
+fit within that limit. A full queue blocks the turn worker, while cancellation
+remains available in the session. Membrane input prefetch is limited to one
+buffer; the device has its own ring buffer. PCM chunks must keep the same sample
+rate throughout a turn.
+
+Normal completion drains queued output. PortAudio output is padded to a whole
+device block and has a final ring-buffer drain interval before close. The
+playback process sends `:drained` after pipeline cleanup. Inference `:done` can
+arrive before playback finishes. Cancellation drops the application queue and
+closes the old pipeline before it acknowledges. Old turn references are rejected.
+A completed inference turn can still be cancelled while its audio is queued.
+Session exit also closes its output pipeline.
+
+The observer receives `{AudioFlow.Playback, pid, turn_key, event}`. Events include
+`:drained`, `{:first_buffer, %{elapsed_us: us}}`, `{:flushed, %{control_us: us}}`,
+back pressure, and failure. First-buffer time ends at the Membrane source;
+flush time ends after pipeline cleanup. Neither is a microphone-to-speaker
+measurement. A device close can drain a short native buffer. Acoustic
+interruption latency still requires a loopback recording and a common clock.
+
+`AudioFlow.Output` defines the transport interface for other output engines.
+`push/3` runs in the turn worker, so it can apply back pressure. `flush/2` must
+release blocked producers and stop old output. The playback process belongs to
+one conversation; use a separate process for each session.
+
+`examples/models.exs` starts shared models. `examples/local.exs` adds a single
+utterance for inference benchmarks. `examples/media.exs` connects a PCM file,
+resampling, Silero, the session, and PortAudio output. It plays sound when run:
+
+```sh
+AUDIOFLOW_ML=1 AUDIOFLOW_MEDIA=1 AUDIOFLOW_PCM=recording.s16le \
+  AUDIOFLOW_LLM=Qwen/Qwen3-0.6B mix run examples/media.exs
+```
+
+Set `AUDIOFLOW_INPUT_RATE` and `AUDIOFLOW_INPUT_CHANNELS` for other input formats.
+The file example reads at processing speed. Use one utterance for this check.
+A live PortAudio source follows the device clock.
+The media tests use a controlled sink. They verify back pressure, drain,
+cancellation, pipeline failure, and cleanup without opening a sound device.
 
 ## Model validation
 
@@ -241,8 +306,8 @@ real-time performance claim is included here.
 
 ## Work still required
 
-- Add input resampling and echo cancellation for microphone use.
-- Add playback transport and measure interruption through the playback device.
+- Add echo cancellation for microphone use.
+- Measure interruption through a real playback device with loopback audio.
 - Measure the full Membrane → Whisper → LLM → TTS → Membrane path on hardware.
 - Compare that path against Pipecat with the same workload.
 - Add model routing, embeddings, vision, and distributed worker selection.
@@ -258,3 +323,5 @@ real-time performance claim is included here.
 - [Silero frame and context protocol](https://github.com/snakers4/silero-vad/blob/master/src/silero_vad/utils_vad.py)
 - [Kokoro voice style selection](https://github.com/hexgrad/kokoro/blob/main/kokoro/pipeline.py)
 - [Misaki phoneme mapping](https://github.com/hexgrad/misaki/blob/main/misaki/espeak.py)
+- [FFmpeg resampler](https://membrane-ffmpeg-swresample-plugin.hexdocs.pm/Membrane.FFmpeg.SWResample.Converter.html)
+- [PortAudio plugin](https://hexdocs.pm/membrane_portaudio_plugin/)

@@ -36,7 +36,12 @@ defmodule AudioFlow.MixProject do
 
     ml ++
       if(enabled?("AUDIOFLOW_MEDIA"),
-        do: [{:membrane_core, "~> 1.3"}, {:membrane_raw_audio_format, "~> 0.12"}],
+        do: [
+          {:membrane_core, "~> 1.3"},
+          {:membrane_raw_audio_format, "~> 0.12"},
+          {:membrane_ffmpeg_swresample_plugin, "~> 0.21.0"},
+          {:membrane_portaudio_plugin, "~> 0.19.4"}
+        ],
         else: []
       )
   end
