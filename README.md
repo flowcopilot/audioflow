@@ -2,6 +2,7 @@
 
 AudioFlow is an Elixir voice and image agent runtime. Each conversation uses an OTP
 session. Sessions share model services through an engine-independent adapter.
+Optional bounded history keeps successful conversation turns in each session.
 
 This implements the session runtime, model routing, distributed inference workers,
 native Silero voice detection, Whisper and text-generation adapters, Kokoro and
@@ -61,13 +62,75 @@ Use complete sentences for LLM output when possible.
 The session stops when its owner exits. Turn failures do not stop the session.
 Sessions are temporary supervisor children: a session crash does not restart a
 conversation with lost state. The caller must start a new session after a crash.
-There is no conversation history yet. Put history and prompt templates in the
-application adapter.
 
 Adapter calls acknowledge each output before they continue. The owner must
 consume its mailbox. The event limit bounds output per turn, but does not bound
 the owner's mailbox across turns. An adapter must also bound individual output
 sizes. Do not pass an untrusted client directly as the owner.
+
+## Conversation history
+
+Enable history when the LLM adapter accepts chat messages:
+
+```elixir
+{:ok, session} = AudioFlow.start_session(
+  Keyword.put(session_options, :history, [max_turns: 8, max_bytes: 16_384]))
+```
+
+`history: true` uses these defaults. History is disabled by default, so existing
+adapters continue to receive one transcript string. With history enabled, the
+LLM receives a list of `%{role: :user | :assistant, content: text}` maps. Saved
+user/assistant pairs precede the current user message. `Prompt.qwen3/2` and
+`Adapters.ChatHTTP` accept this format. Custom adapters and routing functions
+must accept the message list when history is enabled. System instructions stay
+in the model adapter or prompt formatter.
+
+`max_turns` counts complete saved pairs. `max_bytes` counts UTF-8 text content.
+The runtime removes the oldest complete pairs to fit the new prompt. It also
+removes old pairs when a successful reply makes saved history exceed a limit.
+Current input and reply text must fit as one pair; excess text ends the turn
+with `{:error, :context_limit, metrics}`. The input limit also applies while
+transcript or description chunks arrive. The budget excludes role fields,
+prompt delimiters, and system instructions. It is a byte limit, not a model
+token limit. Set model sequence limits for the chosen workload.
+
+Only nonempty user and assistant text becomes a saved pair. The session saves
+it after successful inference and acknowledgement from `Output.finish/2`.
+Failed or cancelled active turns leave the previous saved pairs intact.
+Transport completion can precede physical playback. A cancellation after
+`:done` flushes output and keeps that completed pair. Each session owns its
+history, including when sessions share the same inference worker.
+
+Image descriptions use the user role, so later voice turns can refer to the
+described image. History stores text, rather than raw image or audio data.
+Clear the saved text while the session is idle:
+
+```elixir
+:ok = AudioFlow.clear_history(session)
+```
+
+An active turn returns `{:error, :busy}`. Clearing a session with history
+disabled is an idempotent operation. History lasts for the session process;
+owner exit or a session crash ends it.
+
+Set `AUDIOFLOW_HISTORY=1` for `examples/models.exs`, `examples/media.exs`, and
+`examples/local.exs`. The supplied history prompt supports native Qwen3 or an
+HTTP chat engine. Other native models need their own message formatter.
+Benchmark attempts use new sessions, so their history starts empty.
+
+For sequential recorded turns on one session:
+
+```sh
+AUDIOFLOW_ML=1 AUDIOFLOW_HISTORY=1 AUDIOFLOW_LLM=Qwen/Qwen3-0.6B \
+  mix run examples/conversation.exs output first.s16le second.s16le
+```
+
+Inputs are mono 16 kHz s16le PCM. The example loads shared models once and
+writes one PCM file plus JSON metadata per turn. It does not open a sound device.
+The native conversation model check uses one Qwen3 serving for two turns and
+checks recall of a codeword from the first turn. Its STT and TTS adapters are
+controlled test adapters. Qwen3 message prompts are also compared with the
+original pinned Jinja template.
 
 ## Shared local models
 
@@ -319,7 +382,7 @@ Audio and image turns share one active-turn limit. Both support cancellation,
 deadlines, and output limits. A decoded video frame can use the same image
 input. The transport must select frames and handle `{:error, :busy}`. The runtime
 does not buffer a video stream or track motion between frames. Each frame is
-described independently. There is no conversation history yet.
+described independently. Enable history to retain their descriptions between turns.
 
 ## Model routing and distributed workers
 
@@ -626,7 +689,6 @@ VAD, transport, and playback device delays are excluded from these measurements.
 - Measure interruption through a real playback device with loopback audio.
 - Benchmark the full media path with multiple inputs and concurrent sessions.
 - Compare that path against Pipecat with the same workload.
-- Add bounded conversation history.
 - Add video frame capture and temporal analysis.
 
 ## API references

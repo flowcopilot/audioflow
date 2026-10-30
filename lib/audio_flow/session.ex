@@ -8,12 +8,16 @@ defmodule AudioFlow.Session do
   An optional `:vision` adapter converts RGB images to description strings.
   `:max_image_bytes` defaults to 6,291,456. Image-only sessions can omit `:stt`.
   Descriptions form one LLM prompt, then follow the same speech output path.
+  Set `:history` to `true` or `[max_turns: 8, max_bytes: 16_384]` to retain
+  successful user/assistant pairs. The LLM then receives a list of role/content
+  message maps. History is disabled by default. Context limits count UTF-8 text
+  bytes, not tokens. Cancelled and failed turns do not change saved history.
   The session stops when its owner exits. Interrupted turns cannot deliver
   further output. Cancellation stops the caller task, but an inference engine
   may still finish a batch already submitted to shared hardware.
   """
   use GenServer, restart: :temporary
-  alias AudioFlow.{Adapter, Audio, Image}
+  alias AudioFlow.{Adapter, Audio, History, Image}
 
   def start_link(options), do: GenServer.start_link(__MODULE__, options)
 
@@ -51,6 +55,7 @@ defmodule AudioFlow.Session do
        owner_ref: Process.monitor(owner),
        adapters: adapters,
        limits: limits,
+       history: History.new(Keyword.get(options, :history, false)),
        output: Keyword.get(options, :output),
        output_turn: nil,
        active: nil
@@ -81,9 +86,12 @@ defmodule AudioFlow.Session do
 
         case AudioFlow.Output.call(state.output, :start_turn, [{session, turn}]) do
           :ok ->
+            adapters = state.adapters
+            output = state.output
+
             task =
               Task.Supervisor.async_nolink(AudioFlow.Tasks, fn ->
-                pipeline(session, turn, input, stage, kind, state.adapters, state.output)
+                pipeline(session, turn, input, stage, kind, adapters, output)
               end)
 
             timer = Process.send_after(self(), {:timeout, turn}, state.limits.timeout_ms)
@@ -94,7 +102,9 @@ defmodule AudioFlow.Session do
               timer: timer,
               started: started,
               first: %{},
-              events: 0
+              events: 0,
+              input_bytes: 0,
+              context: nil
             }
 
             {:reply, {:ok, turn}, %{state | active: active, output_turn: turn}}
@@ -104,6 +114,27 @@ defmodule AudioFlow.Session do
         end
     end
   end
+
+  def handle_call(:clear_history, _from, %{active: nil} = state),
+    do: {:reply, :ok, %{state | history: History.clear(state.history)}}
+
+  def handle_call(:clear_history, _from, state), do: {:reply, {:error, :busy}, state}
+
+  def handle_call({:context, turn, input}, _from, %{active: %{turn: turn} = active} = state) do
+    if state.history == nil do
+      {:reply, {:ok, input}, state}
+    else
+      case History.prompt(state.history, input) do
+        {:ok, messages, context} ->
+          {:reply, {:ok, messages}, %{state | active: %{active | context: context}}}
+
+        {:error, reason} ->
+          {:reply, {:error, reason}, state}
+      end
+    end
+  end
+
+  def handle_call({:context, _, _}, _from, state), do: {:reply, {:error, :stale_turn}, state}
 
   def handle_call(:cancel, _from, %{active: nil} = state),
     do: {:reply, flush_output(state), state}
@@ -131,9 +162,15 @@ defmodule AudioFlow.Session do
         {:reply, {:error, :output_limit}, state}
 
       true ->
-        first = Map.put_new(active.first, kind, now() - active.started)
-        notify(state, {kind, value})
-        {:reply, :ok, %{state | active: %{active | first: first, events: active.events + 1}}}
+        case record_context(state, kind, value) do
+          {:ok, active} ->
+            first = Map.put_new(active.first, kind, now() - active.started)
+            notify(state, {kind, value})
+            {:reply, :ok, %{state | active: %{active | first: first, events: active.events + 1}}}
+
+          {:error, reason} ->
+            {:reply, {:error, reason}, state}
+        end
     end
   end
 
@@ -167,7 +204,13 @@ defmodule AudioFlow.Session do
       end
 
     notify(state, event)
-    {:noreply, %{state | active: nil}}
+
+    history =
+      if result == :ok and state.active.context != nil,
+        do: History.commit(state.active.context),
+        else: state.history
+
+    {:noreply, %{state | active: nil, history: history}}
   end
 
   def handle_info({:DOWN, ref, :process, _, _}, %{owner_ref: ref} = state),
@@ -217,7 +260,13 @@ defmodule AudioFlow.Session do
       transcript = Process.get(key) |> Enum.reverse() |> Enum.join("") |> String.trim()
 
       if transcript != "" do
-        Adapter.run(adapters.llm, transcript, fn text ->
+        prompt =
+          case GenServer.call(session, {:context, turn, transcript}) do
+            {:ok, prompt} -> prompt
+            {:error, reason} -> throw(reason)
+          end
+
+        Adapter.run(adapters.llm, prompt, fn text ->
           emit.(:text, text)
 
           if String.trim(text) != "" do
@@ -244,6 +293,25 @@ defmodule AudioFlow.Session do
       Process.delete(key)
     end
   end
+
+  defp record_context(%{history: nil, active: active}, _, _), do: {:ok, active}
+
+  defp record_context(state, kind, text) when kind in [:transcript, :description] do
+    bytes = state.active.input_bytes + byte_size(text)
+
+    if bytes > state.history.max_bytes,
+      do: {:error, :context_limit},
+      else: {:ok, %{state.active | input_bytes: bytes}}
+  end
+
+  defp record_context(state, :text, text) do
+    case History.append(state.active.context, text) do
+      {:ok, context} -> {:ok, %{state.active | context: context}}
+      error -> error
+    end
+  end
+
+  defp record_context(%{active: active}, _, _), do: {:ok, active}
 
   defp flush_output(%{output_turn: nil}), do: :ok
 

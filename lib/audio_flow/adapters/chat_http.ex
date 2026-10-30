@@ -23,7 +23,6 @@ defmodule AudioFlow.Adapters.ChatHTTP do
   """
   @behaviour AudioFlow.Adapter
   alias AudioFlow.{SSE, TextChunks}
-  @system "You are a voice assistant. Reply in one short sentence. Use plain text."
 
   @impl true
   def run(input, options, emit) do
@@ -35,7 +34,8 @@ defmodule AudioFlow.Adapters.ChatHTTP do
       do: raise(ArgumentError, "endpoint must be an HTTP or HTTPS URL without user information")
 
     messages = [
-      %{role: "system", content: Keyword.get(options, :system, @system)} | messages(input)
+      %{role: "system", content: Keyword.get(options, :system, AudioFlow.Prompt.default_system())}
+      | messages(input)
     ]
 
     parameters =

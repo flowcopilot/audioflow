@@ -6,6 +6,22 @@
 # with AUDIOFLOW_LLM_ENGINE=http and AUDIOFLOW_CHAT_ENDPOINT.
 llm_repository = System.fetch_env!("AUDIOFLOW_LLM")
 
+history =
+  case System.get_env("AUDIOFLOW_HISTORY", "0") do
+    "0" ->
+      false
+
+    "1" ->
+      if System.get_env("AUDIOFLOW_LLM_ENGINE", "nx") == "nx" and
+           not String.starts_with?(llm_repository, "Qwen/Qwen3"),
+         do: raise("This history example requires Qwen3 or an HTTP chat engine")
+
+      [max_turns: 8, max_bytes: 16_384]
+
+    _ ->
+      raise "AUDIOFLOW_HISTORY must be 0 or 1"
+  end
+
 {tts, tts_children, tts_metadata} =
   case System.get_env("AUDIOFLOW_TTS_CONFIG") do
     nil ->
@@ -134,6 +150,7 @@ options = [
      input: &AudioFlow.NxAdapter.whisper_input/1,
      output: &AudioFlow.NxAdapter.transcript/1},
   llm: llm_adapter,
+  history: history,
   tts: tts,
   timeout_ms: 120_000,
   max_events: 4096
@@ -144,6 +161,7 @@ metadata = %{
   hardware_label: System.get_env("AUDIOFLOW_HARDWARE"),
   whisper: %{repository: whisper_repository, revision: whisper_revision},
   llm: llm_metadata,
+  history: if(history, do: Map.new(history), else: false),
   tts: tts_metadata,
   serving: %{batch_size: 1, batch_timeout_ms: 5},
   compiler: "EXLA",

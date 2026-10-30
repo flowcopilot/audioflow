@@ -7,5 +7,14 @@ defmodule AudioFlow.PromptTest do
 
     assert AudioFlow.Prompt.qwen3(reference["text"], system: reference["system"]) ==
              reference["prompt"]
+
+    for conversation <- reference["conversations"] do
+      messages =
+        Enum.map(conversation["messages"], fn message ->
+          %{role: message["role"], content: message["content"]}
+        end)
+
+      assert AudioFlow.Prompt.qwen3(messages) == conversation["prompt"]
+    end
   end
 end
