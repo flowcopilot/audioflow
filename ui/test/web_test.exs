@@ -20,11 +20,11 @@ defmodule AudioFlowUIWeb.WebTest do
     assert render(list) =~ "other"
 
     {:ok, canvas, _} = live(conn, "/graphs/voice")
-    assert has_element?(canvas, "#node-stt")
-    assert has_element?(canvas, ~s(path[id="llm->tts"]))
+    assert has_element?(canvas, "#canvas-node-stt")
+    assert has_element?(canvas, ~s([data-edge][data-from="llm"][data-to="tts"]))
 
     {:ok, _} = AudioFlowUI.Graphs.put(Map.update!(voice(), "edges", &Enum.drop(&1, -1)))
-    refute has_element?(canvas, ~s(path[id="llm->tts"]))
+    refute has_element?(canvas, ~s([data-edge][data-from="llm"][data-to="tts"]))
     assert render(canvas) =~ ~s(node &quot;tts&quot; has no path from an input node)
   end
 

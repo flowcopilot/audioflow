@@ -5,7 +5,23 @@ agents. A graph is an `AudioFlow.Graph`: typed nodes and the edges between
 them. The dashboard and the MCP tools use the same graph store, so a change
 from a coding agent shows immediately in an open dashboard.
 
-The canvas is read-only now. To change a graph, use the MCP tools.
+## Editor
+
+The graph page is an editor. Changes save immediately, and the MCP tools
+see them.
+
+| Operation | Action |
+| --- | --- |
+| Pan | Drag the background. |
+| Zoom | Use the wheel or pinch. The controls zoom, fit, and reset the view. |
+| Move a node | Drag it, or focus it and push the arrow keys. It snaps to a 20 px grid. |
+| Connect | Drag from an output handle to an input handle of the same kind. |
+| Select | Click a node or an edge, or focus it and push Enter. |
+| Delete | Push Delete or Backspace on the focused node or edge. |
+| Add a node | Click a node type in the "Add node" panel. |
+| Options | Select a node, edit the form, and click "Save options". |
+
+"New graph" on the list page makes an empty graph.
 
 ## Run
 

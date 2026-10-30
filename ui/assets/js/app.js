@@ -5,12 +5,13 @@ import "live_base";
 import "live_ai_elements";
 import { hooks as liveBase } from "phoenix-colocated/live_base";
 import { hooks as liveAiElements } from "phoenix-colocated/live_ai_elements";
+import { hooks as audioFlowUI } from "phoenix-colocated/audio_flow_ui";
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content");
 
 const liveSocket = new LiveSocket("/live", Socket, {
   params: { _csrf_token: csrfToken },
-  hooks: { ...liveBase, ...liveAiElements },
+  hooks: { ...liveBase, ...liveAiElements, ...audioFlowUI },
 });
 
 liveSocket.connect();

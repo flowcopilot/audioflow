@@ -13,6 +13,7 @@ defmodule AudioFlowUI.MixProject do
       # AUDIOFLOW_ML=1 builds AudioFlow with its model nodes, in a separate build directory.
       build_path: if(System.get_env("AUDIOFLOW_ML") == "1", do: "_build/ml", else: "_build/core"),
       listeners: [Phoenix.CodeReloader],
+      compilers: [:phoenix_live_view] ++ Mix.compilers(),
       deps: deps(),
       aliases: aliases()
     ]
