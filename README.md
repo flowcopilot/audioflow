@@ -132,6 +132,13 @@ checks recall of a codeword from the first turn. Its STT and TTS adapters are
 controlled test adapters. Qwen3 message prompts are also compared with the
 original pinned Jinja template.
 
+The saved [speech conversation checks](validation/conversation-smoke.json)
+use the same two utterances with eSpeak NG and Kokoro input voices. With Kokoro
+inputs, Whisper transcribed both utterances correctly and the second spoken
+reply recalled the codeword `banana`. Whisper tiny misread the eSpeak inputs.
+Both results are retained with model revisions and PCM hashes. These are small
+checks of transcription and context use; model quality needs a broader workload.
+
 ## Shared local models
 
 Enable the model code for all model commands:

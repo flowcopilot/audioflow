@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "source_commit": "11095759e1f553edea73447556cc81b81867816e",
+  "scope": "Two turns in one session per input voice. Shared native models and PCM output. Synthesized inputs check transcription and context use.",
+  "models": {
+    "mode": "native_inference",
+    "compiler": "EXLA",
+    "history": {
+      "max_bytes": 16384,
+      "max_turns": 8
+    },
+    "client": "automatic",
+    "llm": {
+      "strategy": "greedy_search",
+      "prompt": "qwen3_no_think",
+      "revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+      "engine": "nx",
+      "repository": "Qwen/Qwen3-0.6B",
+      "max_new_tokens": 64
+    },
+    "tts": {
+      "revision": "1939ad2a8e416c0acfeecc08a694d14ef25f2231",
+      "engine": "kokoro",
+      "repository": "onnx-community/Kokoro-82M-v1.0-ONNX",
+      "voice": "af_heart"
+    },
+    "serving": {
+      "batch_size": 1,
+      "batch_timeout_ms": 5
+    },
+    "whisper": {
+      "revision": "169d4a4341b33bc18d8881c4b69c2e104e1cc0af",
+      "repository": "openai/whisper-tiny"
+    },
+    "hardware_label": null,
+    "params_backend": "EXLA.Backend"
+  },
+  "input_generation": {
+    "espeak-ng": {
+      "version": "1.52.0",
+      "voice": "en-us",
+      "speed_wpm": 150
+    },
+    "kokoro": {
+      "revision": "1939ad2a8e416c0acfeecc08a694d14ef25f2231",
+      "engine": "kokoro",
+      "repository": "onnx-community/Kokoro-82M-v1.0-ONNX",
+      "voice": "af_heart"
+    },
+    "resampling": "ffmpeg -v error -i INPUT -ac 1 -ar 16000 -f s16le OUTPUT"
+  },
+  "checks": [
+    {
+      "input_voice": "espeak-ng",
+      "result": "transcription_error",
+      "turns": [
+        {
+          "utterance": "The code word is banana. Please remember it.",
+          "transcript": "The Cold War Dispanning. Please remember it.",
+          "reply": "The Cold War Dispanning refers to the period of intense geopolitical tension and rivalry between the United States and the Soviet Union during the 1940s and 1950s.",
+          "input": {
+            "format": "mono s16le",
+            "sample_rate": 16000,
+            "source_wav_sample_rate": 22050,
+            "bytes": 108074,
+            "sha256": "faa29e87b5df82467d0770d2596708d5a780657a36076bca2913e04edafcfd28"
+          },
+          "output": {
+            "format": "mono s16le",
+            "sample_rate": 24000,
+            "bytes": 613200,
+            "sha256": "eb5e994498ca4d988abd3a72a0e5290df33c8b271fe1fbb92eb1fd401d19e4e0"
+          }
+        },
+        {
+          "utterance": "What was the code word? Please say only the word.",
+          "transcript": "What was the Cold Word? Please say only the word.",
+          "reply": "Cold",
+          "input": {
+            "format": "mono s16le",
+            "sample_rate": 16000,
+            "source_wav_sample_rate": 22050,
+            "bytes": 120086,
+            "sha256": "b34e6b73e1bddc50fa5a360cbd11964acafde0757b04725e85786a3e5ec41c06"
+          },
+          "output": {
+            "format": "mono s16le",
+            "sample_rate": 24000,
+            "bytes": 63600,
+            "sha256": "59f75e7843caf04582a2fbdf04a21b68cb81a6461bb96ca471e145460030f91d"
+          }
+        }
+      ]
+    },
+    {
+      "input_voice": "kokoro",
+      "result": "codeword_recalled",
+      "turns": [
+        {
+          "utterance": "The code word is banana. Please remember it.",
+          "transcript": "The code word is banana. Please remember it.",
+          "reply": "Remember the code word: banana.",
+          "input": {
+            "format": "mono s16le",
+            "sample_rate": 16000,
+            "source_wav_sample_rate": 24000,
+            "bytes": 101600,
+            "sha256": "d3a88ccaa9de4419fab3326c14f20714cd712127052a59125856df1bda974637"
+          },
+          "output": {
+            "format": "mono s16le",
+            "sample_rate": 24000,
+            "bytes": 120000,
+            "sha256": "29ec8d42bf9d5b7ade8df36d076767ecf2bd1fd43af06aeb51973252a2e87a14"
+          }
+        },
+        {
+          "utterance": "What was the code word? Please say only the word.",
+          "transcript": "What was the code word? Please say only the word.",
+          "reply": "banana",
+          "input": {
+            "format": "mono s16le",
+            "sample_rate": 16000,
+            "source_wav_sample_rate": 24000,
+            "bytes": 103200,
+            "sha256": "7b713e0719057f1a916e9ecbfa85f911a3cf1874e951276d8e6a857f66549d7e"
+          },
+          "output": {
+            "format": "mono s16le",
+            "sample_rate": 24000,
+            "bytes": 69600,
+            "sha256": "7d404b998247e54406d3f2bc8f2826cff2de6097167c09f1a1e8005c91511555"
+          }
+        }
+      ]
+    }
+  ]
+}
