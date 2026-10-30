@@ -28,25 +28,35 @@ defmodule AudioFlow.Graph.Nodes.Demo do
   @impl true
   def nodes do
     [
-      spec("demo.stt", "Demo STT", "Emits a fixed transcript.", :audio, :text),
-      spec("demo.llm", "Demo LLM", "Repeats the prompt.", :text, :text),
-      spec("demo.tts", "Demo TTS", "Emits 50 ms of silent PCM.", :text, :audio)
+      spec("demo.stt", "Demo STT", "Emits a fixed transcript.", :audio, :text,
+        event: :transcript
+      ),
+      spec("demo.llm", "Demo LLM", "Repeats the prompt.", :text, :text, history: true),
+      spec("demo.tts", "Demo TTS", "Emits 50 ms of silent PCM.", :text, :audio,
+        input_mode: :stream
+      )
     ]
   end
 
   @impl true
-  def adapter("demo." <> stage, _options),
-    do: {AudioFlow.Adapters.Demo, [stage: String.to_existing_atom(stage)]}
+  def adapter(type, _options) do
+    stage = Map.fetch!(%{"demo.stt" => :stt, "demo.llm" => :llm, "demo.tts" => :tts}, type)
+    {AudioFlow.Adapters.Demo, [stage: stage]}
+  end
 
-  defp spec(type, title, description, input, output),
-    do: %{
-      type: type,
-      title: title,
-      description: description,
-      input: input,
-      output: output,
-      options: []
-    }
+  defp spec(type, title, description, input, output, extra) do
+    Map.merge(
+      %{
+        type: type,
+        title: title,
+        description: description,
+        input: input,
+        output: output,
+        options: []
+      },
+      Map.new(extra)
+    )
+  end
 end
 
 defmodule AudioFlow.Graph.Nodes.ChatHTTP do
@@ -62,6 +72,7 @@ defmodule AudioFlow.Graph.Nodes.ChatHTTP do
         description: "A compatible local server or cloud endpoint.",
         input: :text,
         output: :text,
+        history: true,
         options: [
           %{name: :endpoint, type: :string, required: true, description: "Chat-completions URL."},
           %{name: :model, type: :string, required: true, description: "Model name."},

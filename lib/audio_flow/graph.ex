@@ -27,23 +27,18 @@ defmodule AudioFlow.Graph do
   of one node to the input port of another, and both ports must carry the
   same kind of value.
 
-  A graph runs as one `AudioFlow.Session`, so it must have the session shape:
-  audio input to one STT node, image input to one vision node, or both; the
-  STT, vision, and optional text input nodes feed one LLM node; the LLM node
-  feeds one TTS node. Settings are `"history"` (boolean), `"timeout_ms"`, and
-  `"max_events"`. Validation reports all errors that it finds.
+  A valid graph has at least one input node and no cycles, and each other
+  node has a path from an input node. A node can have several inputs and
+  several outputs. With the `"history"` setting, exactly one node must accept
+  conversation history. Settings are `"history"` (boolean), `"timeout_ms"`,
+  and `"max_events"`. Validation reports all errors that it finds.
+  `session_options/2` compiles a valid graph for `AudioFlow.Graph.Runner`.
   """
   alias AudioFlow.Graph.Nodes
 
   @default_nodes [Nodes.Input, Nodes.Demo, Nodes.ChatHTTP]
-  @edges [
-    {{:input, :audio}, :stt},
-    {{:input, :image}, :vision},
-    {{:input, :text}, :llm},
-    {:stt, :llm},
-    {:vision, :llm},
-    {:llm, :tts}
-  ]
+  @kinds [:audio, :image, :text, :vector]
+  @events [:transcript, :description, :text, :audio, :image, :vector]
   @settings %{"history" => :boolean, "timeout_ms" => :positive, "max_events" => :positive}
 
   @doc "Builds a catalog from node modules. The default has input, demo, and HTTP LLM nodes."
@@ -53,9 +48,36 @@ defmodule AudioFlow.Graph do
         if Map.has_key?(catalog, spec.type),
           do: raise(ArgumentError, "duplicate node type #{inspect(spec.type)}")
 
-        Map.put(catalog, spec.type, {module, spec})
+        Map.put(catalog, spec.type, {module, complete_spec(spec)})
       end)
     end)
+  end
+
+  # Defaults for the optional spec keys. See `AudioFlow.Graph.Node`.
+  defp complete_spec(spec) do
+    spec =
+      Map.merge(
+        %{input_mode: :join, event: spec.output, history: false},
+        spec
+      )
+
+    cond do
+      spec.input not in [nil | @kinds] or spec.output not in [nil | @kinds] ->
+        raise ArgumentError,
+              "node type #{spec.type}: ports must be nil or one of #{inspect(@kinds)}"
+
+      spec.output != nil and spec.event not in @events ->
+        raise ArgumentError, "node type #{spec.type}: event must be one of #{inspect(@events)}"
+
+      spec.input_mode not in [:join, :stream] ->
+        raise ArgumentError, "node type #{spec.type}: input_mode must be :join or :stream"
+
+      spec.history and not (spec.input == :text and spec.input_mode == :join) ->
+        raise ArgumentError, "node type #{spec.type}: a history node needs a joined text input"
+
+      true ->
+        spec
+    end
   end
 
   @doc "The node type specs of a catalog, sorted by type."
@@ -72,15 +94,36 @@ defmodule AudioFlow.Graph do
 
   @doc "Returns options for `AudioFlow.start_session/1`, without `:owner`."
   def session_options(graph, catalog) do
-    with {:ok, %{roles: roles, settings: settings}} <- check(graph, catalog) do
-      adapters =
-        for role <- [:stt, :vision, :llm, :tts], Map.has_key?(roles, role) do
-          node = roles[role]
-          {role, node.module.adapter(node.type, node.options)}
-        end
-
-      {:ok, adapters ++ settings}
+    with {:ok, %{nodes: nodes, edges: edges, settings: settings}} <- check(graph, catalog) do
+      {:ok, [graph: plan(nodes, edges, settings)] ++ settings}
     end
+  end
+
+  defp plan(nodes, edges, settings) do
+    history? = Keyword.get(settings, :history, false)
+
+    steps =
+      Map.new(nodes, fn {id, node} ->
+        step = %{
+          id: id,
+          adapter: if(node.spec.input, do: node.module.adapter(node.type, node.options)),
+          input_mode: node.spec.input_mode,
+          event: node.spec.event,
+          history: history? and node.spec.history,
+          sources: for({from, ^id} <- edges, do: from),
+          targets: for({^id, to} <- edges, do: to)
+        }
+
+        {id, step}
+      end)
+
+    inputs =
+      nodes
+      |> Enum.filter(fn {_, node} -> node.spec.input == nil end)
+      |> Enum.group_by(fn {_, node} -> node.spec.output end, fn {id, _} -> id end)
+      |> Map.new(fn {kind, ids} -> {kind, Enum.sort(ids)} end)
+
+    %AudioFlow.Graph.Plan{steps: steps, inputs: inputs}
   end
 
   @doc "Converts map keys to strings at every level."
@@ -101,8 +144,8 @@ defmodule AudioFlow.Graph do
 
       case node_errors ++ edge_errors ++ setting_errors do
         [] ->
-          with {:ok, roles} <- topology(nodes, edges),
-               do: {:ok, %{roles: roles, settings: settings}}
+          with :ok <- topology(nodes, edges, settings),
+               do: {:ok, %{nodes: nodes, edges: edges, settings: settings}}
 
         errors ->
           {:error, errors}
@@ -289,76 +332,73 @@ defmodule AudioFlow.Graph do
 
   defp setting(key, value), do: {String.to_existing_atom(key), value}
 
-  defp topology(nodes, edges) do
-    nodes = Map.values(nodes) |> Enum.sort_by(& &1.id)
-    by_role = Enum.group_by(nodes, &role(&1.spec))
+  defp topology(nodes, edges, settings) do
+    inputs = for {id, %{spec: %{input: nil}}} <- nodes, do: id
+    targets = Enum.group_by(edges, &elem(&1, 0), &elem(&1, 1))
+    reached = reach(inputs, targets, MapSet.new())
 
-    count_errors =
-      for {role, max} <- [{:stt, 1}, {:vision, 1}, {:llm, 1}, {:tts, 1}] ++ inputs(1),
-          length(Map.get(by_role, role, [])) > max,
-          do: "a graph can have only one node of role #{role_name(role)}"
+    unreached =
+      for {id, _} <- Enum.sort(nodes),
+          not MapSet.member?(reached, id),
+          do: "node #{inspect(id)} has no path from an input node"
 
-    required_errors =
-      [
-        {Map.has_key?(by_role, :llm), "a graph needs an LLM node"},
-        {Map.has_key?(by_role, :tts), "a graph needs a TTS node"},
-        {Map.has_key?(by_role, :stt) or Map.has_key?(by_role, :vision),
-         "a graph needs an STT or vision node"}
-      ]
-      |> Enum.reject(&elem(&1, 0))
-      |> Enum.map(&elem(&1, 1))
+    history =
+      for {id, node} <- Enum.sort(nodes), node.spec.history, do: id
 
-    unsupported =
-      for node <- Map.get(by_role, :unsupported, []),
-          do:
-            "node #{inspect(node.id)}: a session cannot run a #{node.spec.input} to #{node.spec.output} node"
+    errors =
+      if(inputs == [], do: ["a graph needs an input node"], else: []) ++
+        cycles(Map.keys(nodes), targets) ++
+        unreached ++
+        history_errors(Keyword.get(settings, :history, false), history)
 
-    with [] <- count_errors ++ required_errors ++ unsupported do
-      roles = Map.new(by_role, fn {role, [node]} -> {role, node} end)
-      ids = Map.new(roles, fn {role, node} -> {node.id, role} end)
+    if errors == [], do: :ok, else: {:error, errors}
+  end
 
-      edge_errors =
-        for {from, to} = edge <- edges,
-            {ids[from], ids[to]} not in @edges,
-            do:
-              "edge #{edge_name(edge)} is not supported: a session runs input -> STT or vision -> LLM -> TTS"
+  defp reach([], _targets, reached), do: reached
 
-      # Each node that is present needs its edge in the chain.
-      missing =
-        for {from_role, to_role} <- @edges,
-            Map.has_key?(roles, from_role) or (Map.has_key?(roles, to_role) and to_role != :llm) do
-          missing_edge(roles[from_role], from_role, roles[to_role], to_role, edges)
-        end
-        |> Enum.reject(&is_nil/1)
+  defp reach([id | rest], targets, reached) do
+    if MapSet.member?(reached, id),
+      do: reach(rest, targets, reached),
+      else: reach(Map.get(targets, id, []) ++ rest, targets, MapSet.put(reached, id))
+  end
 
-      case edge_errors ++ missing do
-        [] -> {:ok, roles}
-        errors -> {:error, errors}
-      end
-    else
-      errors -> {:error, errors}
+  # Depth-first search. A node on the current path that is seen again closes a cycle.
+  defp cycles(ids, targets) do
+    {_, errors} =
+      Enum.reduce(Enum.sort(ids), {MapSet.new(), []}, fn id, {done, errors} ->
+        visit(id, [], targets, done, errors)
+      end)
+
+    errors |> Enum.reverse() |> Enum.uniq()
+  end
+
+  defp visit(id, path, targets, done, errors) do
+    cond do
+      id in path ->
+        cycle = [id] ++ Enum.reverse(Enum.take_while(path, &(&1 != id))) ++ [id]
+        {done, ["edges form a cycle: #{Enum.map_join(cycle, " -> ", &inspect/1)}" | errors]}
+
+      MapSet.member?(done, id) ->
+        {done, errors}
+
+      true ->
+        {done, errors} =
+          Enum.reduce(Map.get(targets, id, []), {done, errors}, fn target, {done, errors} ->
+            visit(target, [id | path], targets, done, errors)
+          end)
+
+        {MapSet.put(done, id), errors}
     end
   end
 
-  defp inputs(max), do: for(kind <- [:audio, :image, :text], do: {{:input, kind}, max})
+  defp history_errors(false, _), do: []
+  defp history_errors(true, [_]), do: []
 
-  defp missing_edge(nil, from_role, to, _, _),
-    do: "node #{inspect(to.id)}: no #{role_name(from_role)} node to connect from"
+  defp history_errors(true, []),
+    do: ["the history setting needs a node that accepts history, such as an LLM node"]
 
-  defp missing_edge(from, _, nil, to_role, _),
-    do: "node #{inspect(from.id)}: no #{role_name(to_role)} node to connect to"
-
-  defp missing_edge(from, _, to, _, edges),
-    do: if({from.id, to.id} not in edges, do: "missing edge #{edge_name({from.id, to.id})}")
-
-  defp role(%{input: nil, output: kind}), do: {:input, kind}
-  defp role(%{input: :audio, output: :text}), do: :stt
-  defp role(%{input: :image, output: :text}), do: :vision
-  defp role(%{input: :text, output: :text}), do: :llm
-  defp role(%{input: :text, output: :audio}), do: :tts
-  defp role(_), do: :unsupported
-
-  defp role_name({:input, kind}), do: "#{kind} input"
-  defp role_name(role) when role in [:stt, :llm, :tts], do: role |> to_string() |> String.upcase()
-  defp role_name(:vision), do: "vision"
+  defp history_errors(true, ids),
+    do: [
+      "the history setting allows only one node that accepts history, found #{Enum.map_join(ids, ", ", &inspect/1)}"
+    ]
 end
