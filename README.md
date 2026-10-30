@@ -319,6 +319,9 @@ input, session exit, cancellation, and benchmark deadlines also produce rows.
 Error rows use elapsed attempt time where available. Unobserved timings remain
 blank.
 
+`first_text_us` measures the first sentence-sized text chunk from the language
+model adapter.
+
 For real inference, supply a script that starts shared models and returns
 `{session_options, audio}` or `{session_options, audio, metadata}`:
 
@@ -354,6 +357,13 @@ Keep cold runs separate. Use the same recordings, endpoint rules, and models for
 a Pipecat comparison. Report p50/p95 latency and error rate. Set the latency and
 error limits before selecting a maximum session count. No Pipecat result or
 real-time performance claim is included here.
+
+The saved [CPU run data](validation/native-cpu.csv),
+[metadata](validation/native-cpu.csv.meta.json), and
+[chart](validation/native-cpu.html) contain one warmup turn and three measured
+turns. They use one recording and one active session. This small check confirms
+that the inference path runs. It does not establish session capacity. Capture,
+VAD, transport, and playback device delays are excluded from these measurements.
 
 ## Work still required
 

@@ -1,0 +1,82 @@
+{
+  "config": {
+    "mode": "native_inference",
+    "compiler": "EXLA",
+    "client": "automatic",
+    "tts": {
+      "revision": "1939ad2a8e416c0acfeecc08a694d14ef25f2231",
+      "engine": "kokoro",
+      "repository": "onnx-community/Kokoro-82M-v1.0-ONNX",
+      "voice": "af_heart"
+    },
+    "serving": {
+      "batch_size": 1,
+      "batch_timeout_ms": 5
+    },
+    "whisper": {
+      "revision": "169d4a4341b33bc18d8881c4b69c2e104e1cc0af",
+      "repository": "openai/whisper-tiny"
+    },
+    "llm": {
+      "strategy": "greedy_search",
+      "prompt": "qwen3_no_think",
+      "revision": "c1899de289a04d12100db370d81485cdf75e47ca",
+      "repository": "Qwen/Qwen3-0.6B",
+      "max_new_tokens": 64
+    },
+    "hardware_label": "macOS arm64; 24 GiB RAM; EXLA host CPU",
+    "params_backend": "EXLA.Backend"
+  },
+  "options": {
+    "warmup": 1,
+    "runs": 3,
+    "concurrency": 1,
+    "timeout_ms": 125000
+  },
+  "otp": "29",
+  "schedulers": 10,
+  "elixir": "1.20.4",
+  "module_md5": {
+    "Elixir.AudioFlow": "a4fa9a5cabc08dc9a4a4e2ac9818e3dd",
+    "Elixir.AudioFlow.Adapter": "c4d57ce32785dde6bb7faa1cafe79853",
+    "Elixir.AudioFlow.Application": "7108fdc517036436502adf88633f43fb",
+    "Elixir.AudioFlow.Audio": "56d28b074c27c72f1c742b8a6dc33a70",
+    "Elixir.AudioFlow.Benchmark": "973d24960ab6373ff02070e61e0660ed",
+    "Elixir.AudioFlow.BenchmarkReport": "0d85a81a430eaf5e0306737b9aa19e02",
+    "Elixir.AudioFlow.Kokoro": "3a544bfc21030e27e1b5cb27ca3c1450",
+    "Elixir.AudioFlow.MixProject": "8ba293522948d73504fead21adf55a91",
+    "Elixir.AudioFlow.Models": "12b157aadfc8ae50a372e25266ab6456",
+    "Elixir.AudioFlow.NxAdapter": "35a0488fce4f4c4aa39c56a61e216f02",
+    "Elixir.AudioFlow.Output": "6b9332f1489e648f5f3d4738bcb97bf4",
+    "Elixir.AudioFlow.Phonemizers.ESpeak": "802024190f82129831b9af1551c12bcf",
+    "Elixir.AudioFlow.Prompt": "9da3d0daa865dfbc2f20427d51dbce50",
+    "Elixir.AudioFlow.Session": "e17cb52e4c110b4c3fbed8e0ce3de3f6",
+    "Elixir.AudioFlow.TextChunks": "62bb1d7d97afaabb7d64157d07a947a6"
+  },
+  "versions": {
+    "audio_flow": "0.1.0",
+    "bumblebee": "0.8.0",
+    "exla": "1.0.0",
+    "transmuter": "2.0.0",
+    "membrane_core": "1.3.5",
+    "axon": "0.9.0",
+    "nx": "1.0.0"
+  },
+  "setup_us": 11358408,
+  "audio": {
+    "bytes": 187360,
+    "sha256": "156e1e1821700d4c4ad31a63e6d901a5088d5ee155fafd02a9d0d2de37f771e6",
+    "sample_rate": 16000
+  },
+  "architecture": "aarch64-apple-darwin",
+  "recorded_at": "2026-10-30T13:40:40.664605Z",
+  "schema_version": 1,
+  "source_commit": "010fd782ba2dbe9056feb0ed3d0e8abd68fb2ba7",
+  "input_source": {
+    "repository": "georgeguimaraes/transmuter",
+    "revision": "231028d9ff6f53bd58fa15d9f24d632258369805",
+    "file": "test/fixtures/librispeech_0.flac",
+    "conversion": "ffmpeg -v error -i INPUT -ac 1 -ar 16000 -f s16le OUTPUT"
+  },
+  "scope": "Inference smoke run: one recording and one active session; microphone, VAD, transport, and acoustic delays are excluded."
+}
