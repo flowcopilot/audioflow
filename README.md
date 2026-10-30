@@ -27,6 +27,9 @@ mix run examples/demo.exs
 mix audio_flow.bench --runs 20 --concurrency 4
 ```
 
+For a browser chat with typed and spoken messages, see
+[examples/chat](examples/chat/README.md).
+
 Core, ML, media, and combined ML/media builds use separate `_build` directories.
 Changing a feature flag does not remove modules used by another build profile.
 
