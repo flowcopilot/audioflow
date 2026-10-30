@@ -5,8 +5,9 @@ session. Sessions share model services through an engine-independent adapter.
 
 This implements the session runtime, native Silero voice detection, Whisper
 and text-generation adapters, Kokoro and VITS speech synthesis, and Membrane input from
-[Brief.md](Brief.md). The full model benchmark and acoustic interruption
-measurements still need work.
+[Brief.md](Brief.md). The native media path has a recorded-speech integration
+check. The concurrency comparison and acoustic interruption measurements still
+need work.
 The core runs without model downloads. The demo produces fixed text and silent
 PCM. Use the model examples for real inference.
 
@@ -20,6 +21,9 @@ mix test
 mix run examples/demo.exs
 mix audio_flow.bench --runs 20 --concurrency 4
 ```
+
+Core, ML, media, and combined ML/media builds use separate `_build` directories.
+Changing a feature flag does not remove modules used by another build profile.
 
 ## Sessions
 
@@ -75,6 +79,16 @@ AUDIOFLOW_ML=1 mix run path/to/your_session.exs
 `AudioFlow.Models.language_model/2` builds a streaming text serving. The selected
 repository must have a model architecture and tokenizer supported by Bumblebee.
 There is no automatic claim of support for each model named in the brief.
+Both builders accept `:load_options` for repository revisions and caches, and
+`:model_options` for parameter type and backend. The language builder also
+accepts `:generation_options` for token limits and decoding strategy. Serving
+options remain separate. The examples load parameters onto `EXLA.Backend`.
+
+The Qwen3 example uses `AudioFlow.Prompt.qwen3/2`, with thinking disabled and a
+short spoken-reply instruction. Its format is checked against the pinned model's
+original Jinja template. Other language models need their own prompt format.
+Streamed text retains its whitespace. Common English titles and initials stay
+with the following word. Empty text chunks do not cause a TTS request.
 
 `AudioFlow.Models.text_to_speech/2` builds a VITS or SpeechT5 serving through
 Transmuter. `AudioFlow.NxAdapter.speech_audio/1` converts the float waveform to
@@ -278,26 +292,63 @@ two speeds, and text input. The reference generator is
 `scripts/kokoro_reference.py`. They also check finite samples, PCM output,
 and use through a session. These model tests require espeak-ng.
 
+The full native media test is a separate opt-in check. It needs the FFmpeg CLI
+and espeak-ng. It uses the public LibriSpeech sample in the pinned Transmuter
+repository, real Silero, Whisper, Qwen3, and Kokoro models, and a Membrane test
+sink. It checks transcript content, reply text, non-silent PCM, and complete
+delivery through the output pipeline. It does not open a sound device.
+
+```sh
+AUDIOFLOW_ML=1 AUDIOFLOW_MEDIA=1 AUDIOFLOW_PIPELINE_TESTS=1 \
+  mix test test/native_pipeline_test.exs
+```
+
+Set `AUDIOFLOW_PIPELINE_ARTIFACT_DIR` to retain the transcript, reply, PCM, and
+timings in a selected directory. Model loading and compilation can take time.
+
 ## Benchmarks
 
-The benchmark writes one CSV row per turn. It records time to first transcript,
+The benchmark writes one CSV row per attempt. It records time to first transcript,
 first text, first audio, and turn completion in microseconds. These times start
 when the session accepts the utterance. They include task scheduling, serving
 queue time, and inference. They exclude microphone capture, endpoint detection,
 and playback device delay. Blank fields mean that the event did not occur.
 Errors remain in the CSV so that failed runs cannot improve the latency result.
+A completed turn with no audio is an error for this voice benchmark. Rejected
+input, session exit, cancellation, and benchmark deadlines also produce rows.
+Error rows use elapsed attempt time where available. Unobserved timings remain
+blank.
 
 For real inference, supply a script that starts shared models and returns
-`{session_options, audio}`:
+`{session_options, audio}` or `{session_options, audio, metadata}`:
 
 ```sh
-AUDIOFLOW_ML=1 mix audio_flow.bench --config examples/local.exs --runs 100 --concurrency 4
+AUDIOFLOW_ML=1 mix audio_flow.bench --config examples/local.exs \
+  --runs 100 --warmup 4 --concurrency 4 --output benchmarks/native.csv
 ```
+
+`--warmup` rows use `phase=warmup`; other rows use `phase=measured`. Both phases
+run at the selected concurrency. Use measured rows for reported latency, and
+count all measured failures in the error rate. `--timeout-ms` sets the attempt
+deadline. Its default is the session timeout plus five seconds. Cleanup follows
+the deadline. A final worker limit also prevents a stalled runner from waiting
+without an end.
+
+`--output` writes clean CSV and a `.meta.json` sidecar. Model logs remain on the
+console. The sidecar records input SHA-256, model revisions from the config,
+warmup settings, runtime and library versions, and loaded AudioFlow module
+fingerprints. `setup_us` covers config evaluation and model setup, separately
+from turn timings. Without `--output`, stdout also contains any model logs.
 
 The local example requires `AUDIOFLOW_PCM` and `AUDIOFLOW_LLM`. It uses local
 Kokoro by default. Set `AUDIOFLOW_VOICE` to select its voice, or
 `AUDIOFLOW_TTS=vits` to use VITS. Set `AUDIOFLOW_TTS_CONFIG` for another adapter.
 Repeat with concurrency 1, 2, 4, and higher.
+The example pins Whisper tiny, Qwen3-0.6B, and the selected TTS model. Set
+`AUDIOFLOW_LLM_REVISION` to pin another language model and `AUDIOFLOW_HARDWARE`
+to add a hardware label to its metadata. The metadata leaves unpinned revisions
+empty. The default example uses greedy decoding with at most 64 new tokens,
+batch size 1, and a 5 ms batch timeout.
 Record hardware, model revisions, precision, batch settings, and warmup count.
 Keep cold runs separate. Use the same recordings, endpoint rules, and models for
 a Pipecat comparison. Report p50/p95 latency and error rate. Set the latency and
@@ -308,7 +359,7 @@ real-time performance claim is included here.
 
 - Add echo cancellation for microphone use.
 - Measure interruption through a real playback device with loopback audio.
-- Measure the full Membrane → Whisper → LLM → TTS → Membrane path on hardware.
+- Benchmark the full media path with multiple inputs and concurrent sessions.
 - Compare that path against Pipecat with the same workload.
 - Add model routing, embeddings, vision, and distributed worker selection.
 

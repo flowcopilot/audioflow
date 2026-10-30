@@ -2,9 +2,11 @@ defmodule AudioFlow.Models do
   @moduledoc "Shared speech and language serving builders. Call once at application startup."
 
   def whisper(repository, options \\ []) do
-    source = {:hf, repository}
+    {load_options, options} = Keyword.pop(options, :load_options, [])
+    {model_options, options} = Keyword.pop(options, :model_options, [])
+    source = source(repository, load_options)
 
-    with {:ok, model} <- Bumblebee.load_model(source),
+    with {:ok, model} <- Bumblebee.load_model(source, model_options),
          {:ok, featurizer} <- Bumblebee.load_featurizer(source),
          {:ok, tokenizer} <- Bumblebee.load_tokenizer(source),
          {:ok, generation} <- Bumblebee.load_generation_config(source) do
@@ -20,12 +22,16 @@ defmodule AudioFlow.Models do
   end
 
   def language_model(repository, options \\ []) do
-    source = {:hf, repository}
+    {load_options, options} = Keyword.pop(options, :load_options, [])
+    {model_options, options} = Keyword.pop(options, :model_options, [])
+    {generation_options, options} = Keyword.pop(options, :generation_options, [])
+    source = source(repository, load_options)
 
-    with {:ok, model} <- Bumblebee.load_model(source),
+    with {:ok, model} <- Bumblebee.load_model(source, model_options),
          {:ok, tokenizer} <- Bumblebee.load_tokenizer(source),
          {:ok, generation} <- Bumblebee.load_generation_config(source) do
-      generation = Bumblebee.configure(generation, max_new_tokens: 128)
+      generation =
+        Bumblebee.configure(generation, Keyword.merge([max_new_tokens: 128], generation_options))
 
       {:ok,
        Bumblebee.Text.generation(
@@ -36,6 +42,14 @@ defmodule AudioFlow.Models do
        )}
     end
   end
+
+  defp source(repository, options) when is_binary(repository), do: {:hf, repository, options}
+  defp source({:hf, repository}, options), do: {:hf, repository, options}
+
+  defp source({:hf, repository, existing}, options),
+    do: {:hf, repository, Keyword.merge(existing, options)}
+
+  defp source({:local, _} = repository, []), do: repository
 
   @doc "Build a shared Transmuter VITS or SpeechT5 speech serving."
   def text_to_speech(repository, options \\ []) do

@@ -3,7 +3,7 @@
 # Set AUDIOFLOW_INPUT_RATE and AUDIOFLOW_INPUT_CHANNELS to the raw file format.
 # Requires AUDIOFLOW_ML=1 and AUDIOFLOW_MEDIA=1. This example plays sound.
 # Model bootstrap does not read the recording. The input source reads bounded chunks.
-options = Code.eval_file(Path.join(__DIR__, "models.exs")) |> elem(0)
+{options, _metadata} = Code.eval_file(Path.join(__DIR__, "models.exs")) |> elem(0)
 
 source =
   System.get_env("AUDIOFLOW_SILERO_MODEL") ||

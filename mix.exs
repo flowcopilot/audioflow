@@ -6,13 +6,14 @@ defmodule AudioFlow.MixProject do
       app: :audio_flow,
       version: "0.1.0",
       elixir: "~> 1.18",
+      build_path: "_build/#{profile()}",
       elixirc_paths: paths(),
       deps: deps(),
       start_permanent: Mix.env() == :prod
     ]
   end
 
-  def application, do: [extra_applications: [:logger], mod: {AudioFlow.Application, []}]
+  def application, do: [extra_applications: [:logger, :crypto], mod: {AudioFlow.Application, []}]
 
   defp paths do
     ["lib"] ++
@@ -47,4 +48,13 @@ defmodule AudioFlow.MixProject do
   end
 
   defp enabled?(name), do: System.get_env(name) == "1"
+
+  defp profile do
+    case {enabled?("AUDIOFLOW_ML"), enabled?("AUDIOFLOW_MEDIA")} do
+      {false, false} -> "core"
+      {true, false} -> "ml"
+      {false, true} -> "media"
+      {true, true} -> "ml_media"
+    end
+  end
 end
