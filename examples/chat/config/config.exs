@@ -17,4 +17,8 @@ config :chat, ChatWeb.Endpoint,
   ]
 
 config :phoenix, :json_library, Jason
+# Keep recorded PCM out of any request log.
+config :phoenix, :filter_parameters, ["password", "pcm"]
+# Debug logs print every LiveView event. Set LOG_LEVEL=debug to see them.
+config :logger, level: String.to_existing_atom(System.get_env("LOG_LEVEL", "info"))
 config :logger, :default_formatter, format: "$time [$level] $message\n"

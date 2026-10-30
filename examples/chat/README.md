@@ -8,8 +8,8 @@ and its AI Elements components.
 
 ## Run
 
-Requirements: the tool versions in the repository `mise.toml`, and Node.js 20
-or later.
+Requirements: the tool versions in the repository `mise.toml`, Node.js 20 or
+later, and `espeak-ng` for Kokoro (`brew install espeak-ng` on macOS).
 
 ```sh
 cd examples/chat
@@ -17,29 +17,28 @@ mix setup
 mix phx.server
 ```
 
-Open http://localhost:4000. Set `PORT` to use another port.
+Open http://localhost:4000. Set `PORT` to use another port, and
+`LOG_LEVEL=debug` to log each LiveView event.
 
-## Engines
+## Models
 
-The engine is selected at startup. The badge in the page header shows it.
+The chat loads its models once at startup through `examples/models.exs`.
+The first start downloads them to the Bumblebee cache:
 
-| Environment | STT | LLM | TTS |
-| --- | --- | --- | --- |
-| none | fixed transcript | echo | 0.2 s tone |
-| `AUDIOFLOW_CHAT_ENDPOINT`, `AUDIOFLOW_LLM` | fixed transcript | HTTP chat server | 0.2 s tone |
-| `AUDIOFLOW_ML=1`, `AUDIOFLOW_LLM` | Whisper | native model or HTTP | Kokoro or VITS |
+| Stage | Default model |
+| --- | --- |
+| Speech recognition | `openai/whisper-tiny` |
+| Reply | `Qwen/Qwen3-0.6B`, with conversation history |
+| Speech | Kokoro 82M, voice `af_heart` |
 
-The default mode downloads no models. It checks the text and audio paths only.
-For real speech, compile with `AUDIOFLOW_ML=1` and set the variables that
-`examples/models.exs` reads:
+The environment variables of `examples/models.exs` change these defaults. For
+example, `AUDIOFLOW_VOICE=am_adam` selects another Kokoro voice. To use a chat
+server for replies, set `AUDIOFLOW_LLM_ENGINE=http`, `AUDIOFLOW_CHAT_ENDPOINT`,
+and `AUDIOFLOW_LLM`, the model ID of the server. Set `AUDIOFLOW_CHAT_API_KEY`
+when the server requires a key.
 
-```sh
-AUDIOFLOW_ML=1 mix deps.get
-AUDIOFLOW_ML=1 AUDIOFLOW_HISTORY=1 AUDIOFLOW_LLM=Qwen/Qwen3-0.6B mix phx.server
-```
-
-Kokoro needs `espeak-ng`. Set `AUDIOFLOW_CHAT_API_KEY` when the HTTP server
-requires a key.
+The first turn compiles the models. It took about 8 s to the first reply audio
+on an Apple Silicon CPU. A later turn took about 5 s.
 
 ## Audio
 

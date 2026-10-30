@@ -1,3 +1,6 @@
+# The chat runs real models, so AudioFlow is built with its model code.
+System.put_env("AUDIOFLOW_ML", "1")
+
 defmodule Chat.MixProject do
   use Mix.Project
 
