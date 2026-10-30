@@ -6,6 +6,7 @@ defmodule AudioFlow.Session do
   (30,000); `:max_input_bytes` (960,000); `:max_events` (1,024); optional
   `:output` transport tuple `{module, target}` implementing `AudioFlow.Output`.
   An optional `:vision` adapter converts RGB images to description strings.
+  `AudioFlow.Text` input goes directly to the LLM without an input stage.
   `:max_image_bytes` defaults to 6,291,456. Image-only sessions can omit `:stt`.
   Descriptions form one LLM prompt, then follow the same speech output path.
   Set `:history` to `true` or `[max_turns: 8, max_bytes: 16_384]` to retain
@@ -17,7 +18,7 @@ defmodule AudioFlow.Session do
   may still finish a batch already submitted to shared hardware.
   """
   use GenServer, restart: :temporary
-  alias AudioFlow.{Adapter, Audio, History, Image}
+  alias AudioFlow.{Adapter, Audio, History, Image, Text}
 
   def start_link(options), do: GenServer.start_link(__MODULE__, options)
 
@@ -70,7 +71,7 @@ defmodule AudioFlow.Session do
       not valid? ->
         {:reply, {:error, invalid_input(input)}, state}
 
-      not Map.has_key?(state.adapters, stage) ->
+      stage != nil and not Map.has_key?(state.adapters, stage) ->
         {:reply, {:error, {:unsupported_input, stage}}, state}
 
       byte_size(input.data) > limit ->
@@ -251,11 +252,15 @@ defmodule AudioFlow.Session do
     Process.put(key, [])
 
     try do
-      Adapter.run(Map.fetch!(adapters, stage), input, fn text ->
-        emit.(kind, text)
-        Process.put(key, [text | Process.get(key)])
-        :ok
-      end)
+      if stage != nil do
+        Adapter.run(Map.fetch!(adapters, stage), input, fn text ->
+          emit.(kind, text)
+          Process.put(key, [text | Process.get(key)])
+          :ok
+        end)
+      else
+        Process.put(key, [input.data])
+      end
 
       transcript = Process.get(key) |> Enum.reverse() |> Enum.join("") |> String.trim()
       transcript = input_context(input, transcript)
@@ -337,8 +342,12 @@ defmodule AudioFlow.Session do
   defp input_spec(%Image{} = image, limits),
     do: {Image.valid?(image), :vision, :description, limits.max_image_bytes}
 
+  defp input_spec(%Text{} = text, limits),
+    do: {Text.valid?(text), nil, nil, limits.max_input_bytes}
+
   defp input_spec(_, _), do: {false, nil, nil, 0}
   defp invalid_input(%Image{}), do: :invalid_image
+  defp invalid_input(%Text{}), do: :invalid_text
   defp invalid_input(_), do: :invalid_audio
   defp now, do: System.monotonic_time(:microsecond)
   defp notify(state, event), do: send(state.owner, {AudioFlow, self(), state.active.turn, event})

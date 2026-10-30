@@ -53,7 +53,12 @@ transport, cancellation also flushes queued output. Without a transport, the
 caller must flush its playback device. Cancellation kills the turn task. A shared hardware batch can still
 run to completion.
 
-Input must be mono signed 16-bit little-endian PCM. Input limits, output event
+A typed message uses `%AudioFlow.Text{data: "Hello"}`. Text turns skip STT
+and emit no transcript event. The trimmed text goes directly to the LLM, and the
+reply follows the same TTS and history path. Text must be valid UTF-8, and
+`:max_input_bytes` applies to it.
+
+Audio input must be mono signed 16-bit little-endian PCM. Input limits, output event
 limits, and timeouts are set per session. Defaults are 960,000 input bytes,
 1,024 output events, and 30 seconds. An empty transcript ends the turn without
 generation. STT chunks form one prompt. LLM chunks go to TTS in sequence.

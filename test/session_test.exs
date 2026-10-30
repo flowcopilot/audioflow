@@ -245,6 +245,41 @@ defmodule AudioFlow.SessionTest do
     assert {:error, {:unsupported_input, :vision}} = AudioFlow.submit(without_vision, image)
   end
 
+  test "a text turn skips the input stage and speaks the reply" do
+    owner = self()
+
+    session =
+      start(
+        stt: function(fn _, _ -> raise "STT must not run" end),
+        llm:
+          function(fn prompt, emit ->
+            send(owner, {:prompt, prompt})
+            emit.("Hi.")
+          end)
+      )
+
+    {:ok, turn} = AudioFlow.submit(session, %AudioFlow.Text{data: "  Hello there \n"})
+    assert_receive {:prompt, "Hello there"}
+    assert_receive {AudioFlow, ^session, ^turn, {:text, "Hi."}}
+    assert_receive {AudioFlow, ^session, ^turn, {:audio, %Audio{}}}
+    assert_receive {AudioFlow, ^session, ^turn, {:done, metrics}}
+    assert metrics.first_transcript_us == nil
+    assert metrics.events == 2
+    refute_received {AudioFlow, ^session, ^turn, {:transcript, _}}
+  end
+
+  test "text input validates UTF-8 and the input byte limit" do
+    session = start(max_input_bytes: 4)
+    assert {:error, :invalid_text} = AudioFlow.submit(session, %AudioFlow.Text{data: <<255>>})
+    assert {:error, :invalid_text} = AudioFlow.submit(session, %AudioFlow.Text{data: :hello})
+
+    assert {:error, :input_too_large} =
+             AudioFlow.submit(session, %AudioFlow.Text{data: "Hello"})
+
+    {:ok, turn} = AudioFlow.submit(session, %AudioFlow.Text{data: " "})
+    assert_receive {AudioFlow, ^session, ^turn, {:done, %{events: 0}}}
+  end
+
   test "an image turn can be cancelled before a voice turn on the same session" do
     owner = self()
 

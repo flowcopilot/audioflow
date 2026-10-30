@@ -91,6 +91,19 @@ defmodule AudioFlow.SessionHistoryTest do
            ]
   end
 
+  test "typed text and voice turns share one history" do
+    session = start()
+    {:ok, turn} = AudioFlow.submit(session, %AudioFlow.Text{data: "typed"})
+    assert_receive {:prompt, [%{role: :user, content: "typed"}]}
+    assert_receive {AudioFlow, ^session, ^turn, {:done, _}}
+
+    assert complete(session, "spoken") == [
+             %{role: :user, content: "typed"},
+             %{role: :assistant, content: "a"},
+             %{role: :user, content: "spoken"}
+           ]
+  end
+
   test "turn and byte limits evict complete pairs while retaining the new user input" do
     for {limits, last, expected} <- [
           {[max_turns: 1, max_bytes: 128], "u3",
