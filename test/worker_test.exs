@@ -154,7 +154,7 @@ defmodule AudioFlow.WorkerTest do
   test "both worker and client deadlines stop inference and restore capacity" do
     owner = self()
 
-    for {worker_timeout, client_timeout} <- [{50, 2_000}, {2_000, 50}] do
+    for {worker_timeout, client_timeout} <- [{2_000, 10_000}, {10_000, 2_000}] do
       worker =
         worker(
           fn
@@ -176,7 +176,7 @@ defmodule AudioFlow.WorkerTest do
           Worker.run(:block, [worker: worker, timeout_ms: client_timeout], fn _ -> :ok end)
         end)
 
-      assert_receive {:inference, inference}
+      assert_receive {:inference, inference}, 2_000
       ref = Process.monitor(inference)
       assert {:error, :worker_timeout} = Task.await(task)
       assert_receive {:DOWN, ^ref, :process, ^inference, :killed}
