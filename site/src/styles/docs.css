@@ -1,0 +1,44 @@
+/* Starlight theme: AudioFlow lavender and Elixir purple. */
+:root {
+  --sl-font: 'Bricolage Grotesque Variable', system-ui, sans-serif;
+  --sl-font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --sl-color-accent-low: #2a1a46;
+  --sl-color-accent: #9a6fd6;
+  --sl-color-accent-high: #e3d6f7;
+  --sl-color-white: #ffffff;
+  --sl-color-gray-1: #ece9f5;
+  --sl-color-gray-2: #c9c3dc;
+  --sl-color-gray-3: #9890b3;
+  --sl-color-gray-4: #5f5880;
+  --sl-color-gray-5: #3b3457;
+  --sl-color-gray-6: #261f3d;
+  --sl-color-black: #19132b;
+}
+
+:root[data-theme='light'] {
+  --sl-color-accent-low: #e7defa;
+  --sl-color-accent: #5b2e91;
+  --sl-color-accent-high: #2e1452;
+  --sl-color-white: #1d1638;
+  --sl-color-gray-1: #2b2447;
+  --sl-color-gray-2: #463e66;
+  --sl-color-gray-3: #6b6585;
+  --sl-color-gray-4: #9e98b5;
+  --sl-color-gray-5: #d9d4ea;
+  --sl-color-gray-6: #ebe8f5;
+  --sl-color-gray-7: #f6f4fc;
+  --sl-color-black: #fbfaff;
+}
+
+.site-title {
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+h1#_top {
+  letter-spacing: -0.02em;
+  font-stretch: 88%;
+}
