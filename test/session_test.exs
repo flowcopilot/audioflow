@@ -54,6 +54,26 @@ defmodule AudioFlow.SessionTest do
     assert_receive {AudioFlow, ^session, ^turn, {:done, _}}
   end
 
+  test "a whitespace text tail is preserved without sending empty speech to TTS" do
+    session =
+      start(
+        llm:
+          function(fn _, emit ->
+            emit.("Hello.")
+            emit.(" ")
+          end),
+        tts:
+          function(fn text, emit ->
+            if String.trim(text) == "", do: {:error, :empty_text}, else: emit.(audio())
+          end)
+      )
+
+    {:ok, turn} = AudioFlow.submit(session, audio())
+    assert_receive {AudioFlow, ^session, ^turn, {:text, "Hello."}}
+    assert_receive {AudioFlow, ^session, ^turn, {:text, " "}}
+    assert_receive {AudioFlow, ^session, ^turn, {:done, _}}
+  end
+
   test "busy input is rejected, cancellation kills the task, and a new turn runs" do
     owner = self()
 

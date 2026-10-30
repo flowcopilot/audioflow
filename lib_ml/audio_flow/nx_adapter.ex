@@ -60,18 +60,5 @@ defmodule AudioFlow.NxAdapter do
   end
 
   @doc "Group a Bumblebee generation stream into speakable sentences."
-  def sentences(stream) do
-    Stream.transform(
-      stream,
-      fn -> "" end,
-      fn chunk, pending ->
-        parts = Regex.split(~r/(?<=[.!?])\s+/, pending <> chunk)
-        {Enum.drop(parts, -1), List.last(parts)}
-      end,
-      fn pending ->
-        {if(String.trim(pending) == "", do: [], else: [pending]), ""}
-      end,
-      fn _ -> :ok end
-    )
-  end
+  def sentences(stream), do: AudioFlow.TextChunks.sentences(stream)
 end

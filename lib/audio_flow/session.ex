@@ -200,14 +200,18 @@ defmodule AudioFlow.Session do
         Adapter.run(adapters.llm, transcript, fn text ->
           emit.(:text, text)
 
-          Adapter.run(adapters.tts, text, fn audio ->
-            emit.(:audio, audio)
+          if String.trim(text) != "" do
+            Adapter.run(adapters.tts, text, fn audio ->
+              emit.(:audio, audio)
 
-            case AudioFlow.Output.call(output, :push, [{session, turn}, audio]) do
-              :ok -> :ok
-              {:error, reason} -> throw({:output, reason})
-            end
-          end)
+              case AudioFlow.Output.call(output, :push, [{session, turn}, audio]) do
+                :ok -> :ok
+                {:error, reason} -> throw({:output, reason})
+              end
+            end)
+          end
+
+          :ok
         end)
       end
 

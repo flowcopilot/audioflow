@@ -37,16 +37,6 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
       end
     end
 
-    test "streamed text produces complete sentences and keeps the final fragment" do
-      chunks = ["Hello", " world.", " Next", " sentence! ", "Tail"]
-
-      assert Enum.to_list(AudioFlow.NxAdapter.sentences(chunks)) == [
-               "Hello world.",
-               "Next sentence!",
-               "Tail"
-             ]
-    end
-
     test "synthesis PCM clamps model overshoot and emits little-endian samples" do
       output = %{audio: Nx.tensor([-1.5, -0.5, 0.0, 0.5, 1.5]), sampling_rate: 16000}
 
