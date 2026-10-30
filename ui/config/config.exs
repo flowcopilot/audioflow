@@ -11,6 +11,14 @@ config :audio_flow_ui, AudioFlowUIWeb.Endpoint,
   pubsub_server: AudioFlowUI.PubSub
 
 config :phoenix, :json_library, Jason
+
+if System.get_env("AUDIOFLOW_ML") == "1" do
+  # Model nodes load their weights on first use, through AudioFlow.Servings.
+  config :audio_flow, :inference_children, [AudioFlow.Servings]
+  config :bumblebee, :progress_bar_enabled, false
+  config :transmuter, progress_bar_enabled: false
+end
+
 config :logger, level: String.to_existing_atom(System.get_env("LOG_LEVEL", "info"))
 config :logger, :default_formatter, format: "$time [$level] $message\n"
 

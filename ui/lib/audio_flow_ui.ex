@@ -7,14 +7,21 @@ defmodule AudioFlowUI do
   reaches open dashboards through PubSub.
 
   Node types come from `config :audio_flow_ui, :nodes`, a list of
-  `AudioFlow.Graph.Node` modules. The default has the input, demo, and HTTP
-  LLM nodes of the core library.
+  `AudioFlow.Graph.Node` modules. The default has the input, audio, demo, and
+  HTTP LLM nodes of the core library. A build with `AUDIOFLOW_ML=1` also has
+  the native model nodes of `AudioFlow.Graph.Nodes.Models`.
   """
   alias AudioFlow.Graph
 
-  @default_nodes [Graph.Nodes.Input, Graph.Nodes.Demo, Graph.Nodes.ChatHTTP]
+  @core_nodes [Graph.Nodes.Input, Graph.Nodes.Audio, Graph.Nodes.Demo, Graph.Nodes.ChatHTTP]
 
-  def catalog, do: Graph.catalog(Application.get_env(:audio_flow_ui, :nodes, @default_nodes))
+  def catalog, do: Graph.catalog(Application.get_env(:audio_flow_ui, :nodes, default_nodes()))
+
+  defp default_nodes do
+    if Code.ensure_loaded?(Graph.Nodes.Models),
+      do: @core_nodes ++ [Graph.Nodes.Models],
+      else: @core_nodes
+  end
 
   @doc "Node type specs as JSON-compatible maps."
   def node_types, do: Enum.map(Graph.node_types(catalog()), &json_spec/1)
