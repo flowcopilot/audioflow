@@ -1,5 +1,5 @@
 defmodule AudioFlow.Models do
-  @moduledoc "Bumblebee serving builders. Call once at application startup."
+  @moduledoc "Shared speech and language serving builders. Call once at application startup."
 
   def whisper(repository, options \\ []) do
     source = {:hf, repository}

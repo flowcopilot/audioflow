@@ -1,6 +1,7 @@
 # Run with AUDIOFLOW_ML=1. Set AUDIOFLOW_PCM to a mono 16 kHz s16le file.
-# VITS is the default TTS engine. To use another engine, set AUDIOFLOW_TTS_CONFIG
-# to a script that starts its shared service and returns a TTS adapter tuple.
+# Kokoro is the default TTS engine and needs espeak-ng for English text.
+# Set AUDIOFLOW_TTS=vits to use VITS. To use another engine, set
+# AUDIOFLOW_TTS_CONFIG to a script that starts a service and returns an adapter.
 # Set AUDIOFLOW_LLM to a repository supported by Bumblebee.
 pcm_path = System.fetch_env!("AUDIOFLOW_PCM")
 llm_repository = System.fetch_env!("AUDIOFLOW_LLM")
@@ -8,13 +9,22 @@ llm_repository = System.fetch_env!("AUDIOFLOW_LLM")
 {tts, tts_children} =
   case System.get_env("AUDIOFLOW_TTS_CONFIG") do
     nil ->
-      serving =
-        AudioFlow.Models.text_to_speech("Xenova/mms-tts-eng",
-          revision: "3f8955a2adbd6487ce57420620d4916de22b9dac"
-        )
+      {serving, output} =
+        case System.get_env("AUDIOFLOW_TTS", "kokoro") do
+          "kokoro" ->
+            voice = System.get_env("AUDIOFLOW_VOICE", "af_heart")
+            {AudioFlow.Kokoro.serving(voices: [voice]), &AudioFlow.Kokoro.audio/1}
 
-      adapter =
-        {AudioFlow.NxAdapter, serving: AudioFlow.TTS, output: &AudioFlow.NxAdapter.speech_audio/1}
+          "vits" ->
+            {AudioFlow.Models.text_to_speech("Xenova/mms-tts-eng",
+               revision: "3f8955a2adbd6487ce57420620d4916de22b9dac"
+             ), &AudioFlow.NxAdapter.speech_audio/1}
+
+          _ ->
+            raise "AUDIOFLOW_TTS must be kokoro or vits"
+        end
+
+      adapter = {AudioFlow.NxAdapter, serving: AudioFlow.TTS, output: output}
 
       {adapter, [AudioFlow.Models.child_spec(AudioFlow.TTS, serving)]}
 

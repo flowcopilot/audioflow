@@ -1,0 +1,31 @@
+{
+  "repository": "onnx-community/Kokoro-82M-v1.0-ONNX",
+  "revision": "1939ad2a8e416c0acfeecc08a694d14ef25f2231",
+  "cases": [
+    {
+      "phonemes": "h\u0259l\u02c8O.",
+      "voice": "af_heart",
+      "speed": 1.0,
+      "samples": 32400
+    },
+    {
+      "phonemes": "h\u0259l\u02c8O.",
+      "voice": "am_adam",
+      "speed": 1.0,
+      "samples": 31200
+    },
+    {
+      "phonemes": "h\u0259l\u02c8O.",
+      "voice": "af_heart",
+      "speed": 1.2,
+      "samples": 27600
+    },
+    {
+      "text": "Hello, my dog is cute.",
+      "phonemes": "h\u0259l\u02c8O, mI d\u02c8\u0251\u0261 \u026az kj\u02c8ut.",
+      "voice": "af_heart",
+      "speed": 1.0,
+      "samples": 47400
+    }
+  ]
+}
