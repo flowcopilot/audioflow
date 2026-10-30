@@ -1,15 +1,15 @@
 # AudioFlow
 
-AudioFlow is an Elixir voice and image agent runtime. Each conversation uses an OTP
+AudioFlow is an Elixir voice, image, and video agent runtime. Each conversation uses an OTP
 session. Sessions share model services through an engine-independent adapter.
 Optional bounded history keeps successful conversation turns in each session.
 
 This implements the session runtime, model routing, distributed inference workers,
 native Silero voice detection, Whisper and text-generation adapters, Kokoro and
-VITS speech synthesis, and Membrane input from
+VITS speech synthesis, and Membrane audio and video input from
 [Brief.md](Brief.md). The native media path has a recorded-speech integration
-check. The concurrency comparison and acoustic interruption measurements still
-need work.
+check and a controlled Pipecat comparison. Output interruption is measured at
+the software transport. Acoustic interruption needs a device loopback check.
 HTTP language inference can use a compatible local server or cloud endpoint.
 Text embeddings, CLIP image embeddings, and BLIP image captions use shared
 native model services. Their model checks use independent PyTorch references.
@@ -733,8 +733,8 @@ batch size 1, and a 5 ms batch timeout.
 Record hardware, model revisions, precision, batch settings, and warmup count.
 Keep cold runs separate. Use the same recordings, endpoint rules, and models for
 a Pipecat comparison. Report p50/p95 latency and error rate. Set the latency and
-error limits before selecting a maximum session count. No Pipecat result or
-real-time performance claim is included here.
+error limits before selecting a maximum session count. The inference-only run
+below does not include a Pipecat comparison or establish real-time performance.
 
 The saved [CPU run data](validation/native-cpu.csv),
 [metadata](validation/native-cpu.csv.meta.json), and
@@ -743,12 +743,43 @@ turns. They use one recording and one active session. This small check confirms
 that the inference path runs. It does not establish session capacity. Capture,
 VAD, transport, and playback device delays are excluded from these measurements.
 
-## Work still required
+The [common-engine comparison guide](scripts/COMPARISON.md) provides a full media
+runner for AudioFlow and Pipecat. Both use the same shared Silero, Whisper,
+Qwen3, and Kokoro services. The run includes Membrane file input, resampling,
+endpoint detection, model queues, and software output delivery. Pipecat calls
+the model stages through private local pipes. Its result includes that transfer
+cost. This comparison does not compare Nx against Python inference engines.
+
+```sh
+uv run scripts/compare_pipecat.py FIRST.s16le SECOND.s16le \
+  --output benchmarks/comparison.json --concurrency 1 2 4 8 \
+  --warmup 8 --runs 16 --interrupt-runs 4
+python3 scripts/comparison_report.py \
+  benchmarks/comparison.json benchmarks/comparison.html
+```
+
+The runner retains failed attempts, input hashes, detected-utterance hashes,
+output PCM hashes, model revisions, and source fingerprints. It separates warmup,
+measured turns, and serial interruption checks. Choose `--max-first-output-ms`
+before the run. The default rule allows no measured errors and requires p95
+first output within 10 seconds. The report checks input agreement and all lower
+tested levels before it assigns a highest passing tested concurrency. This
+threshold is a test rule; it does not establish conversational quality.
+
+The saved [comparison data](validation/comparison.json) and
+[report](validation/comparison.html) contain two recordings, 128 measured turns,
+64 warmup turns, and 32 serial interruption checks. Both frameworks passed the
+10-second rule at four simultaneous turns and exceeded it at eight. All measured
+turns completed without errors. Detected input and output PCM hashes agreed.
+Transcripts and replies matched. These results apply to the listed models, CPU, software sinks,
+and closed workload. They do not establish production capacity.
+
+## Deployment checks and further measurements
 
 - Add echo cancellation for microphone use.
 - Measure interruption through a real playback device with loopback audio.
-- Benchmark the full media path with multiple inputs and concurrent sessions.
-- Compare that path against Pipecat with the same workload.
+- Use sustained loads, more speakers, noise, and real-time input pacing.
+- Compare independent Pipecat model engines with equivalent precision and decoding.
 
 ## API references
 

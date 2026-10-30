@@ -90,6 +90,23 @@ accepting a higher one. Label the result "highest passing tested concurrency".
 If the highest tested level passes, capacity is not yet bounded. Do not call it
 the maximum supported session count.
 
+The runner saves the threshold in its metadata before it measures turns. Set
+`--max-first-output-ms` to use another limit. It alternates framework order
+between concurrency levels. Interruption checks run one at a time after each
+level. They do not measure interruption under concurrent inference load.
+
+Generate the report with the standard Python library:
+
+```sh
+python3 scripts/comparison_report.py benchmarks/comparison.json benchmarks/comparison.html
+python3 -m unittest discover -s scripts -p 'test_comparison_report.py'
+```
+
+The report checks detected input hashes before it assigns a passing capacity.
+It also compares transcripts, replies, and complete output PCM hashes. Missing
+timings, failed attempts, and incomplete groups cannot pass. The report shows
+individual measured samples and nearest-rank p50/p95 values.
+
 For production capacity, use longer sustained loads, more speakers, noise,
 real-time input pacing, and actual device buffers. For a model-engine
 comparison, add independent Pipecat provider adapters with equivalent model
