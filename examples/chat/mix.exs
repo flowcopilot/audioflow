@@ -7,6 +7,7 @@ defmodule Chat.MixProject do
   # A local LiveView chat over one AudioFlow session per browser tab.
   # Set LIVE_SHADCN_PATH to a live_shadcn checkout to use local packages.
   @live_shadcn "3ddada48f623d72260360acf115e5d9b5eacd1cf"
+  @emlx "5f5cd886fd2550b1e9452ddc3943fec5597b0cd5"
 
   def project do
     [
@@ -24,6 +25,10 @@ defmodule Chat.MixProject do
   defp deps do
     [
       {:audio_flow, path: "../.."},
+      # MLX on the Apple GPU: an Nx backend and compiler, and native Qwen3 generation.
+      # EMLX main includes non-finite constant compilation (#153), which Whisper needs.
+      {:emlx, github: "elixir-nx/emlx", ref: @emlx, sparse: "emlx", override: true},
+      {:emlx_axon, github: "elixir-nx/emlx", ref: @emlx, sparse: "emlx_axon"},
       live_shadcn(:live_base),
       live_shadcn(:live_shadcn),
       live_shadcn(:live_ai_elements),

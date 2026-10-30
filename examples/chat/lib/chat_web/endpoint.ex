@@ -3,7 +3,9 @@ defmodule ChatWeb.Endpoint do
 
   @session [store: :cookie, key: "_chat_key", signing_salt: "audioflow_chat", same_site: "Lax"]
 
-  socket "/live", Phoenix.LiveView.Socket, websocket: [connect_info: [session: @session]]
+  socket "/live", Phoenix.LiveView.Socket,
+    websocket: [connect_info: [session: @session]],
+    log: false
 
   plug Plug.Static, at: "/", from: :chat, gzip: false, only: ~w(assets)
 

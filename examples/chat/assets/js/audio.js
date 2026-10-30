@@ -62,6 +62,10 @@ const toPcm16 = (chunks, rate) => {
   return new Uint8Array(out.buffer);
 };
 
+// While recording, new PCM goes to the server every CHUNK_MS for live
+// transcription. "voice_end" carries the rest and ends the utterance.
+const CHUNK_MS = 500;
+
 export const Recorder = {
   mounted() {
     this.button = this.el.querySelector("button");
@@ -76,23 +80,26 @@ export const Recorder = {
 
   async start() {
     window.dispatchEvent(new CustomEvent("chat:flush"));
-    this.pushEvent("recording");
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-      });
+      // Load the worklet while the browser opens the microphone.
       const context = new AudioContext();
       const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: "text/javascript" }));
-      await context.audioWorklet.addModule(url);
-      URL.revokeObjectURL(url);
+      const [stream] = await Promise.all([
+        navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+        }),
+        context.audioWorklet.addModule(url).finally(() => URL.revokeObjectURL(url)),
+      ]);
 
       const node = new AudioWorkletNode(context, "capture");
       const chunks = [];
       node.port.onmessage = ({ data }) => chunks.push(data);
       context.createMediaStreamSource(stream).connect(node);
 
-      this.capture = { stream, context, node, chunks };
+      this.capture = { stream, context, node, chunks, sent: 0 };
+      this.pushEvent("recording");
+      this.ticker = setInterval(() => this.send("voice_chunk"), CHUNK_MS);
       this.timer = setTimeout(() => this.stop(), MAX_SECONDS * 1000);
       this.draw(true);
     } catch (error) {
@@ -101,15 +108,25 @@ export const Recorder = {
     }
   },
 
-  stop() {
+  // Conversion is deterministic per sample, so earlier samples do not change.
+  send(event) {
     const capture = this.capture;
     if (!capture) return;
     const pcm = toPcm16(capture.chunks, capture.context.sampleRate);
+    const fresh = pcm.subarray(capture.sent);
+    capture.sent = pcm.length;
+    if (event === "voice_chunk" && fresh.length === 0) return;
+    this.pushEvent(event, { pcm: toBase64(fresh) });
+  },
+
+  stop() {
+    if (!this.capture) return;
+    this.send("voice_end");
     this.release();
-    this.pushEvent("voice", { pcm: toBase64(pcm) });
   },
 
   release() {
+    clearInterval(this.ticker);
     clearTimeout(this.timer);
     const capture = this.capture;
     this.capture = null;

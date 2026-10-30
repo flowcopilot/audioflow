@@ -5,8 +5,11 @@ defmodule Chat.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      Chat.Engine,
       {Phoenix.PubSub, name: Chat.PubSub},
+      {Task.Supervisor, name: Chat.Tasks},
+      {DynamicSupervisor, name: Chat.Servings},
+      Chat.Qwen3ASR,
+      Chat.Engine,
       ChatWeb.Endpoint
     ]
 

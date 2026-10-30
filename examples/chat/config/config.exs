@@ -17,6 +17,9 @@ config :chat, ChatWeb.Endpoint,
   ]
 
 config :phoenix, :json_library, Jason
+# Model downloads would print progress bars into the server log.
+config :bumblebee, :progress_bar_enabled, false
+config :transmuter, progress_bar_enabled: false
 # Keep recorded PCM out of any request log.
 config :phoenix, :filter_parameters, ["password", "pcm"]
 # Debug logs print every LiveView event. Set LOG_LEVEL=debug to see them.
