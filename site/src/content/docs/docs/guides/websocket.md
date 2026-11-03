@@ -59,6 +59,6 @@ a message:
 mix run --no-halt examples/websocket.exs
 ```
 
-Then open http://127.0.0.1:4000. The Demo replies are silent PCM. The
+Then open <http://127.0.0.1:4000>. The Demo replies are silent PCM. The
 transport does not include echo cancellation, encoding, or packet loss
 recovery. Use the browser's echo cancellation for speaker playback.

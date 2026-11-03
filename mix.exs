@@ -9,7 +9,21 @@ defmodule AudioFlow.MixProject do
       build_path: "_build/#{profile()}",
       elixirc_paths: paths(),
       deps: deps(),
+      aliases: aliases(),
+      elixirc_options: [warnings_as_errors: true],
+      dialyzer: [plt_add_apps: [:mix, :ex_unit]],
       start_permanent: Mix.env() == :prod
+    ]
+  end
+
+  def cli, do: [preferred_envs: [typecheck: :test]]
+
+  defp aliases do
+    [
+      typecheck: [
+        "compile --force --warnings-as-errors",
+        "test --warnings-as-errors --dry-run"
+      ]
     ]
   end
 
@@ -47,7 +61,14 @@ defmodule AudioFlow.MixProject do
       {:telemetry, "~> 1.3"},
       {:websock, "~> 0.5.3"},
       {:bandit, "~> 1.5", only: [:dev, :test]},
-      {:websock_adapter, "~> 0.5", only: [:dev, :test]}
+      {:websock_adapter, "~> 0.5", only: [:dev, :test]},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:ex_slop, "~> 0.4.5", only: [:dev, :test], runtime: false},
+      {:credo_naming, "~> 2.1", only: [:dev, :test], runtime: false},
+      {:blitz_credo_checks, "~> 0.1.10", only: [:dev, :test], runtime: false},
+      {:credo_unnecessary_reduce, "~> 0.4.0", only: [:dev, :test], runtime: false},
+      {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
     ] ++
       ml ++
       if(enabled?("AUDIOFLOW_WEBRTC"), do: [{:ex_webrtc, "~> 0.18.0"}], else: []) ++

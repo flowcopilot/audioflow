@@ -33,7 +33,7 @@ It prints a loopback port to enter in the page. Demo returns silent PCM.
 
 From the repository root, after `mix deps.get`:
 
-```
+```text
 npm --prefix examples/rtvi-client ci
 npm --prefix examples/rtvi-client run typecheck
 npm --prefix examples/rtvi-client test

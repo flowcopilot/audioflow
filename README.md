@@ -37,7 +37,7 @@ with a canvas editor and an MCP endpoint for coding agents. A session runs an
 `AudioFlow.Graph` with the `:graph` option.
 
 The website and documentation are at
-https://flowcopilot.github.io/audioflow/. Their source is in [site](site/README.md).
+<https://flowcopilot.github.io/audioflow/>. Their source is in [site](site/README.md).
 
 Core, ML, media, and combined ML/media builds use separate `_build` directories.
 Changing a feature flag does not remove modules used by another build profile.
@@ -728,7 +728,7 @@ a message:
 mix run --no-halt examples/websocket.exs
 ```
 
-Then open http://127.0.0.1:4000. The Demo replies are silent PCM. The
+Then open <http://127.0.0.1:4000>. The Demo replies are silent PCM. The
 transport does not include echo cancellation, encoding, or packet loss
 recovery. Use the browser's echo cancellation for speaker playback.
 

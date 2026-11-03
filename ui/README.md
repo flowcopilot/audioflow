@@ -31,7 +31,7 @@ mix setup
 mix phx.server
 ```
 
-Open http://localhost:4100. Set `PORT` to use another port. The server
+Open <http://localhost:4100>. Set `PORT` to use another port. The server
 listens on `127.0.0.1` only.
 
 Graphs are JSON files in the user data directory
@@ -140,9 +140,9 @@ STT graphs accept committed mono signed 16-bit little-endian PCM uploads,
 without WAV headers, up to 2 MB. Select the file's actual sample rate.
 For example, prepare a local file with:
 
-~~~sh
+```sh
 ffmpeg -i speech.wav -ac 1 -ar 16000 -f s16le speech.pcm
-~~~
+```
 
 The runner displays transcripts and PCM byte counts, with per-node WAV playback
 after completion (first 8 MB total PCM; no mixing or resampling). Use the [chat app](../examples/chat/README.md) for interactive voice.
@@ -158,10 +158,10 @@ It reports missing native nodes and missing retrieval profiles, never fabricated
 documents. For a complete local setup install PostgreSQL with pgvector, create
 a dedicated database owned by your user, then run from ui/:
 
-~~~sh
+```sh
 AUDIOFLOW_ML=1 mix setup
 PGDATABASE=audioflow AUDIOFLOW_ML=1 mix run --no-start --no-halt examples/rag.exs
-~~~
+```
 
 The script uses Postgrex's server-side PGHOST, PGPORT, PGUSER, PGPASSWORD and
 PGDATABASE variables (default host localhost). It provisions the vector extension
@@ -187,12 +187,12 @@ call AudioFlow.Recording.Store.cleanup/1 periodically.
 
 Results show artifact IDs, not paths. Read/delete from a trusted server console:
 
-~~~elixir
+```elixir
 {:ok, store} = AudioFlow.Recording.Store.new(System.fetch_env!("AUDIOFLOW_UI_RECORDINGS"),
   max_age_ms: 86_400_000, max_records: 100)
 {:ok, record} = AudioFlow.Recording.Store.read(store, artifact_id)
 :ok = AudioFlow.Recording.Store.delete(store, artifact_id)
-~~~
+```
 
 Deletion does not erase backups. Browsers cannot choose storage paths or disable
 redaction for persisted output.
@@ -209,14 +209,14 @@ negotiation; neither establishes provider inference quality.
 
 ### Verification
 
-~~~sh
+```sh
 # ui/
 mix test
 mix assets.setup
 mix assets.build
 # repository root
 mix test test/graph_test.exs test/conversation_test.exs test/conversation_evaluation_test.exs test/recording_test.exs test/remote_providers_test.exs test/rag_test.exs
-~~~
+```
 
 UI tests cover text/PCM graph runs, LiveView upload, MCP compatibility/evaluation,
 comparison failures, absent key/database configuration, key-free serialization,

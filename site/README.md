@@ -1,6 +1,6 @@
 # AudioFlow website
 
-The landing page and documentation at https://flowcopilot.github.io/audioflow/.
+The landing page and documentation at <https://flowcopilot.github.io/audioflow/>.
 It uses Astro and Starlight.
 
 ```sh

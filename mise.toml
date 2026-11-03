@@ -5,3 +5,17 @@ elixir = "1.20.4-otp-29"
 # Kokoro also needs espeak-ng, which mise does not provide: brew install espeak-ng
 node = "24.22.2"
 uv = "0.13.6"
+# Git hooks and linters (see hk.pkl).
+hk = "2.11.0"
+gitleaks = "latest"
+ruff = "latest"
+"aqua:oxc-project/oxc/oxlint" = "latest"
+jactionlint = "2.2.0"
+rumdl = "latest"
+shellcheck = "latest"
+
+[env]
+HK_MISE = 1
+
+[hooks]
+postinstall = "hk install --mise"
