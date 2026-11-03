@@ -29,6 +29,7 @@ defmodule Chat.MixProject do
   def application, do: [mod: {Chat.Application, []}, extra_applications: [:logger]]
 
   defp deps do
+    # Available in demo tests without compiling EMLX or loading models.
     [
       {:audio_flow, path: "../.."},
       live_shadcn(:live_base),
@@ -43,6 +44,10 @@ defmodule Chat.MixProject do
       # lucide_icons parses its SVG files at runtime.
       {:lazy_html, ">= 0.1.0"}
     ] ++
+      if(System.get_env("AUDIOFLOW_ML") == "1" or Mix.env() == :test,
+        do: [{:hf_hub, "~> 0.3.1"}],
+        else: []
+      ) ++
       if(System.get_env("AUDIOFLOW_ML") == "1",
         do: [
           {:emlx, github: "elixir-nx/emlx", ref: @emlx, sparse: "emlx", override: true},

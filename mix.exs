@@ -37,10 +37,13 @@ defmodule AudioFlow.MixProject do
       end
 
     [
+      {:nimble_options, "~> 1.1"},
+      {:req_llm, "~> 1.29.0"},
       {:finch, "~> 0.24.0"},
       {:mint_web_socket, "~> 1.0"},
       {:postgrex, "~> 0.22"},
       {:jido, "~> 2.4.0"},
+      {:zoi, "~> 0.18.11"},
       {:telemetry, "~> 1.3"},
       {:websock, "~> 0.5.3"},
       {:bandit, "~> 1.5", only: [:dev, :test]},

@@ -90,13 +90,23 @@ defmodule AudioFlow.WebSocket do
     :ok
   end
 
+  @limits_schema [
+    sample_rate: [type: :pos_integer, default: 16000],
+    max_chunk_bytes: [type: :pos_integer, default: 64000],
+    max_buffer_bytes: [type: :pos_integer, default: 960_000]
+  ]
+
   @impl WebSock
   def init(options) do
-    rate = Keyword.get(options, :sample_rate, 16_000)
-    vad = Keyword.get(options, :vad)
+    limits =
+      AudioFlow.RuntimeOptions.known!(
+        options,
+        @limits_schema,
+        Enum.map(@limits_schema, fn {key, _} -> {key, "#{key} must be a positive integer"} end)
+      )
 
-    unless is_integer(rate) and rate > 0,
-      do: raise(ArgumentError, "sample_rate must be a positive integer")
+    rate = limits[:sample_rate]
+    vad = Keyword.get(options, :vad)
 
     input = if vad, do: VoiceInput.new(vad, Keyword.get(options, :endpoint_options, []))
 
@@ -108,8 +118,8 @@ defmodule AudioFlow.WebSocket do
       session_ref: nil,
       input: input,
       rate: rate,
-      max_chunk_bytes: positive(options, :max_chunk_bytes, 64_000),
-      max_buffer_bytes: positive(options, :max_buffer_bytes, 960_000),
+      max_chunk_bytes: limits[:max_chunk_bytes],
+      max_buffer_bytes: limits[:max_buffer_bytes],
       buffer: [],
       buffer_bytes: 0,
       turn: nil,
@@ -310,13 +320,4 @@ defmodule AudioFlow.WebSocket do
   defp reply({frames, state}), do: reply(frames, state)
   defp reply([], state), do: {:ok, state}
   defp reply(frames, state), do: {:push, frames, state}
-
-  defp positive(options, key, default) do
-    value = Keyword.get(options, key, default)
-
-    unless is_integer(value) and value > 0,
-      do: raise(ArgumentError, "#{key} must be a positive integer")
-
-    value
-  end
 end

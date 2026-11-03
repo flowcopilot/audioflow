@@ -24,7 +24,11 @@ defmodule AudioFlow.Graph.Node do
       conversation, and its output becomes the saved reply.
 
   `adapter/2` receives the type and its validated options, with atom keys and
-  defaults applied, and returns an `AudioFlow.Adapter` tuple.
+  defaults applied, and returns an `AudioFlow.Adapter` tuple. These descriptors
+  are converted to shared Zoi schemas by `AudioFlow.Graph.OptionSchema`; their
+  metadata representation remains suitable for editors. Runtime options are
+  strictly typed. Editors may coerce submitted form values and omit required
+  fields until the graph is ready to run.
   """
   @type kind :: :audio | :image | :text | :vector
   @type spec :: %{

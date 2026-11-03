@@ -60,7 +60,7 @@ defmodule AudioFlow.Graph.Nodes.Demo do
 end
 
 defmodule AudioFlow.Graph.Nodes.ChatHTTP do
-  @moduledoc "An LLM node over a chat-completions endpoint. See `AudioFlow.Adapters.ChatHTTP`."
+  @moduledoc "ReqLLM inference nodes, including the deprecated chat-completions configuration node."
   @behaviour AudioFlow.Graph.Node
 
   @impl true
@@ -68,7 +68,7 @@ defmodule AudioFlow.Graph.Nodes.ChatHTTP do
     [
       %{
         type: "llm.chat_http",
-        title: "Chat completions LLM",
+        title: "Chat completions LLM (deprecated)",
         description: "A compatible local server or cloud endpoint.",
         input: :text,
         output: :text,
@@ -90,7 +90,56 @@ defmodule AudioFlow.Graph.Nodes.ChatHTTP do
           %{name: :timeout_ms, type: :integer, default: 30_000, description: "Request deadline."}
         ]
       }
-    ]
+    ] ++
+      [
+        %{
+          type: "llm.req_llm",
+          title: "ReqLLM",
+          description: "HTTP LLM inference using ReqLLM models and options.",
+          input: :text,
+          output: :text,
+          history: true,
+          options: [
+            %{
+              name: :model,
+              type: :string,
+              required: true,
+              description: "ReqLLM provider:model specification."
+            },
+            %{
+              name: :base_url,
+              type: :string,
+              description: "Provider base URL, for example http://localhost:8080/v1."
+            },
+            %{name: :system_prompt, type: :string, description: "System instruction."},
+            %{name: :api_key_env, type: :string, description: "API key environment variable."},
+            %{name: :tools_profile, type: :string, description: "Trusted Jido tool profile."},
+            %{
+              name: :timeout_ms,
+              type: :integer,
+              default: 30_000,
+              description: "Request deadline."
+            }
+          ]
+        }
+      ]
+  end
+
+  def adapter("llm.req_llm", options) do
+    tools =
+      if profile = options[:tools_profile],
+        do: Map.fetch!(Application.get_env(:audio_flow, :chat_tool_profiles, %{}), profile),
+        else: []
+
+    key = if env = options[:api_key_env], do: System.get_env(env), else: nil
+    opts = [model: options.model, audio_flow: [tools: tools, timeout_ms: options.timeout_ms]]
+
+    opts =
+      Enum.reduce([:base_url, :system_prompt], opts, fn name, opts ->
+        if value = options[name], do: Keyword.put(opts, name, value), else: opts
+      end)
+
+    {AudioFlow.Adapters.ReqLLM, if(key, do: Keyword.put(opts, :api_key, key), else: opts)}
   end
 
   @impl true

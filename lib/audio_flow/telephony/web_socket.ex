@@ -9,8 +9,22 @@ defmodule AudioFlow.Telephony.WebSocket do
   alias AudioFlow.Telephony.{MuLaw, RateConverter}
   alias AudioFlow.WebSocket, as: PCM
 
+  @limits_schema [
+    max_playout_packets: [type: :pos_integer, default: 500],
+    reorder_window: [type: :pos_integer, default: 32],
+    reorder_max_bytes: [type: :pos_integer, default: 64000],
+    reorder_timeout_ms: [type: :pos_integer, default: 200]
+  ]
+
   @impl true
   def init(options) do
+    limits =
+      AudioFlow.RuntimeOptions.known!(
+        options,
+        @limits_schema,
+        Enum.map(@limits_schema, fn {key, _} -> {key, "#{key} must be positive"} end)
+      )
+
     provider = Keyword.fetch!(options, :provider)
     unless provider in [:twilio, :telnyx], do: raise(ArgumentError, "unsupported provider")
     Keyword.fetch!(options, :vad) || raise ArgumentError, "telephony requires VAD"
@@ -28,13 +42,13 @@ defmodule AudioFlow.Telephony.WebSocket do
        last_chunk: nil,
        playout: :queue.new(),
        playout_timer: nil,
-       max_playout_packets: positive(options, :max_playout_packets, 500),
+       max_playout_packets: limits[:max_playout_packets],
        reorder: %{},
        reorder_bytes: 0,
        gap_timer: nil,
-       reorder_window: positive(options, :reorder_window, 32),
-       reorder_max_bytes: positive(options, :reorder_max_bytes, 64_000),
-       reorder_timeout_ms: positive(options, :reorder_timeout_ms, 200),
+       reorder_window: limits[:reorder_window],
+       reorder_max_bytes: limits[:reorder_max_bytes],
+       reorder_timeout_ms: limits[:reorder_timeout_ms],
        output?: false
      }}
   end
@@ -202,12 +216,6 @@ defmodule AudioFlow.Telephony.WebSocket do
 
   defp cancel_timer(nil), do: :ok
   defp cancel_timer({timer, _}), do: Process.cancel_timer(timer)
-
-  defp positive(options, key, default) do
-    value = Keyword.get(options, key, default)
-    unless is_integer(value) and value > 0, do: raise(ArgumentError, "#{key} must be positive")
-    value
-  end
 
   @impl true
   def handle_info({__MODULE__, :playout, token}, %{playout_timer: {_, token}} = state) do

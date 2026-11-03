@@ -30,8 +30,9 @@ or model downloads are needed. Use the same profile for all Mix commands.
 ## Run native models on Apple Silicon
 
 The repository `mise.toml` pins Erlang, Elixir, Node.js, and
-[uv](https://docs.astral.sh/uv/). uv downloads the reply models and runs
-Qwen3-ASR. Kokoro also needs `espeak-ng`, which mise does not provide.
+[uv](https://docs.astral.sh/uv/). uv runs the separate Qwen3-ASR Python
+process; reply model downloads use Elixir's `hf_hub` and need no Python or
+`uvx`. Kokoro also needs `espeak-ng`, which mise does not provide.
 
 ```sh
 mise install
@@ -73,7 +74,39 @@ Measured on an Apple M5 with 24 GB of memory, after the first turn:
 The first turn after a switch compiles the new model. It took up to 6 s to the
 first audio. Bumblebee has no Qwen3-ASR model, so Qwen3-ASR runs outside the
 BEAM. Its log is `$TMPDIR/audioflow-chat-qwen3-asr.log`. Model checkpoints for
-the reply stage are stored in the user cache directory, under `audioflow_chat`.
+the reply stage use hf_hub's cache, by default
+`~/.cache/huggingface/hub/models--OWNER--REPO/snapshots/REVISION`.
+The pinned revisions in `Chat.Catalog` are passed unchanged, and this directory
+is passed directly to EMLXAxon's checkpoint loader. Old `audioflow_chat` CLI
+downloads are not reused or deleted; the first selection downloads a new copy.
+
+Reply downloads use `hf_hub ~> 0.3.1` (locked to 0.3.1), compatible with the
+chat's Elixir 1.18+ and Req 0.7 dependencies. It is included in native builds
+and demo tests, not demo development/production builds. To change its cache,
+set `config :hf_hub, :cache_dir, "/absolute/cache/path"` before downloading.
+Version 0.3.1 documents a per-call `:cache_dir` option but its filesystem code
+uses application configuration; the wrapper does not mutate that global setting.
+
+Every selection checks the repository listing, even with a cached config.
+hf_hub reuses completed files, writes downloads to `.incomplete` files and
+renames them only after success. A failed snapshot raises with repository,
+revision and failure details; retrying fetches missing files. This requires
+Hub metadata access even for a fully cached snapshot. It does not verify
+existing nonempty files against remote checksums. An abrupt VM/OS crash can
+leave hf_hub lock files under the cache's `locks/` directory; remove stale
+locks only after ensuring no downloader is running.
+
+The behavior above was checked against the
+[0.3.1 download source](https://github.com/North-Shore-AI/hf_hub_ex/blob/v0.3.1/lib/hf_hub/download.ex),
+[HTTP source](https://github.com/North-Shore-AI/hf_hub_ex/blob/v0.3.1/lib/hf_hub/http.ex)
+and [filesystem source](https://github.com/North-Shore-AI/hf_hub_ex/blob/v0.3.1/lib/hf_hub/fs.ex).
+Run the real library against a local HTTP fixture, without Apple hardware,
+credentials or model downloads:
+
+```sh
+CHAT_PROFILE=demo MIX_ENV=test mix deps.get
+CHAT_PROFILE=demo mix test test/hf_test.exs
+```
 
 EMLX is pinned to a commit on its main branch. Release 0.5.0 cannot compile
 Whisper, which has non-finite constants. `Chat.EMLXCompiler` removes the

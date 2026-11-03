@@ -17,6 +17,10 @@ defmodule AudioFlow.Router do
   use GenServer
   @behaviour AudioFlow.Adapter
 
+  @run_schema [
+    timeout_ms: [type: :pos_integer, default: 30000]
+  ]
+
   def start_link(options),
     do: GenServer.start_link(__MODULE__, options, Keyword.take(options, [:name]))
 
@@ -28,10 +32,13 @@ defmodule AudioFlow.Router do
     router = Keyword.fetch!(options, :router)
     route = Keyword.fetch!(options, :route)
     key = if is_function(route, 1), do: route.(input), else: route
-    timeout = Keyword.get(options, :timeout_ms, 30_000)
 
-    if not (is_integer(timeout) and timeout > 0),
-      do: raise(ArgumentError, "timeout_ms must be positive")
+    limits =
+      AudioFlow.RuntimeOptions.known!(options, @run_schema,
+        timeout_ms: "timeout_ms must be positive"
+      )
+
+    timeout = limits[:timeout_ms]
 
     deadline = now() + timeout
 

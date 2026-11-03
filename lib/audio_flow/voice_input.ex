@@ -37,14 +37,42 @@ defmodule AudioFlow.VoiceInput do
     speaking?: false
   ]
 
+  @options_schema [
+    min_speech_ms: [type: :pos_integer, default: 96],
+    min_silence_ms: [type: :pos_integer, default: 320],
+    pre_roll_ms: [type: :non_neg_integer, default: 64],
+    max_utterance_ms: [type: :pos_integer, default: 30000],
+    turn_retry_ms: [type: :pos_integer, default: 320],
+    max_semantic_silence_ms: [type: :pos_integer, default: 2000],
+    threshold: [type: {:or, [:integer, :float]}, default: 0.5],
+    silence_threshold: [type: {:or, [:integer, :float]}, default: 0.35],
+    turn_threshold: [type: {:or, [:integer, :float]}, default: 0.5],
+    turn_timeout_ms: [type: {:in, 1..5000}, default: 600]
+  ]
+
+  @doc "Endpoint options:\n\n" <> NimbleOptions.docs(@options_schema)
   def new({detector, detector_options}, options \\ []) do
     {samples, rate, state} = detector.init(detector_options)
 
     unless is_integer(samples) and samples > 0 and is_integer(rate) and rate > 0,
       do: raise(ArgumentError, "detector frame size and sample rate must be positive integers")
 
-    threshold = Keyword.get(options, :threshold, 0.5)
-    silence_threshold = Keyword.get(options, :silence_threshold, 0.35)
+    limits_options =
+      AudioFlow.RuntimeOptions.known!(options, @options_schema,
+        min_speech_ms: "min_speech_ms has an invalid duration",
+        min_silence_ms: "min_silence_ms has an invalid duration",
+        pre_roll_ms: "pre_roll_ms has an invalid duration",
+        max_utterance_ms: "max_utterance_ms has an invalid duration",
+        turn_retry_ms: "turn_retry_ms has an invalid duration",
+        max_semantic_silence_ms: "max_semantic_silence_ms has an invalid duration",
+        threshold: "probability thresholds must satisfy 0 <= silence < speech <= 1",
+        silence_threshold: "probability thresholds must satisfy 0 <= silence < speech <= 1",
+        turn_threshold: "invalid semantic endpoint limits",
+        turn_timeout_ms: "invalid semantic endpoint limits"
+      )
+
+    threshold = limits_options[:threshold]
+    silence_threshold = limits_options[:silence_threshold]
 
     unless is_number(threshold) and threshold > 0 and threshold <= 1 and
              is_number(silence_threshold) and silence_threshold >= 0 and
@@ -55,11 +83,8 @@ defmodule AudioFlow.VoiceInput do
                "probability thresholds must satisfy 0 <= silence < speech <= 1"
              )
 
-    frames = fn key, default, zero? ->
-      ms = Keyword.get(options, key, default)
-
-      unless is_integer(ms) and (ms > 0 or (zero? and ms == 0)),
-        do: raise(ArgumentError, "#{key} has an invalid duration")
+    frames = fn key ->
+      ms = Keyword.fetch!(limits_options, key)
 
       if key == :max_utterance_ms,
         do: div(ms * rate, samples * 1000),
@@ -69,10 +94,10 @@ defmodule AudioFlow.VoiceInput do
     limits = %{
       threshold: threshold,
       silence_threshold: silence_threshold,
-      speech: frames.(:min_speech_ms, 96, false),
-      silence: frames.(:min_silence_ms, 320, false),
-      pre_roll: frames.(:pre_roll_ms, 64, true),
-      utterance: frames.(:max_utterance_ms, 30_000, false)
+      speech: frames.(:min_speech_ms),
+      silence: frames.(:min_silence_ms),
+      pre_roll: frames.(:pre_roll_ms),
+      utterance: frames.(:max_utterance_ms)
     }
 
     if limits.utterance < limits.speech + limits.pre_roll,
@@ -92,14 +117,13 @@ defmodule AudioFlow.VoiceInput do
       end
 
     semantic = %{
-      threshold: Keyword.get(options, :turn_threshold, 0.5),
-      timeout: Keyword.get(options, :turn_timeout_ms, 600),
-      retry: frames.(:turn_retry_ms, 320, false),
-      max_silence: frames.(:max_semantic_silence_ms, 2000, false)
+      threshold: limits_options[:turn_threshold],
+      timeout: limits_options[:turn_timeout_ms],
+      retry: frames.(:turn_retry_ms),
+      max_silence: frames.(:max_semantic_silence_ms)
     }
 
     unless is_number(semantic.threshold) and semantic.threshold > 0 and semantic.threshold <= 1 and
-             is_integer(semantic.timeout) and semantic.timeout in 1..5000 and
              (is_nil(turn_detector) or semantic.max_silence >= limits.silence),
            do: raise(ArgumentError, "invalid semantic endpoint limits")
 
