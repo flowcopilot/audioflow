@@ -85,11 +85,7 @@ defmodule AudioFlow.Playback do
     else
       case clear(state) do
         {:ok, state} ->
-          state =
-            if state.session_ref,
-              do: state,
-              else: %{state | session: session, session_ref: Process.monitor(session)}
-
+          state = monitor_session(state, session)
           {:reply, :ok, %{state | key: key, started: System.monotonic_time(:microsecond)}}
 
         {:error, reason, state} ->
@@ -100,46 +96,10 @@ defmodule AudioFlow.Playback do
 
   def handle_call({:push, key, audio}, from, %{key: key, finished?: false} = state)
       when key != nil do
-    cond do
-      not Audio.valid?(audio) ->
-        {:reply, {:error, :invalid_audio}, state}
-
-      byte_size(audio.data) > state.max_bytes ->
-        {:reply, {:error, :chunk_too_large}, state}
-
-      state.rate && state.rate != audio.sample_rate ->
-        {:reply, {:error, :sample_rate_changed}, state}
-
-      state.waiting ->
-        {:reply, {:error, :producer_busy}, state}
-
-      audio.data == <<>> ->
-        {:reply, :ok, state}
-
-      true ->
-        audio = %{audio | data: :binary.copy(audio.data)}
-
-        case ensure_pipeline(state, audio.sample_rate) do
-          {:ok, state} ->
-            if state.bytes + byte_size(audio.data) <= state.max_bytes do
-              state = enqueue(state, audio) |> serve()
-              {:reply, :ok, state}
-            else
-              ref = Process.monitor(elem(from, 0))
-
-              notify(
-                state,
-                key,
-                {:backpressure,
-                 %{queued_bytes: state.bytes, waiting_bytes: byte_size(audio.data)}}
-              )
-
-              {:noreply, %{state | waiting: %{from: from, audio: audio, ref: ref}}}
-            end
-
-          {:error, reason, state} ->
-            {:reply, {:error, reason}, state}
-        end
+    case {push_error(audio, state), audio.data} do
+      {nil, <<>>} -> {:reply, :ok, state}
+      {nil, data} -> accept_push(%{audio | data: :binary.copy(data)}, from, state)
+      {reason, _} -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -251,6 +211,44 @@ defmodule AudioFlow.Playback do
 
   @impl true
   def terminate(_, state), do: clear(state)
+
+  defp monitor_session(%{session_ref: nil} = state, session),
+    do: %{state | session: session, session_ref: Process.monitor(session)}
+
+  defp monitor_session(state, _session), do: state
+
+  defp push_error(audio, state) do
+    cond do
+      not Audio.valid?(audio) -> :invalid_audio
+      byte_size(audio.data) > state.max_bytes -> :chunk_too_large
+      state.rate && state.rate != audio.sample_rate -> :sample_rate_changed
+      state.waiting -> :producer_busy
+      true -> nil
+    end
+  end
+
+  defp accept_push(audio, from, state) do
+    case ensure_pipeline(state, audio.sample_rate) do
+      {:ok, state} -> queue_or_wait(audio, from, state)
+      {:error, reason, state} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp queue_or_wait(audio, from, state) do
+    if state.bytes + byte_size(audio.data) <= state.max_bytes do
+      {:reply, :ok, state |> enqueue(audio) |> serve()}
+    else
+      ref = Process.monitor(elem(from, 0))
+
+      notify(
+        state,
+        state.key,
+        {:backpressure, %{queued_bytes: state.bytes, waiting_bytes: byte_size(audio.data)}}
+      )
+
+      {:noreply, %{state | waiting: %{from: from, audio: audio, ref: ref}}}
+    end
+  end
 
   defp enqueue(state, audio),
     do: %{

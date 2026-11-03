@@ -1,10 +1,12 @@
 defmodule Chat.HFTest.Hub do
+  alias Plug.Conn
+
   @behaviour Plug
   def init(opts), do: opts
 
   def call(conn, state) do
     Agent.update(state, &Map.update!(&1, :requests, fn paths -> [conn.request_path | paths] end))
-    conn = Plug.Conn.fetch_query_params(conn)
+    conn = Conn.fetch_query_params(conn)
     revision = Agent.get(state, & &1.revision)
 
     case {conn.request_path, conn.query_params} do
@@ -15,13 +17,13 @@ defmodule Chat.HFTest.Hub do
         file_response(conn, state, revision, rest)
 
       _ ->
-        Plug.Conn.send_resp(conn, 404, "unknown repository")
+        Conn.send_resp(conn, 404, "unknown repository")
     end
   end
 
   defp listing_response(conn, state) do
     if Agent.get(state, & &1.fail_listing) do
-      Plug.Conn.send_resp(conn, 404, "missing repository")
+      Conn.send_resp(conn, 404, "missing repository")
     else
       body =
         Jason.encode!(%{
@@ -29,23 +31,23 @@ defmodule Chat.HFTest.Hub do
         })
 
       conn
-      |> Plug.Conn.put_resp_content_type("application/json")
-      |> Plug.Conn.send_resp(200, body)
+      |> Conn.put_resp_content_type("application/json")
+      |> Conn.send_resp(200, body)
     end
   end
 
   defp file_response(conn, state, revision, rest) do
     case String.split(rest, "/", parts: 2) do
       [^revision, "config.json"] ->
-        Plug.Conn.send_resp(conn, 200, ~s({"model_type":"qwen3"}))
+        Conn.send_resp(conn, 200, ~s({"model_type":"qwen3"}))
 
       [^revision, "model.safetensors"] ->
         if Agent.get(state, & &1.fail_weights),
-          do: Plug.Conn.send_resp(conn, 404, "missing weights"),
-          else: Plug.Conn.send_resp(conn, 200, "fixture weights")
+          do: Conn.send_resp(conn, 404, "missing weights"),
+          else: Conn.send_resp(conn, 200, "fixture weights")
 
       _ ->
-        Plug.Conn.send_resp(conn, 404, "wrong revision")
+        Conn.send_resp(conn, 404, "wrong revision")
     end
   end
 end

@@ -1,6 +1,9 @@
 defmodule AudioFlow.SessionHistoryTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Adapters.Function, Audio, Image}
+  alias AudioFlow.Adapters.Demo
+  alias AudioFlow.Adapters.Function
+  alias AudioFlow.Audio
+  alias AudioFlow.Image
 
   defmodule Output do
     @behaviour AudioFlow.Output
@@ -21,7 +24,7 @@ defmodule AudioFlow.SessionHistoryTest do
     owner = self()
 
     options =
-      AudioFlow.Adapters.Demo.options()
+      Demo.options()
       |> Keyword.put(:history, true)
       |> Keyword.put(
         :stt,

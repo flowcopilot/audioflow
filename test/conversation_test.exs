@@ -1,6 +1,7 @@
 defmodule AudioFlow.ConversationTest do
   use ExUnit.Case, async: true
   alias AudioFlow.Graph.Conversation
+  alias AudioFlow.Graph.Handoff
 
   defmodule Nodes do
     @behaviour AudioFlow.Graph.Node
@@ -114,7 +115,7 @@ defmodule AudioFlow.ConversationTest do
     {:ok, ref} = AudioFlow.submit(session, %AudioFlow.Text{data: "wait"})
 
     assert {:ok, %{handoff: "billing"}} =
-             AudioFlow.Graph.Handoff.run(%{intent: "billing"}, %{session: session, turn: ref})
+             Handoff.run(%{intent: "billing"}, %{session: session, turn: ref})
 
     assert {:ok, "triage"} = Conversation.state(session)
     task = :sys.get_state(session).active.task.pid
@@ -123,7 +124,7 @@ defmodule AudioFlow.ConversationTest do
     assert {:ok, "billing"} = Conversation.state(session)
 
     assert {:error, :stale_turn} =
-             AudioFlow.Graph.Handoff.run(%{intent: "billing"}, %{session: session, turn: ref})
+             Handoff.run(%{intent: "billing"}, %{session: session, turn: ref})
 
     turn(session, "next", "billing:3")
   end

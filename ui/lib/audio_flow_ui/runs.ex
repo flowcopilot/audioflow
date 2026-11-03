@@ -7,7 +7,8 @@ defmodule AudioFlowUI.Runs do
   their size, not their data. The reply is the text of the last text nodes:
   those whose text does not go on to another text node.
   """
-  alias AudioFlow.{Graph, Text}
+  alias AudioFlow.Graph
+  alias AudioFlow.Text
 
   @timeout_ms 120_000
 
@@ -69,7 +70,7 @@ defmodule AudioFlowUI.Runs do
           case event do
             {:audio, audio, _} when playback ->
               used =
-                Enum.reduce(events, 0, fn e, size -> size + byte_size(Map.get(e, "_pcm", "")) end)
+                Enum.sum_by(events, &byte_size(Map.get(&1, "_pcm", "")))
 
               if used + byte_size(audio.data) <= 8_000_000,
                 do: Map.put(serialized, "_pcm", audio.data),

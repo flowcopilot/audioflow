@@ -11,7 +11,29 @@ defmodule AudioFlow.Adapters.OpenAIRealtime do
   def run(audio, options, emit) do
     Socket.audio!(audio, 24_000)
 
-    session = %{
+    input = [
+      Socket.json(%{type: "input_audio_buffer.append", audio: Base.encode64(audio.data)}),
+      Socket.json(%{type: "input_audio_buffer.commit"}),
+      Socket.json(%{type: "response.create"})
+    ]
+
+    url =
+      Socket.url(Keyword.get(options, :endpoint, "wss://api.openai.com/v1/realtime"), %{
+        "model" => options[:model]
+      })
+
+    Socket.run(
+      url,
+      [{"authorization", "Bearer " <> Socket.key(options)}],
+      [Socket.json(%{type: "session.update", session: session(options)})],
+      %{sent: false, response: false, transcript: false},
+      &event(&1, &2, input, emit),
+      options
+    )
+  end
+
+  defp session(options) do
+    %{
       type: "realtime",
       model: Keyword.fetch!(options, :model),
       output_modalities: ["audio"],
@@ -30,75 +52,62 @@ defmodule AudioFlow.Adapters.OpenAIRealtime do
         }
       }
     }
-
-    input = [
-      Socket.json(%{type: "input_audio_buffer.append", audio: Base.encode64(audio.data)}),
-      Socket.json(%{type: "input_audio_buffer.commit"}),
-      Socket.json(%{type: "response.create"})
-    ]
-
-    url =
-      Socket.url(Keyword.get(options, :endpoint, "wss://api.openai.com/v1/realtime"), %{
-        "model" => options[:model]
-      })
-
-    Socket.run(
-      url,
-      [{"authorization", "Bearer " <> Socket.key(options)}],
-      [Socket.json(%{type: "session.update", session: session})],
-      %{sent: false, response: false, transcript: false},
-      fn event, state ->
-        case event do
-          %{"type" => "session.updated"} when not state.sent ->
-            {:cont, %{state | sent: true}, input}
-
-          %{"type" => "error"} ->
-            {:error, :remote_error}
-
-          %{"type" => "conversation.item.input_audio_transcription.failed"} ->
-            {:error, :transcription_failed}
-
-          %{
-            "type" => "conversation.item.input_audio_transcription.completed",
-            "transcript" => text
-          }
-          when is_binary(text) ->
-            :ok = emit.({:transcript, text})
-            finish(%{state | transcript: true})
-
-          %{"type" => "response.output_audio.delta", "delta" => data} when is_binary(data) ->
-            case Socket.audio_event(data, 24_000, emit) do
-              :ok -> {:cont, state, []}
-              error -> error
-            end
-
-          %{"type" => type, "delta" => text}
-          when type in ["response.output_audio_transcript.delta", "response.output_text.delta"] and
-                 is_binary(text) ->
-            :ok = emit.({:text, text})
-            {:cont, state, []}
-
-          %{
-            "type" => "response.done",
-            "response" => %{"status" => "completed", "output" => output}
-          } ->
-            if Enum.any?(output, &(&1["type"] == "function_call")),
-              do: {:error, :unsupported_tool_call},
-              else: finish(%{state | response: true})
-
-          %{"type" => "response.done"} ->
-            {:error, :response_failed}
-
-          %{"type" => _} ->
-            {:cont, state, []}
-
-          _ ->
-            {:error, :invalid_event}
-        end
-      end,
-      options
-    )
   end
+
+  defp event(%{"type" => "session.updated"}, state, input, _emit) when not state.sent,
+    do: {:cont, %{state | sent: true}, input}
+
+  defp event(%{"type" => "error"}, _state, _input, _emit), do: {:error, :remote_error}
+
+  defp event(%{"type" => "conversation.item.input_audio_transcription.failed"}, _, _, _),
+    do: {:error, :transcription_failed}
+
+  defp event(
+         %{
+           "type" => "conversation.item.input_audio_transcription.completed",
+           "transcript" => text
+         },
+         state,
+         _input,
+         emit
+       )
+       when is_binary(text) do
+    :ok = emit.({:transcript, text})
+    finish(%{state | transcript: true})
+  end
+
+  defp event(%{"type" => "response.output_audio.delta", "delta" => data}, state, _input, emit)
+       when is_binary(data) do
+    case Socket.audio_event(data, 24_000, emit) do
+      :ok -> {:cont, state, []}
+      error -> error
+    end
+  end
+
+  defp event(%{"type" => type, "delta" => text}, state, _input, emit)
+       when type in ["response.output_audio_transcript.delta", "response.output_text.delta"] and
+              is_binary(text) do
+    :ok = emit.({:text, text})
+    {:cont, state, []}
+  end
+
+  defp event(
+         %{
+           "type" => "response.done",
+           "response" => %{"status" => "completed", "output" => output}
+         },
+         state,
+         _input,
+         _emit
+       ) do
+    if Enum.any?(output, &(&1["type"] == "function_call")),
+      do: {:error, :unsupported_tool_call},
+      else: finish(%{state | response: true})
+  end
+
+  defp event(%{"type" => "response.done"}, _state, _input, _emit), do: {:error, :response_failed}
+  defp event(%{"type" => _}, state, _input, _emit), do: {:cont, state, []}
+  defp event(_event, _state, _input, _emit), do: {:error, :invalid_event}
 
   defp finish(%{response: true, transcript: true}), do: :done
   defp finish(state), do: {:cont, state, []}

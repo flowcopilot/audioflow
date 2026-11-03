@@ -17,7 +17,10 @@ defmodule Chat.LocalEngine do
 
   alias AudioFlow.Adapters.Function
   alias AudioFlow.Audio
-  alias Chat.{Catalog, Qwen3ASR}
+  alias AudioFlow.NxAdapter
+  alias Chat.Catalog
+  alias Chat.Qwen3ASR
+  alias EMLXAxon.Qwen3.Loader
 
   @gpu {EMLX.Backend, device: :gpu}
   @defn [compiler: Chat.EMLXCompiler]
@@ -102,14 +105,12 @@ defmodule Chat.LocalEngine do
     {{stage, id}, loads} = Map.pop(state.loads, ref)
     state = %{state | loads: loads}
 
-    cond do
-      # A newer selection replaced this load. Release what it loaded.
-      stage != :tts and state.selection[stage] != id ->
-        with {:ok, loaded} <- result, do: release(state, loaded)
-        {:noreply, state}
-
-      true ->
-        {:noreply, finish_load(state, stage, result)}
+    # A newer selection replaced this load. Release what it loaded.
+    if stage != :tts and state.selection[stage] != id do
+      with {:ok, loaded} <- result, do: release(state, loaded)
+      {:noreply, state}
+    else
+      {:noreply, finish_load(state, stage, result)}
     end
   end
 
@@ -153,7 +154,7 @@ defmodule Chat.LocalEngine do
     voice = state.selection.voice
 
     adapter =
-      {AudioFlow.NxAdapter,
+      {NxAdapter,
        serving: serving, input: &%{text: &1, voice: voice}, output: &AudioFlow.Kokoro.audio/1}
 
     :persistent_term.put({__MODULE__, :tts}, adapter)
@@ -189,24 +190,16 @@ defmodule Chat.LocalEngine do
         {name, pid} = start_serving(:"Chat.STT.#{id}", serving)
 
         adapter =
-          {AudioFlow.NxAdapter,
-           serving: name,
-           input: &AudioFlow.NxAdapter.whisper_input/1,
-           output: &AudioFlow.NxAdapter.transcript/1}
+          {NxAdapter,
+           serving: name, input: &NxAdapter.whisper_input/1, output: &NxAdapter.transcript/1}
 
-        Nx.Serving.batched_run(name, AudioFlow.NxAdapter.whisper_input(silence))
+        Nx.Serving.batched_run(name, NxAdapter.whisper_input(silence))
         {:ok, %{adapter: adapter, serving: name, pid: pid}}
 
       :qwen3_asr ->
         with {:ok, _} <- Qwen3ASR.load(model),
              {:ok, _} <- Qwen3ASR.transcribe(model, silence.data) do
-          run = fn %Audio{data: data}, emit ->
-            case Qwen3ASR.transcribe(model, data) do
-              {:ok, text} -> emit.(text)
-              {:error, reason} -> {:error, reason}
-            end
-          end
-
+          run = &transcribe_qwen3(model, &1, &2)
           {:ok, %{adapter: {Function, run: run}, sidecar: true}}
         end
     end
@@ -216,9 +209,16 @@ defmodule Chat.LocalEngine do
     model = Catalog.fetch!(:llm, id)
     dir = Chat.HF.snapshot!(model.repo, model.revision)
     {:ok, tokenizer} = Bumblebee.load_tokenizer({:local, dir})
-    {:ok, weights} = EMLXAxon.Qwen3.Loader.load(dir)
+    {:ok, weights} = Loader.load(dir)
     generate(tokenizer, weights, [%{role: :user, content: "Hi"}], fn _ -> :ok end)
     {:ok, %{adapter: {Function, run: &generate(tokenizer, weights, &1, &2)}}}
+  end
+
+  defp transcribe_qwen3(model, %Audio{data: data}, emit) do
+    case Qwen3ASR.transcribe(model, data) do
+      {:ok, text} -> emit.(text)
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   # Streams sentence chunks, so speech starts after the first sentence.

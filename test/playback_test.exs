@@ -2,7 +2,9 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
   defmodule AudioFlow.PlaybackTest do
     use ExUnit.Case, async: true
     @moduletag capture_log: true
-    alias AudioFlow.{Audio, Playback}
+    alias AudioFlow.Adapters.Demo
+    alias AudioFlow.Audio
+    alias AudioFlow.Playback
 
     defp player do
       start_supervised!(
@@ -12,7 +14,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
     end
 
     defp audio(value),
-      do: %Audio{data: <<value::little-signed-16, value::little-signed-16>>, sample_rate: 16000}
+      do: %Audio{data: <<value::little-signed-16, value::little-signed-16>>, sample_rate: 16_000}
 
     defp demand(sink, count), do: send(sink, {:demand, count})
 
@@ -96,7 +98,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
          end}
 
       options =
-        AudioFlow.Adapters.Demo.options()
+        Demo.options()
         |> Keyword.put(:tts, tts)
         |> Keyword.put(:output, {Playback, player})
 
@@ -122,7 +124,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
       tts = {AudioFlow.Adapters.Function, run: fn _, emit -> emit.(audio(1)) end}
 
       options =
-        AudioFlow.Adapters.Demo.options()
+        Demo.options()
         |> Keyword.put(:tts, tts)
         |> Keyword.put(:output, {Playback, player})
 
@@ -142,7 +144,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
       player = player()
 
       options =
-        AudioFlow.Adapters.Demo.options()
+        Demo.options()
         |> Keyword.put(:output, {Playback, player})
         |> Keyword.put(
           :tts,
@@ -169,7 +171,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
 
     test "an abrupt session exit closes its output pipeline" do
       player = player()
-      options = Keyword.put(AudioFlow.Adapters.Demo.options(), :output, {Playback, player})
+      options = Keyword.put(Demo.options(), :output, {Playback, player})
       # Demo PCM exceeds this test player's bound, so use a small actual output.
       options =
         Keyword.put(
@@ -208,7 +210,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
       player = player()
 
       options =
-        AudioFlow.Adapters.Demo.options()
+        Demo.options()
         |> Keyword.put(:stt, {AudioFlow.Adapters.Function, run: fn _, emit -> emit.("") end})
         |> Keyword.put(:output, {Playback, player})
 

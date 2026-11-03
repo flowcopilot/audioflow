@@ -1,16 +1,18 @@
 defmodule AudioFlowUI.ProviderGraphTest do
   use ExUnit.Case, async: false
 
+  alias Plug.Conn
+
   defmodule Endpoint do
     def init(options), do: options
 
     def call(conn, {owner, status}) do
-      {:ok, body, conn} = Plug.Conn.read_body(conn)
+      {:ok, body, conn} = Conn.read_body(conn)
       send(owner, {:provider_request, conn.req_headers, Jason.decode!(body), conn.query_string})
 
       conn
-      |> Plug.Conn.put_resp_content_type("audio/pcm")
-      |> Plug.Conn.send_resp(status, <<1, 0, 2, 0>>)
+      |> Conn.put_resp_content_type("audio/pcm")
+      |> Conn.send_resp(status, <<1, 0, 2, 0>>)
     end
   end
 
@@ -55,7 +57,7 @@ defmodule AudioFlowUI.ProviderGraphTest do
             %{
               "status" => "done",
               "events" => [
-                %{"type" => "audio", "bytes" => 4, "sample_rate" => 24000}
+                %{"type" => "audio", "bytes" => 4, "sample_rate" => 24_000}
               ]
             }} = AudioFlowUI.Runs.run_text(graph(200), "Salut")
 

@@ -1,6 +1,8 @@
 if System.get_env("AUDIOFLOW_ML") == "1" do
   defmodule AudioFlow.KokoroModelTest do
     use ExUnit.Case, async: false
+
+    alias AudioFlow.Adapters.Demo
     @moduletag :model
     @moduletag timeout: 300_000
 
@@ -43,7 +45,7 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
       # Exercise the actual turn worker and PCM mapper against the same shared model.
       options =
         Keyword.put(
-          AudioFlow.Adapters.Demo.options(),
+          Demo.options(),
           :tts,
           {AudioFlow.NxAdapter, serving: AudioFlow.TestKokoro, output: &AudioFlow.Kokoro.audio/1}
         )
@@ -52,10 +54,10 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
 
       try do
         {:ok, turn} =
-          AudioFlow.submit(session, %AudioFlow.Audio{data: <<0, 0>>, sample_rate: 16000})
+          AudioFlow.submit(session, %AudioFlow.Audio{data: <<0, 0>>, sample_rate: 16_000})
 
         assert_receive {AudioFlow, ^session, ^turn,
-                        {:audio, %AudioFlow.Audio{sample_rate: 24000}}},
+                        {:audio, %AudioFlow.Audio{sample_rate: 24_000}}},
                        60_000
 
         assert_receive {AudioFlow, ^session, ^turn, {:done, _}}, 60_000

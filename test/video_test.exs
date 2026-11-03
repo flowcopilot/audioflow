@@ -3,7 +3,8 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
     use ExUnit.Case, async: false
     @moduletag :tmp_dir
     @moduletag capture_log: true
-    alias AudioFlow.{Image, Video}
+    alias AudioFlow.Image
+    alias AudioFlow.Video
 
     test "RGB sources obey read demand and selection uses presentation time" do
       {:ok, supervisor, reader} =

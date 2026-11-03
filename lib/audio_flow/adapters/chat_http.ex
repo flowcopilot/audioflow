@@ -4,6 +4,9 @@ defmodule AudioFlow.Adapters.ChatHTTP do
   with ReqLLM model/context/options directly. No HTTP protocol is implemented here.
   """
   @behaviour AudioFlow.Adapter
+
+  alias AudioFlow.Adapters.ReqLLM
+
   @impl true
   def run(input, options, emit) do
     endpoint = Keyword.fetch!(options, :endpoint)
@@ -51,6 +54,6 @@ defmodule AudioFlow.Adapters.ChatHTTP do
         do: Keyword.put(opts, :temperature, parameters["temperature"] * 1.0),
         else: opts
 
-    AudioFlow.Adapters.ReqLLM.run(input, opts, emit)
+    ReqLLM.run(input, opts, emit)
   end
 end

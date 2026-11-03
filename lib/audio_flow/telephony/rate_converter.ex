@@ -27,7 +27,7 @@ defmodule AudioFlow.Telephony.RateConverter do
       Enum.map_reduce(for(<<s::little-signed-16 <- data>>, do: s), state, fn s, state ->
         history = [s | state.history]
         value = Enum.zip_with(history, @taps, &(&1 * &2)) |> Enum.sum()
-        value = (value / @gain) |> round() |> max(-32768) |> min(32767)
+        value = (value / @gain) |> round() |> max(-32_768) |> min(32_767)
         output = if state.phase == 1, do: <<value::little-signed-16>>, else: <<>>
         {output, %{state | history: Enum.take(history, 30), phase: 1 - state.phase}}
       end)

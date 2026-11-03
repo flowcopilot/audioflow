@@ -12,21 +12,11 @@ defmodule Mix.Tasks.AudioFlow.Bench do
   """
   use Mix.Task
 
+  alias AudioFlow.Adapters.Demo
+
   @impl true
   def run(args) do
-    {opts, rest, invalid} =
-      OptionParser.parse(args,
-        strict: [
-          config: :string,
-          runs: :integer,
-          concurrency: :integer,
-          warmup: :integer,
-          timeout_ms: :integer,
-          output: :string
-        ]
-      )
-
-    if rest != [] or invalid != [], do: Mix.raise("invalid benchmark arguments")
+    opts = parse_args!(args)
     runs = Keyword.get(opts, :runs, 10)
     concurrency = Keyword.get(opts, :concurrency, 1)
     warmup = Keyword.get(opts, :warmup, 0)
@@ -37,29 +27,7 @@ defmodule Mix.Tasks.AudioFlow.Bench do
 
     Mix.Task.run("app.start")
     setup_started = System.monotonic_time(:microsecond)
-
-    {options, audio, config_metadata} =
-      case opts[:config] do
-        nil ->
-          IO.puts(:stderr, "Synthetic benchmark. These results do not measure speech inference.")
-
-          {AudioFlow.Adapters.Demo.options(),
-           %AudioFlow.Audio{data: <<0, 0>>, sample_rate: 16_000}, %{mode: "synthetic"}}
-
-        path ->
-          case elem(Code.eval_file(path), 0) do
-            {options, audio} ->
-              {options, audio, %{config_file: path}}
-
-            {options, audio, metadata} ->
-              {options, audio, metadata}
-
-            _ ->
-              Mix.raise(
-                "benchmark config must return {options, audio} or {options, audio, metadata}"
-              )
-          end
-      end
+    {options, audio, config_metadata} = load_config(opts[:config])
 
     unless AudioFlow.Audio.valid?(audio),
       do: Mix.raise("benchmark input must be valid mono s16le PCM")
@@ -86,16 +54,51 @@ defmodule Mix.Tasks.AudioFlow.Bench do
       AudioFlow.BenchmarkReport.metadata(audio, settings, config_metadata)
       |> Map.put(:setup_us, setup_us)
 
-    case opts[:output] do
-      nil ->
-        IO.write(csv)
+    write_results(opts[:output], csv, metadata)
+  end
 
-      path ->
-        json = JSON.encode!(metadata)
-        File.mkdir_p!(Path.dirname(path))
-        File.write!(path, csv)
-        File.write!(path <> ".meta.json", json)
-        IO.puts("Wrote #{path} and #{path}.meta.json")
+  defp parse_args!(args) do
+    {opts, rest, invalid} =
+      OptionParser.parse(args,
+        strict: [
+          config: :string,
+          runs: :integer,
+          concurrency: :integer,
+          warmup: :integer,
+          timeout_ms: :integer,
+          output: :string
+        ]
+      )
+
+    if rest != [] or invalid != [], do: Mix.raise("invalid benchmark arguments")
+    opts
+  end
+
+  defp load_config(nil) do
+    IO.puts(:stderr, "Synthetic benchmark. These results do not measure speech inference.")
+    {Demo.options(), %AudioFlow.Audio{data: <<0, 0>>, sample_rate: 16_000}, %{mode: "synthetic"}}
+  end
+
+  defp load_config(path) do
+    case elem(Code.eval_file(path), 0) do
+      {options, audio} ->
+        {options, audio, %{config_file: path}}
+
+      {options, audio, metadata} ->
+        {options, audio, metadata}
+
+      _ ->
+        Mix.raise("benchmark config must return {options, audio} or {options, audio, metadata}")
     end
+  end
+
+  defp write_results(nil, csv, _metadata), do: IO.write(csv)
+
+  defp write_results(path, csv, metadata) do
+    json = JSON.encode!(metadata)
+    File.mkdir_p!(Path.dirname(path))
+    File.write!(path, csv)
+    File.write!(path <> ".meta.json", json)
+    IO.puts("Wrote #{path} and #{path}.meta.json")
   end
 end

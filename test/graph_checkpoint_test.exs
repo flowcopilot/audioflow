@@ -1,7 +1,11 @@
 defmodule AudioFlow.GraphCheckpointTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Adapters.Function, Audio, Graph, Output, Text}
+  alias AudioFlow.Adapters.Function
+  alias AudioFlow.Audio
+  alias AudioFlow.Graph
   alias AudioFlow.Graph.Conversation
+  alias AudioFlow.Output
+  alias AudioFlow.Text
 
   defp plan(mode) do
     graph = %{

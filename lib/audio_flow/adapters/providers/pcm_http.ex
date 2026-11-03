@@ -3,11 +3,7 @@ defmodule AudioFlow.Adapters.Providers.PCMHTTP do
   alias AudioFlow.Adapters.Providers.Socket
 
   def run(endpoint, headers, body, rate, options, emit) do
-    uri = URI.parse(endpoint)
-
-    unless (uri.scheme in ["http", "https"] and uri.host) && is_nil(uri.userinfo),
-      do: raise(ArgumentError, "expected HTTP(S) endpoint without user information")
-
+    validate_endpoint!(endpoint)
     body = JSON.encode!(body)
 
     limit = Socket.positive!(options, :max_response_bytes, 16_777_216)
@@ -31,18 +27,30 @@ defmodule AudioFlow.Adapters.Providers.PCMHTTP do
       request =
         Finch.build(:post, endpoint, [{"content-type", "application/json"} | headers], body)
 
-      case Finch.stream_while(request, AudioFlow.HTTPClient, state, &receive_http/2,
-             receive_timeout: receive_timeout,
-             request_timeout: timeout
-           ) do
-        {:ok, %{error: error}} when error != nil -> {:error, error}
-        {:ok, %{pending: pending}} when pending != "" -> {:error, :incomplete_sample}
-        {:ok, %{bytes: 0}} -> {:error, :empty_response}
-        {:ok, _} -> :ok
-        {:error, _, _} -> {:error, :http_stream_failed}
-      end
+      request
+      |> Finch.stream_while(AudioFlow.HTTPClient, state, &receive_http/2,
+        receive_timeout: receive_timeout,
+        request_timeout: timeout
+      )
+      |> stream_result()
     end
   end
+
+  defp validate_endpoint!(endpoint) do
+    uri = URI.parse(endpoint)
+
+    unless (uri.scheme in ["http", "https"] and uri.host) && is_nil(uri.userinfo),
+      do: raise(ArgumentError, "expected HTTP(S) endpoint without user information")
+  end
+
+  defp stream_result({:ok, %{error: error}}) when error != nil, do: {:error, error}
+
+  defp stream_result({:ok, %{pending: pending}}) when pending != "",
+    do: {:error, :incomplete_sample}
+
+  defp stream_result({:ok, %{bytes: 0}}), do: {:error, :empty_response}
+  defp stream_result({:ok, _}), do: :ok
+  defp stream_result({:error, _, _}), do: {:error, :http_stream_failed}
 
   defp receive_http({:status, 200}, state), do: {:cont, %{state | status: 200}}
 

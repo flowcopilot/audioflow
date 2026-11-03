@@ -12,6 +12,10 @@ defmodule AudioFlow.Kokoro do
   for `AudioFlow.NxAdapter`. Each section runs as its own batch of size one.
   Model inference produces a full section waveform before PCM is emitted.
   """
+
+  alias Nx.Serving
+  alias Transmuter.Hub
+
   @repository "onnx-community/Kokoro-82M-v1.0-ONNX"
   @revision "1939ad2a8e416c0acfeecc08a694d14ef25f2231"
   @phase_node "/decoder/decoder/generator/Greater"
@@ -19,33 +23,10 @@ defmodule AudioFlow.Kokoro do
   def serving(options \\ []) do
     source = Keyword.get(options, :source, {:hf, @repository})
     hub_options = Keyword.merge([revision: @revision], Keyword.get(options, :load_options, []))
-    voices = Keyword.get(options, :voices, ["af_heart"])
-
-    unless is_list(voices) and voices != [] and Enum.all?(voices, &valid_voice?/1),
-      do: raise(ArgumentError, "voices must be a non-empty list of voice names")
-
-    default_voice = Keyword.get(options, :default_voice, hd(voices))
-    unless default_voice in voices, do: raise(ArgumentError, "default voice must be loaded")
-
-    vocabulary = Transmuter.Hub.json(source, "tokenizer.json", hub_options)["model"]["vocab"]
-
-    unless is_map(vocabulary) and vocabulary["$"] == 0,
-      do: raise(ArgumentError, "invalid Kokoro vocabulary")
-
-    styles =
-      Map.new(voices, fn voice ->
-        path = Transmuter.Hub.fetch!(source, "voices/#{voice}.bin", hub_options)
-        data = File.read!(path)
-
-        unless byte_size(data) >= 510 * 256 * 4 and rem(byte_size(data), 256 * 4) == 0,
-          do: raise(ArgumentError, "invalid voice style file: #{voice}")
-
-        # Voice files contain little-endian float32 values.
-        samples = for <<value::little-float-32 <- data>>, do: value
-        {voice, samples |> Nx.tensor(type: :f32) |> Nx.reshape({:auto, 256})}
-      end)
-
-    model_path = Transmuter.Hub.fetch!(source, "onnx/model.onnx", hub_options)
+    {voices, default_voice} = voices!(options)
+    vocabulary = vocabulary!(source, hub_options)
+    styles = Map.new(voices, &{&1, style!(source, &1, hub_options)})
+    model_path = Hub.fetch!(source, "onnx/model.onnx", hub_options)
 
     model =
       Transmuter.load!(model_path, Keyword.take(hub_options, [:backend, :compute_type]))
@@ -58,59 +39,88 @@ defmodule AudioFlow.Kokoro do
     unless is_integer(cache_size) and cache_size > 0,
       do: raise(ArgumentError, "cache_size must be positive")
 
-    Nx.Serving.new(
-      fn compiler_options ->
-        template = %{
-          "input_ids" => Nx.template({1, 4}, :s64),
-          "style" => Nx.template({1, 256}, :f32),
-          "speed" => Nx.template({1}, :f32)
-        }
-
-        run =
-          Transmuter.compile(
-            model,
-            template,
-            [cache_size: cache_size] ++ Keyword.delete(compiler_options, :batch_keys)
-          )
-
-        fn batch ->
-          if batch.size != 1, do: raise(ArgumentError, "Kokoro requires batch_size: 1")
-          inputs = Nx.Defn.jit_apply(& &1, [batch], compiler: Nx.Defn.Evaluator)
-          output = run.(inputs)
-          %{audio: Nx.reshape(output["waveform"], {1, :auto})}
-        end
-      end,
-      defn_options
-    )
-    |> Nx.Serving.batch_size(1)
-    |> Nx.Serving.streaming()
-    |> Nx.Serving.client_preprocessing(fn input ->
+    Serving.new(&compile_run(model, cache_size, &1), defn_options)
+    |> Serving.batch_size(1)
+    |> Serving.streaming()
+    |> Serving.client_preprocessing(fn input ->
       {phonemes, voice, speed} = prepare(input, default_voice, styles, phonemizer)
-
-      batches =
-        encode(phonemes, vocabulary)
-        |> Enum.map(fn ids ->
-          count = length(ids) - 2
-
-          style =
-            Nx.slice_along_axis(styles[voice], count - 1, 1, axis: 0) |> Nx.squeeze(axes: [0])
-
-          Nx.Batch.stack([
-            %{
-              "input_ids" => Nx.tensor(ids, type: :s64),
-              "style" => style,
-              "speed" => Nx.tensor(speed, type: :f32)
-            }
-          ])
-        end)
-
+      batches = Enum.map(encode(phonemes, vocabulary), &section_batch(&1, styles[voice], speed))
       {batches, nil}
     end)
-    |> Nx.Serving.client_postprocessing(fn stream, _ ->
+    |> Serving.client_postprocessing(fn stream, _ ->
       Stream.map(stream, fn {:batch, %{audio: audio}, _metadata} ->
         %{audio: Nx.squeeze(audio, axes: [0]), sampling_rate: 24_000}
       end)
     end)
+  end
+
+  defp voices!(options) do
+    voices = Keyword.get(options, :voices, ["af_heart"])
+
+    unless is_list(voices) and voices != [] and Enum.all?(voices, &valid_voice?/1),
+      do: raise(ArgumentError, "voices must be a non-empty list of voice names")
+
+    default_voice = Keyword.get(options, :default_voice, hd(voices))
+    unless default_voice in voices, do: raise(ArgumentError, "default voice must be loaded")
+    {voices, default_voice}
+  end
+
+  defp vocabulary!(source, hub_options) do
+    vocabulary = Hub.json(source, "tokenizer.json", hub_options)["model"]["vocab"]
+
+    unless is_map(vocabulary) and vocabulary["$"] == 0,
+      do: raise(ArgumentError, "invalid Kokoro vocabulary")
+
+    vocabulary
+  end
+
+  defp style!(source, voice, hub_options) do
+    path = Hub.fetch!(source, "voices/#{voice}.bin", hub_options)
+    data = File.read!(path)
+
+    unless byte_size(data) >= 510 * 256 * 4 and rem(byte_size(data), 256 * 4) == 0,
+      do: raise(ArgumentError, "invalid voice style file: #{voice}")
+
+    # Voice files contain little-endian float32 values.
+    samples = for <<value::little-float-32 <- data>>, do: value
+    samples |> Nx.tensor(type: :f32) |> Nx.reshape({:auto, 256})
+  end
+
+  defp compile_run(model, cache_size, compiler_options) do
+    template = %{
+      "input_ids" => Nx.template({1, 4}, :s64),
+      "style" => Nx.template({1, 256}, :f32),
+      "speed" => Nx.template({1}, :f32)
+    }
+
+    run =
+      Transmuter.compile(
+        model,
+        template,
+        [cache_size: cache_size] ++ Keyword.delete(compiler_options, :batch_keys)
+      )
+
+    &run_batch(run, &1)
+  end
+
+  defp run_batch(run, batch) do
+    if batch.size != 1, do: raise(ArgumentError, "Kokoro requires batch_size: 1")
+    inputs = Nx.Defn.jit_apply(& &1, [batch], compiler: Nx.Defn.Evaluator)
+    output = run.(inputs)
+    %{audio: Nx.reshape(output["waveform"], {1, :auto})}
+  end
+
+  defp section_batch(ids, styles, speed) do
+    count = length(ids) - 2
+    style = Nx.slice_along_axis(styles, count - 1, 1, axis: 0) |> Nx.squeeze(axes: [0])
+
+    Nx.Batch.stack([
+      %{
+        "input_ids" => Nx.tensor(ids, type: :s64),
+        "style" => style,
+        "speed" => Nx.tensor(speed, type: :f32)
+      }
+    ])
   end
 
   @doc "Convert a Kokoro result stream into PCM chunks for the session."
@@ -134,19 +144,22 @@ defmodule AudioFlow.Kokoro do
   end
 
   defp split([], _space), do: []
-  defp split(ids, _space) when length(ids) <= 510, do: [ids]
 
   defp split(ids, space) do
-    head = Enum.take(ids, 510)
+    case Enum.split(ids, 510) do
+      {head, []} ->
+        [head]
 
-    cut =
-      case Enum.find_index(Enum.reverse(head), &(&1 == space)) do
-        nil -> 510
-        index -> 510 - index
-      end
+      {head, _rest} ->
+        cut =
+          case Enum.find_index(Enum.reverse(head), &(&1 == space)) do
+            nil -> 510
+            index -> 510 - index
+          end
 
-    {section, rest} = Enum.split(ids, cut)
-    [section | split(rest, space)]
+        {section, rest} = Enum.split(ids, cut)
+        [section | split(rest, space)]
+    end
   end
 
   defp prepare(text, voice, styles, phonemizer) when is_binary(text),
@@ -160,28 +173,23 @@ defmodule AudioFlow.Kokoro do
     unless is_number(speed) and speed >= 0.5 and speed <= 2.0,
       do: raise(ArgumentError, "speed must be between 0.5 and 2.0")
 
-    phonemes =
-      case input do
-        %{phonemes: phonemes} when is_binary(phonemes) ->
-          phonemes
-
-        %{text: text} when is_binary(text) ->
-          case module.phonemize(text, options) do
-            {:ok, phonemes} ->
-              phonemes
-
-            {:error, reason} ->
-              raise ArgumentError, "phoneme conversion failed: #{inspect(reason)}"
-          end
-
-        _ ->
-          raise ArgumentError, "expected text or phonemes"
-      end
-
-    {phonemes, voice, speed}
+    {phonemes!(input, module, options), voice, speed}
   end
 
   defp prepare(_, _, _, _), do: raise(ArgumentError, "expected a string or input map")
+
+  defp phonemes!(%{phonemes: phonemes}, _module, _options) when is_binary(phonemes),
+    do: phonemes
+
+  defp phonemes!(%{text: text}, module, options) when is_binary(text) do
+    case module.phonemize(text, options) do
+      {:ok, phonemes} -> phonemes
+      {:error, reason} -> raise ArgumentError, "phoneme conversion failed: #{inspect(reason)}"
+    end
+  end
+
+  defp phonemes!(_input, _module, _options),
+    do: raise(ArgumentError, "expected text or phonemes")
 
   defp correct_phase(model) do
     unless Enum.any?(model.nodes, &(&1.name == @phase_node and &1.op_type == "Greater")),

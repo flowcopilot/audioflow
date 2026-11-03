@@ -18,7 +18,7 @@ defmodule AudioFlow.Router do
   @behaviour AudioFlow.Adapter
 
   @run_schema [
-    timeout_ms: [type: :pos_integer, default: 30000]
+    timeout_ms: [type: :pos_integer, default: 30_000]
   ]
 
   def start_link(options),

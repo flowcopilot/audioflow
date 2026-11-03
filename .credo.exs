@@ -150,7 +150,6 @@
           {ExSlop.Check.Refactor.SortThenAt, []},
           {ExSlop.Check.Refactor.SortForTopK, []},
           {ExSlop.Check.Refactor.ListFold, []},
-          {ExSlop.Check.Refactor.ListLast, []},
           {ExSlop.Check.Refactor.LengthInGuard, []},
           {ExSlop.Check.Refactor.LengthComparison, []},
           {ExSlop.Check.Refactor.ExplicitSumReduce, []},
@@ -163,6 +162,8 @@
           {ExSlop.Check.Readability.UnaliasedModuleUse, []}
         ],
         disabled: [
+          # Message histories are chronological and short; the newest turn is the last item.
+          {ExSlop.Check.Refactor.ListLast, []},
           {Credo.Check.Consistency.UnusedVariableNames, []},
           {Credo.Check.Design.DuplicatedCode, []},
           {Credo.Check.Readability.AliasAs, []},

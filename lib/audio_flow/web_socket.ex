@@ -59,7 +59,9 @@ defmodule AudioFlow.WebSocket do
   """
   @behaviour WebSock
   @behaviour AudioFlow.Output
-  alias AudioFlow.{Audio, Text, VoiceInput}
+  alias AudioFlow.Audio
+  alias AudioFlow.Text
+  alias AudioFlow.VoiceInput
 
   @impl AudioFlow.Output
   def start_turn(_connection, _key), do: :ok
@@ -91,8 +93,8 @@ defmodule AudioFlow.WebSocket do
   end
 
   @limits_schema [
-    sample_rate: [type: :pos_integer, default: 16000],
-    max_chunk_bytes: [type: :pos_integer, default: 64000],
+    sample_rate: [type: :pos_integer, default: 16_000],
+    max_chunk_bytes: [type: :pos_integer, default: 64_000],
     max_buffer_bytes: [type: :pos_integer, default: 960_000]
   ]
 

@@ -25,7 +25,9 @@ defmodule AudioFlowUIWeb.Components.Canvas do
   deletes the focused element.
   """
   use Phoenix.Component
-  alias LiveAiElements.Components.{Controls, Edge, Node}
+  alias LiveAiElements.Components.Controls
+  alias LiveAiElements.Components.Edge
+  alias LiveAiElements.Components.Node
   alias Phoenix.LiveView.JS
 
   attr :id, :string, required: true

@@ -1,6 +1,7 @@
 defmodule AudioFlow.PlayoutTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Audio, Playout}
+  alias AudioFlow.Audio
+  alias AudioFlow.Playout
 
   defp audio, do: %Audio{data: <<0, 0>>, sample_rate: 16_000}
 

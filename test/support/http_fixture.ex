@@ -1,4 +1,6 @@
 defmodule AudioFlow.Test.HTTPFixture do
+  @moduledoc false
+
   def start(owner, handler) do
     {:ok, listener} =
       :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}, reuseaddr: true])

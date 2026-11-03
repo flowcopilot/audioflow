@@ -1,5 +1,7 @@
 defmodule AudioFlow.ChatHTTPModelTest do
   use ExUnit.Case, async: false
+
+  alias AudioFlow.Adapters.Demo
   @moduletag :http_model
   @moduletag timeout: 120_000
 
@@ -34,7 +36,7 @@ defmodule AudioFlow.ChatHTTPModelTest do
     assert is_binary(expected) and String.trim(expected) != ""
 
     options =
-      AudioFlow.Adapters.Demo.options()
+      Demo.options()
       |> Keyword.put(
         :stt,
         {AudioFlow.Adapters.Function, run: fn _, emit -> emit.(input) end}
@@ -56,7 +58,7 @@ defmodule AudioFlow.ChatHTTPModelTest do
 
       {AudioFlow, ^session, ^turn, {:done, metrics}} ->
         assert is_integer(metrics.first_audio_us)
-        chunks |> Enum.reverse() |> Enum.join("")
+        chunks |> Enum.reverse() |> Enum.join()
 
       {AudioFlow, ^session, ^turn, {:error, reason, _}} ->
         flunk("HTTP model failed: #{inspect(reason)}")

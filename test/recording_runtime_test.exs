@@ -1,6 +1,9 @@
 defmodule AudioFlow.RecordingRuntimeTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Audio, Privacy, Recording}
+  alias AudioFlow.Adapters.Demo
+  alias AudioFlow.Audio
+  alias AudioFlow.Privacy
+  alias AudioFlow.Recording
   alias AudioFlow.Recording.Store
 
   test "owner consumes actual session success, failure and cancellation events" do
@@ -16,7 +19,7 @@ defmodule AudioFlow.RecordingRuntimeTest do
 
     for mode <- [:success, :failure, :cancel] do
       options =
-        AudioFlow.Adapters.Demo.options()
+        Demo.options()
         |> Keyword.put(
           :llm,
           {AudioFlow.Adapters.Function,

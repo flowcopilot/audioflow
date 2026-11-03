@@ -1,6 +1,9 @@
 defmodule AudioFlowUI.ExamplesTest do
   use ExUnit.Case, async: false
-  alias AudioFlowUI.{Examples, Runs, Prerequisites}
+  alias AudioFlow.Recording.Store
+  alias AudioFlowUI.Examples
+  alias AudioFlowUI.Prerequisites
+  alias AudioFlowUI.Runs
 
   defmodule EmbeddingFixture do
     @behaviour AudioFlow.Graph.Node
@@ -112,11 +115,11 @@ defmodule AudioFlowUI.ExamplesTest do
                true
              )
 
-    {:ok, store} = AudioFlow.Recording.Store.new(dir)
-    assert {:ok, record} = AudioFlow.Recording.Store.read(store, id)
+    {:ok, store} = Store.new(dir)
+    assert {:ok, record} = Store.read(store, id)
     assert [%{"text" => "You said: [email]."}] = record["streams"]
     refute Jason.encode!(record) =~ "me@example.com"
-    assert :ok = AudioFlow.Recording.Store.delete(store, id)
+    assert :ok = Store.delete(store, id)
   end
 
   test "provider prerequisites do not leak env values; no mixed-output catalog nodes" do

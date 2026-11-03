@@ -1,6 +1,9 @@
 defmodule AudioFlow.SessionPauseTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Output, Text, Adapters.Function}
+  alias AudioFlow.Adapters.Demo
+  alias AudioFlow.Adapters.Function
+  alias AudioFlow.Output
+  alias AudioFlow.Text
 
   defmodule Endpoint do
     @behaviour AudioFlow.Output
@@ -29,7 +32,7 @@ defmodule AudioFlow.SessionPauseTest do
 
   defp start(extra \\ []) do
     owner = self()
-    options = AudioFlow.Adapters.Demo.options() ++ [history: true]
+    options = Demo.options() ++ [history: true]
 
     options =
       Keyword.merge(options,

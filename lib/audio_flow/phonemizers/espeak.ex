@@ -27,15 +27,7 @@ defmodule AudioFlow.Phonemizers.ESpeak do
     parts = Regex.split(~r/([,.;:!?…—]+)/u, text, include_captures: true, trim: true)
 
     Enum.reduce_while(parts, {:ok, []}, fn part, {:ok, output} ->
-      if Regex.match?(~r/^[,.;:!?…—]+$/u, part) do
-        {:cont, {:ok, [part | output]}}
-      else
-        # Arguments go directly to the executable. Text never goes through a shell.
-        case System.cmd(executable, ["-q", "--ipa", "-v", language, "--", part]) do
-          {ipa, 0} -> {:cont, {:ok, [normalize(ipa, language) | output]}}
-          {_output, status} -> {:halt, {:error, {:espeak_exit, status}}}
-        end
-      end
+      convert_part(part, output, executable, language)
     end)
     |> case do
       {:ok, parts} ->
@@ -47,6 +39,18 @@ defmodule AudioFlow.Phonemizers.ESpeak do
     end
   rescue
     error in ErlangError -> {:error, {:espeak_start, Exception.message(error)}}
+  end
+
+  defp convert_part(part, output, executable, language) do
+    if Regex.match?(~r/^[,.;:!?…—]+$/u, part) do
+      {:cont, {:ok, [part | output]}}
+    else
+      # Arguments go directly to the executable. Text never goes through a shell.
+      case System.cmd(executable, ["-q", "--ipa", "-v", language, "--", part]) do
+        {ipa, 0} -> {:cont, {:ok, [normalize(ipa, language) | output]}}
+        {_output, status} -> {:halt, {:error, {:espeak_exit, status}}}
+      end
+    end
   end
 
   # English Kokoro v1 diphthongs and affricates use single vocabulary symbols.

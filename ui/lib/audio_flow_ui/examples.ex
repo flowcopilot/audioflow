@@ -1,7 +1,9 @@
 defmodule AudioFlowUI.Examples do
   @moduledoc "Runnable synthetic checks and editable starter graphs; no inference claims."
+  alias AudioFlow.Graph
   alias AudioFlow.Graph.Conversation
-  alias AudioFlow.{Graph, Recording}
+  alias AudioFlow.Graph.Handoff
+  alias AudioFlow.Recording
   alias AudioFlow.Recording.Store
 
   def starter("tts") do
@@ -131,7 +133,7 @@ defmodule AudioFlowUI.Examples do
     lines = String.split(script, "\n", trim: true)
     steps = Enum.map(lines, &String.split(&1, " => ", parts: 2))
 
-    if length(steps) in 1..10 and Enum.all?(steps, &(length(&1) == 2)),
+    if Enum.count_until(steps, 11) in 1..10 and Enum.all?(steps, &match?([_, _], &1)),
       do: {:ok, Enum.map(steps, fn [input, expected] -> {input, expected} end)},
       else: {:error, "Use 1–10 lines: input => exact expected reply"}
   end
@@ -222,7 +224,7 @@ defmodule AudioFlowUI.Examples do
     receive do
       {:workflow_ready, task} ->
         {:ok, _} =
-          AudioFlow.Graph.Handoff.run(%{intent: "billing"}, %{session: session, turn: turn})
+          Handoff.run(%{intent: "billing"}, %{session: session, turn: turn})
 
         send(task, outcome)
     after

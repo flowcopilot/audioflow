@@ -1,6 +1,7 @@
 defmodule AudioFlow.InputProcessingTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Audio, VoiceInput}
+  alias AudioFlow.Audio
+  alias AudioFlow.VoiceInput
 
   defmodule Turn do
     def init(opts), do: opts
@@ -29,7 +30,7 @@ defmodule AudioFlow.InputProcessingTest do
   end
 
   defp frame(x), do: :binary.copy(<<x::little-signed-16>>, 512)
-  defp audio(pcm), do: %Audio{data: pcm, sample_rate: 16000}
+  defp audio(pcm), do: %Audio{data: pcm, sample_rate: 16_000}
 
   defp input(opts) do
     VoiceInput.new(
@@ -49,16 +50,16 @@ defmodule AudioFlow.InputProcessingTest do
 
   test "semantic incomplete joins resumed speech until completion or bounded silence" do
     state = input(turn_detector: {Turn, owner: self(), probability: 0.1})
-    {[:speech_started], state} = VoiceInput.push(state, audio(frame(32000) <> frame(0)))
+    {[:speech_started], state} = VoiceInput.push(state, audio(frame(32_000) <> frame(0)))
     assert_receive {:semantic_audio, %Audio{data: pcm}}
-    assert pcm == frame(32000) <> frame(0)
-    {[], state} = VoiceInput.push(state, audio(frame(32000) <> frame(0)))
+    assert pcm == frame(32_000) <> frame(0)
+    {[], state} = VoiceInput.push(state, audio(frame(32_000) <> frame(0)))
     assert state.speaking?
 
     {[{:utterance, result, :semantic_limit}], _} =
       VoiceInput.push(state, audio(frame(0) <> frame(0)))
 
-    assert result.data == frame(32000) <> frame(0) <> frame(32000) <> :binary.copy(frame(0), 3)
+    assert result.data == frame(32_000) <> frame(0) <> frame(32_000) <> :binary.copy(frame(0), 3)
   end
 
   test "semantic completion emits after VAD silence and resets per utterance" do
@@ -67,7 +68,7 @@ defmodule AudioFlow.InputProcessingTest do
     for _ <- 1..2, reduce: state do
       state ->
         {[:speech_started, {:utterance, _, :semantic}], state} =
-          VoiceInput.push(state, audio(frame(32000) <> frame(0)))
+          VoiceInput.push(state, audio(frame(32_000) <> frame(0)))
 
         assert state.semantic_checked_at == 0
         state
@@ -80,7 +81,7 @@ defmodule AudioFlow.InputProcessingTest do
       before = System.monotonic_time(:millisecond)
 
       assert {[:speech_started, {:utterance, _, :semantic_fallback}], _} =
-               VoiceInput.push(state, audio(frame(32000) <> frame(0)))
+               VoiceInput.push(state, audio(frame(32_000) <> frame(0)))
 
       assert System.monotonic_time(:millisecond) - before < 500
     end
@@ -90,21 +91,21 @@ defmodule AudioFlow.InputProcessingTest do
     state = input(turn_detector: {Turn, owner: self(), probability: 0.1}, max_utterance_ms: 64)
 
     assert {[:speech_started, {:utterance, _, :limit}], _} =
-             VoiceInput.push(state, audio(frame(32000) <> frame(0)))
+             VoiceInput.push(state, audio(frame(32_000) <> frame(0)))
 
-    {[:speech_started], state} = VoiceInput.push(state, audio(frame(32000)))
+    {[:speech_started], state} = VoiceInput.push(state, audio(frame(32_000)))
     assert {[{:utterance, _, :end_of_stream}], _} = VoiceInput.flush(state)
   end
 
   test "preprocessing precedes VAD and preserves alignment across chunk and utterance boundaries" do
     state = input(preprocessor: {SubtractReference, []})
-    pcm = frame(32000) <> frame(32000) <> frame(32000) <> frame(0)
-    ref = frame(32000) <> frame(0) <> frame(32000) <> frame(0)
+    pcm = frame(32_000) <> frame(32_000) <> frame(32_000) <> frame(0)
+    ref = frame(32_000) <> frame(0) <> frame(32_000) <> frame(0)
     <<a::binary-size(300), b::binary>> = pcm
     <<ra::binary-size(300), rb::binary>> = ref
     {[], state} = VoiceInput.push(state, audio(a), audio(ra))
     {events, state} = VoiceInput.push(state, audio(b), audio(rb))
-    assert events == [:speech_started, {:utterance, audio(frame(32000) <> frame(0)), :silence}]
+    assert events == [:speech_started, {:utterance, audio(frame(32_000) <> frame(0)), :silence}]
     assert state.reference_pending == <<>>
     assert {[], _} = VoiceInput.flush(state)
     assert_raise ArgumentError, fn -> VoiceInput.push(state, audio(pcm), audio(<<>>)) end

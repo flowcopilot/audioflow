@@ -13,13 +13,13 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
 
       start_supervised!(AudioFlow.Models.child_spec(AudioFlow.TestVits, serving))
       result = Nx.Serving.batched_run(AudioFlow.TestVits, "Hello, my dog is cute.")
-      assert result.sampling_rate == 16000
+      assert result.sampling_rate == 16_000
       # Independent PyTorch reference in the pinned Transmuter speech guide.
-      assert Nx.size(result.audio) == 33024
+      assert Nx.size(result.audio) == 33_024
       chunks = AudioFlow.NxAdapter.speech_audio(result)
       assert Enum.all?(chunks, &AudioFlow.Audio.valid?/1)
       pcm = Enum.map_join(chunks, & &1.data)
-      assert byte_size(pcm) == 66048
+      assert byte_size(pcm) == 66_048
       samples = for <<sample::little-signed-16 <- pcm>>, do: sample
       assert Enum.max(samples) > 1000
       assert Enum.min(samples) < -1000

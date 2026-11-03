@@ -10,7 +10,8 @@ defmodule AudioFlow.Recording do
   rule. Ordered event descriptors reference those streams. PCM output is opt-in
   and is never redacted. Images, vectors, error details and metrics are omitted.
   """
-  alias AudioFlow.{Audio, Privacy}
+  alias AudioFlow.Audio
+  alias AudioFlow.Privacy
   alias AudioFlow.Recording.Store
 
   @enforce_keys [:session, :store, :redactor]
@@ -71,27 +72,31 @@ defmodule AudioFlow.Recording do
   defp consume_event(recorder, _), do: {:ok, recorder, nil}
 
   defp append(recorder, kind, value, node) do
-    event =
-      cond do
-        kind in [:text, :transcript, :description] and is_binary(value) ->
-          %{kind: Atom.to_string(kind), node: node_id(node), text: value}
+    case recorded_event(recorder, kind, value, node) do
+      nil -> {:ok, recorder, nil}
+      event -> store_event(recorder, event)
+    end
+  end
 
-        kind == :audio and recorder.audio and Audio.valid?(value) ->
-          %{
-            kind: "audio",
-            node: node_id(node),
-            pcm_s16le: Base.encode64(value.data),
-            sample_rate: value.sample_rate
-          }
+  defp recorded_event(_recorder, kind, value, node)
+       when kind in [:text, :transcript, :description] and is_binary(value),
+       do: %{kind: Atom.to_string(kind), node: node_id(node), text: value}
 
-        true ->
-          nil
-      end
+  defp recorded_event(recorder, :audio, value, node) do
+    if recorder.audio and Audio.valid?(value) do
+      %{
+        kind: "audio",
+        node: node_id(node),
+        pcm_s16le: Base.encode64(value.data),
+        sample_rate: value.sample_rate
+      }
+    end
+  end
 
+  defp recorded_event(_recorder, _kind, _value, _node), do: nil
+
+  defp store_event(recorder, event) do
     cond do
-      event == nil ->
-        {:ok, recorder, nil}
-
       recorder.count >= recorder.max_events ->
         fail(recorder, :event_limit)
 

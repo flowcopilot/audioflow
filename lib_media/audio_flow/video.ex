@@ -63,12 +63,27 @@ defmodule AudioFlow.Video do
         normalize_timestamps?: true
       ])
 
+    validate_input!(options)
+    validate_sizes!(options)
+    Membrane.Pipeline.start_link(AudioFlow.VideoReader, Keyword.put(options, :owner, self()))
+  end
+
+  def next_frame(reader, timeout \\ 30_000),
+    do: Membrane.Pipeline.call(reader, :next_frame, timeout)
+
+  def close(reader), do: Membrane.Pipeline.terminate(reader, force?: true)
+
+  defp validate_input!(options) do
     if options[:location] == nil == (options[:source] == nil),
       do: raise(ArgumentError, "supply exactly one of :location or :source")
 
     if not is_boolean(options[:normalize_timestamps?]),
       do: raise(ArgumentError, "normalize_timestamps? must be boolean")
 
+    :ok
+  end
+
+  defp validate_sizes!(options) do
     for key <- [:interval_ms, :max_frame_bytes] do
       if not (is_integer(options[key]) and options[key] > 0),
         do: raise(ArgumentError, "#{key} must be positive")
@@ -79,11 +94,6 @@ defmodule AudioFlow.Video do
         do: raise(ArgumentError, "#{key} must be a positive even integer")
     end
 
-    Membrane.Pipeline.start_link(AudioFlow.VideoReader, Keyword.put(options, :owner, self()))
+    :ok
   end
-
-  def next_frame(reader, timeout \\ 30_000),
-    do: Membrane.Pipeline.call(reader, :next_frame, timeout)
-
-  def close(reader), do: Membrane.Pipeline.terminate(reader, force?: true)
 end

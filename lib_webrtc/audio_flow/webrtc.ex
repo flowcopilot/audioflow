@@ -13,13 +13,11 @@ defmodule AudioFlow.WebRTC do
   """
   use GenServer
 
-  alias ExWebRTC.{
-    PeerConnection,
-    MediaStreamTrack,
-    SessionDescription,
-    ICECandidate,
-    RTPCodecParameters
-  }
+  alias ExWebRTC.ICECandidate
+  alias ExWebRTC.MediaStreamTrack
+  alias ExWebRTC.PeerConnection
+  alias ExWebRTC.RTPCodecParameters
+  alias ExWebRTC.SessionDescription
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
   def offer(pid), do: GenServer.call(pid, :offer)
@@ -105,17 +103,8 @@ defmodule AudioFlow.WebRTC do
   def handle_call({:signal, %{"type" => type, "sdp" => sdp} = json}, _, s)
       when type in ["offer", "answer"] and is_binary(sdp) and byte_size(sdp) <= 65_536 do
     result =
-      with :ok <- PeerConnection.set_remote_description(s.pc, SessionDescription.from_json(json)) do
-        if type == "offer" do
-          with {:ok, answer} <- PeerConnection.create_answer(s.pc),
-               :ok <- PeerConnection.set_local_description(s.pc, answer) do
-            send(s.owner, {__MODULE__, self(), {:signal, SessionDescription.to_json(answer)}})
-            :ok
-          end
-        else
-          :ok
-        end
-      end
+      with :ok <- PeerConnection.set_remote_description(s.pc, SessionDescription.from_json(json)),
+           do: answer(s, type)
 
     {:reply, result, s}
   rescue
@@ -146,39 +135,9 @@ defmodule AudioFlow.WebRTC do
     do: {:reply, :ok, if(s.key == key, do: %{s | key: nil}, else: s)}
 
   def handle_call({:publish, key, kind, data, pts}, _, s) do
-    cond do
-      key == nil or key != s.key ->
-        {:reply, {:error, :stale_turn}, s}
-
-      not s.connected ->
-        {:reply, {:error, :not_connected}, s}
-
-      not valid?(kind, data, pts) ->
-        {:reply, {:error, :invalid_media}, s}
-
-      pts < Map.get(s.pts, kind, 0) ->
-        {:reply, {:error, :regressing_timestamp}, s}
-
-      true ->
-        chunks = if kind == :video, do: vp8(data), else: [data]
-
-        timestamp =
-          rem(div(pts * if(kind == :video, do: 90_000, else: 8000), 1_000_000), 4_294_967_296)
-
-        seq =
-          Enum.reduce(Enum.with_index(chunks), s.seq[kind], fn {payload, i}, seq ->
-            packet =
-              ExRTP.Packet.new(payload,
-                timestamp: timestamp,
-                sequence_number: seq,
-                marker: kind == :video and i == length(chunks) - 1
-              )
-
-            PeerConnection.send_rtp(s.pc, s.tracks[kind], packet)
-            rem(seq + 1, 65_536)
-          end)
-
-        {:reply, :ok, %{s | seq: Map.put(s.seq, kind, seq), pts: Map.put(s.pts, kind, pts)}}
+    case publish_error(s, key, kind, data, pts) do
+      nil -> {:reply, :ok, send_media(s, kind, data, pts)}
+      reason -> {:reply, {:error, reason}, s}
     end
   end
 
@@ -215,6 +174,48 @@ defmodule AudioFlow.WebRTC do
   def terminate(_, s) do
     if Process.alive?(s.pc), do: PeerConnection.stop(s.pc)
     :ok
+  end
+
+  defp answer(s, "offer") do
+    with {:ok, answer} <- PeerConnection.create_answer(s.pc),
+         :ok <- PeerConnection.set_local_description(s.pc, answer) do
+      send(s.owner, {__MODULE__, self(), {:signal, SessionDescription.to_json(answer)}})
+      :ok
+    end
+  end
+
+  defp answer(_s, _type), do: :ok
+
+  defp publish_error(s, key, kind, data, pts) do
+    cond do
+      key == nil or key != s.key -> :stale_turn
+      not s.connected -> :not_connected
+      not valid?(kind, data, pts) -> :invalid_media
+      pts < Map.get(s.pts, kind, 0) -> :regressing_timestamp
+      true -> nil
+    end
+  end
+
+  defp send_media(s, kind, data, pts) do
+    chunks = if kind == :video, do: vp8(data), else: [data]
+
+    timestamp =
+      rem(div(pts * if(kind == :video, do: 90_000, else: 8000), 1_000_000), 4_294_967_296)
+
+    seq =
+      Enum.reduce(Enum.with_index(chunks), s.seq[kind], fn {payload, i}, seq ->
+        packet =
+          ExRTP.Packet.new(payload,
+            timestamp: timestamp,
+            sequence_number: seq,
+            marker: kind == :video and i == length(chunks) - 1
+          )
+
+        PeerConnection.send_rtp(s.pc, s.tracks[kind], packet)
+        rem(seq + 1, 65_536)
+      end)
+
+    %{s | seq: Map.put(s.seq, kind, seq), pts: Map.put(s.pts, kind, pts)}
   end
 
   defp valid?(:audio, data, pts),

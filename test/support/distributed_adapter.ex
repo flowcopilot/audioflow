@@ -1,4 +1,6 @@
 defmodule AudioFlow.Test.DistributedAdapter do
+  @moduledoc false
+
   @behaviour AudioFlow.Adapter
 
   @impl true

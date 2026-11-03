@@ -1,6 +1,7 @@
 defmodule AudioFlow.SessionTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Audio, Adapters.Demo}
+  alias AudioFlow.Adapters.Demo
+  alias AudioFlow.Audio
 
   defp audio, do: %Audio{data: <<0, 0>>, sample_rate: 16_000}
 

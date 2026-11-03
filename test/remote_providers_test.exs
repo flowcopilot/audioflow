@@ -1,7 +1,12 @@
 defmodule AudioFlow.RemoteProvidersTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.Adapters.{OpenAIRealtime, GeminiLive, Deepgram, Cartesia, ElevenLabs}
+  alias AudioFlow.Adapters.Cartesia
+  alias AudioFlow.Adapters.Deepgram
+  alias AudioFlow.Adapters.ElevenLabs
+  alias AudioFlow.Adapters.GeminiLive
+  alias AudioFlow.Adapters.OpenAIRealtime
   alias AudioFlow.Audio
+  alias AudioFlow.Recording.Store
   alias AudioFlow.Test.HTTPFixture, as: HTTP
 
   defmodule SocketFixture do
@@ -68,7 +73,7 @@ defmodule AudioFlow.RemoteProvidersTest do
     assert_receive {:connected, socket}
     assert_receive {:client, ^socket, :text, %{"type" => "session.update", "session" => session}}
     assert session["audio"]["input"]["turn_detection"] == nil
-    assert session["audio"]["output"]["format"] == %{"type" => "audio/pcm", "rate" => 24000}
+    assert session["audio"]["output"]["format"] == %{"type" => "audio/pcm", "rate" => 24_000}
     refute_receive {:client, ^socket, _, _}, 20
     event(socket, %{type: "session.updated"})
 
@@ -198,7 +203,7 @@ defmodule AudioFlow.RemoteProvidersTest do
       )
 
     on_exit(fn -> File.rm_rf!(root) end)
-    {:ok, store} = AudioFlow.Recording.Store.new(root)
+    {:ok, store} = Store.new(root)
     {:ok, session} = AudioFlow.start_session(speech_to_speech: {GeminiLive, socket_options()})
     on_exit(fn -> if Process.alive?(session), do: AudioFlow.stop_session(session) end)
 
@@ -231,7 +236,7 @@ defmodule AudioFlow.RemoteProvidersTest do
     })
 
     id = record_provider_turn(recorder, session, turn)
-    assert {:ok, artifact} = AudioFlow.Recording.Store.read(store, id)
+    assert {:ok, artifact} = Store.read(store, id)
     assert artifact["status"] == "done"
 
     assert Enum.sort(Enum.map(artifact["streams"], &{&1["kind"], &1["text"]})) ==
@@ -413,7 +418,7 @@ defmodule AudioFlow.RemoteProvidersTest do
         assert request.body["output_format"] == %{
                  "container" => "raw",
                  "encoding" => "pcm_s16le",
-                 "sample_rate" => 24000
+                 "sample_rate" => 24_000
                }
       else
         assert request.headers["xi-api-key"] == "key"

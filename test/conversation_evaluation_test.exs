@@ -1,7 +1,9 @@
 defmodule AudioFlow.ConversationEvaluationTest do
   use ExUnit.Case, async: true
+  alias AudioFlow.Adapters.ChatHTTP
+  alias AudioFlow.Adapters.Demo
+  alias AudioFlow.Adapters.Function
   alias AudioFlow.Evaluation.Conversation, as: Conversation
-  alias AudioFlow.Adapters.{ChatHTTP, Demo, Function}
   alias AudioFlow.Test.HTTPFixture, as: HTTP
 
   defmodule Lookup do

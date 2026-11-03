@@ -1,13 +1,16 @@
 defmodule AudioFlow.NativeInputProcessingTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Audio, PacketWorker, SmartTurn, SpeexDSP}
+  alias AudioFlow.Audio
+  alias AudioFlow.PacketWorker
+  alias AudioFlow.SmartTurn
+  alias AudioFlow.SpeexDSP
 
   defp pcm(values), do: for(x <- values, into: <<>>, do: <<x::little-signed-16>>)
 
   defp energy(data),
     do: for(<<x::little-signed-16 <- data>>, reduce: 0.0, do: (sum -> sum + x * x))
 
-  defp noise(i), do: rem(i * 7919 + i * i * 13, 16001) - 8000
+  defp noise(i), do: rem(i * 7919 + i * i * 13, 16_001) - 8000
 
   @tag skip: is_nil(System.get_env("AUDIOFLOW_SPEEX_EXECUTABLE"))
   test "native stationary noise suppression reduces energy after adaptation" do
@@ -63,12 +66,12 @@ defmodule AudioFlow.NativeInputProcessingTest do
     {:ok, worker} =
       SmartTurn.start_link(
         executable: System.fetch_env!("AUDIOFLOW_SMART_TURN_PYTHON"),
-        args: [Path.expand("priv/audio_flow/smart_turn.py"), model]
+        args: [Application.app_dir(:audio_flow, "priv/audio_flow/smart_turn.py"), model]
       )
 
     on_exit(fn -> if Process.alive?(worker), do: GenServer.stop(worker) end)
-    data = pcm(for i <- 0..15999, do: noise(i))
-    audio = %Audio{sample_rate: 16000, data: data}
+    data = pcm(for i <- 0..15_999, do: noise(i))
+    audio = %Audio{sample_rate: 16_000, data: data}
     probability = SmartTurn.predict(audio, worker)
     assert probability >= 0 and probability <= 1
     # Captured independently using the pinned upstream WhisperFeatureExtractor recipe.

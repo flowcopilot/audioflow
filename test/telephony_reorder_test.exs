@@ -1,5 +1,6 @@
 defmodule AudioFlow.TelephonyReorderTest do
   use ExUnit.Case, async: true
+  alias AudioFlow.Adapters.Demo
   alias AudioFlow.Telephony.WebSocket, as: Handler
 
   defp start(options \\ []) do
@@ -8,7 +9,7 @@ defmodule AudioFlow.TelephonyReorderTest do
         Keyword.merge(
           [
             provider: :telnyx,
-            session: AudioFlow.Adapters.Demo.options(),
+            session: Demo.options(),
             vad: {AudioFlow.Test.AlwaysSpeechDetector, []}
           ],
           options

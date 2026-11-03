@@ -28,30 +28,34 @@ defmodule AudioFlow.Recording.Store do
   def write(store, record) do
     data = JSON.encode!(record)
 
-    if byte_size(data) > store.max_bytes do
-      {:error, :record_too_large}
-    else
-      id =
-        "#{System.system_time(:millisecond)}-#{Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)}.json"
+    if byte_size(data) > store.max_bytes,
+      do: {:error, :record_too_large},
+      else: write_file(store, data)
+  end
 
-      temporary = Path.join(store.root, ".#{id}.tmp")
+  defp write_file(store, data) do
+    id =
+      "#{System.system_time(:millisecond)}-#{Base.encode16(:crypto.strong_rand_bytes(16), case: :lower)}.json"
 
-      with :ok <- safe_directory(store.root),
-           {:ok, file} <- File.open(temporary, [:write, :binary, :exclusive]) do
-        result =
-          with :ok <- File.chmod(temporary, 0o600),
-               :ok <- IO.binwrite(file, data),
-               :ok <- :file.sync(file),
-               :ok <- File.close(file),
-               :ok <- File.rename(temporary, Path.join(store.root, id)),
-               {:ok, _} <- cleanup(store) do
-            {:ok, id}
-          end
+    temporary = Path.join(store.root, ".#{id}.tmp")
 
-        File.close(file)
-        File.rm(temporary)
-        result
-      end
+    with :ok <- safe_directory(store.root),
+         {:ok, file} <- File.open(temporary, [:write, :binary, :exclusive]) do
+      result = persist(store, file, temporary, id, data)
+      File.close(file)
+      File.rm(temporary)
+      result
+    end
+  end
+
+  defp persist(store, file, temporary, id, data) do
+    with :ok <- File.chmod(temporary, 0o600),
+         :ok <- IO.binwrite(file, data),
+         :ok <- :file.sync(file),
+         :ok <- File.close(file),
+         :ok <- File.rename(temporary, Path.join(store.root, id)),
+         {:ok, _} <- cleanup(store) do
+      {:ok, id}
     end
   end
 
@@ -97,12 +101,16 @@ defmodule AudioFlow.Recording.Store do
       excess = Enum.take(live, max(0, length(live) - store.max_records))
 
       Enum.reduce_while(expired ++ excess, {:ok, []}, fn {id, _}, {:ok, removed} ->
-        case delete(store, id) do
-          :ok -> {:cont, {:ok, [id | removed]}}
-          {:error, :enoent} -> {:cont, {:ok, removed}}
-          error -> {:halt, error}
-        end
+        remove_record(store, id, removed)
       end)
+    end
+  end
+
+  defp remove_record(store, id, removed) do
+    case delete(store, id) do
+      :ok -> {:cont, {:ok, [id | removed]}}
+      {:error, :enoent} -> {:cont, {:ok, removed}}
+      error -> {:halt, error}
     end
   end
 
@@ -112,26 +120,30 @@ defmodule AudioFlow.Recording.Store do
     cutoff = System.system_time(:millisecond) - store.max_age_ms
 
     with {:ok, names} <- File.ls(store.root) do
-      Enum.reduce_while(names, :ok, fn name, :ok ->
-        case Regex.run(~r/\A\.([0-9]+)-[a-f0-9]{32}\.json\.tmp\z/, name) do
-          [_, timestamp] ->
-            path = Path.join(store.root, name)
+      Enum.reduce_while(names, :ok, fn name, :ok -> remove_temporary(store, name, cutoff) end)
+    end
+  end
 
-            if String.to_integer(timestamp) <= cutoff and
-                 match?({:ok, %{type: :regular}}, File.lstat(path)) do
-              case File.rm(path) do
-                :ok -> {:cont, :ok}
-                {:error, :enoent} -> {:cont, :ok}
-                error -> {:halt, error}
-              end
-            else
-              {:cont, :ok}
-            end
+  defp remove_temporary(store, name, cutoff) do
+    case Regex.run(~r/\A\.([0-9]+)-[a-f0-9]{32}\.json\.tmp\z/, name) do
+      [_, timestamp] ->
+        path = Path.join(store.root, name)
 
-          _ ->
-            {:cont, :ok}
-        end
-      end)
+        if String.to_integer(timestamp) <= cutoff and
+             match?({:ok, %{type: :regular}}, File.lstat(path)),
+           do: remove_temporary_file(path),
+           else: {:cont, :ok}
+
+      _ ->
+        {:cont, :ok}
+    end
+  end
+
+  defp remove_temporary_file(path) do
+    case File.rm(path) do
+      :ok -> {:cont, :ok}
+      {:error, :enoent} -> {:cont, :ok}
+      error -> {:halt, error}
     end
   end
 

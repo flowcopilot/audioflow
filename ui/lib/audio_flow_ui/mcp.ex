@@ -18,7 +18,7 @@ defmodule AudioFlowUI.MCP do
     MCP.EvaluateConversation
   ]
 
-  @doc false
+  @doc "Builds the tool result for `graph`: the graph and its validation errors."
   def graph_result(graph),
     do: %{
       "graph" => graph,
@@ -26,7 +26,7 @@ defmodule AudioFlowUI.MCP do
       "prerequisites" => AudioFlowUI.Prerequisites.errors(graph)
     }
 
-  @doc false
+  @doc "Fetches a saved graph, with an error message for an unknown id."
   def fetch(id) do
     case AudioFlowUI.Graphs.get(id) do
       {:ok, graph} -> {:ok, graph}
@@ -34,7 +34,7 @@ defmodule AudioFlowUI.MCP do
     end
   end
 
-  @doc false
+  @doc "Formats an error or a list of errors as tool result text."
   def message(errors) when is_list(errors), do: Enum.join(errors, "\n")
   def message(error) when is_binary(error), do: error
   def message(error), do: inspect(error)

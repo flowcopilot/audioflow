@@ -1,7 +1,10 @@
 if System.get_env("AUDIOFLOW_ML") == "1" do
   defmodule AudioFlow.GraphModelsTest do
     use ExUnit.Case, async: false
-    alias AudioFlow.{Graph, Servings, Text}
+    alias AudioFlow.Graph
+    alias AudioFlow.Graph.Nodes.Models
+    alias AudioFlow.Servings
+    alias AudioFlow.Text
 
     setup do
       start_supervised!(Servings)
@@ -47,7 +50,7 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
     end
 
     test "every model node type has a valid spec and adapter" do
-      catalog = Graph.catalog([Graph.Nodes.Input, Graph.Nodes.Models])
+      catalog = Graph.catalog([Graph.Nodes.Input, Models])
 
       for spec <- Graph.node_types(catalog), spec.input != nil do
         options =
@@ -56,14 +59,14 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
           end
 
         assert {AudioFlow.Graph.ModelAdapter, adapter} =
-                 Graph.Nodes.Models.adapter(spec.type, options)
+                 Models.adapter(spec.type, options)
 
         assert is_function(adapter[:build], 0)
       end
 
       # British voices share one serving with British English phonemes.
       key = fn voice ->
-        {_, options} = Graph.Nodes.Models.adapter("kokoro.tts", %{voice: voice})
+        {_, options} = Models.adapter("kokoro.tts", %{voice: voice})
         options[:key]
       end
 
@@ -84,7 +87,7 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
         "settings" => %{"timeout_ms" => 600_000}
       }
 
-      catalog = Graph.catalog([Graph.Nodes.Input, Graph.Nodes.Models])
+      catalog = Graph.catalog([Graph.Nodes.Input, Models])
       {:ok, options} = Graph.session_options(graph, catalog)
       {:ok, session} = AudioFlow.start_session(options)
       {:ok, turn} = AudioFlow.submit(session, %Text{data: "Say hello."})
@@ -92,6 +95,8 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
       assert_receive {AudioFlow, ^session, ^turn, {:text, text, "llm"}}, 600_000
       assert String.trim(text) != ""
       assert_receive {AudioFlow, ^session, ^turn, {:vector, vector, "embed"}}, 600_000
+      # Exact size check.
+      # credo:disable-for-next-line ExSlop.Check.Refactor.LengthComparison
       assert length(vector) == 384
       assert_receive {AudioFlow, ^session, ^turn, {:done, _}}, 600_000
     end
