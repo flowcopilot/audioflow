@@ -118,13 +118,28 @@ defmodule AudioFlow.Graph.Runner do
 
     {module, _} = step.adapter
 
+    adapter =
+      case step.adapter do
+        {AudioFlow.Adapters.ChatHTTP, options} ->
+          context =
+            Map.merge(
+              Keyword.get(options, :tool_context, %{}),
+              Map.get(run.callbacks, :telemetry, %{})
+            )
+
+          {AudioFlow.Adapters.ChatHTTP, Keyword.put(options, :tool_context, context)}
+
+        other ->
+          other
+      end
+
     metadata =
       run.callbacks
       |> Map.get(:telemetry, %{})
       |> Map.merge(%{stage: step.type, node: step.id, adapter: module})
 
     AudioFlow.Telemetry.stage(metadata, fn ->
-      Adapter.run(step.adapter, value, fn output ->
+      Adapter.run(adapter, value, fn output ->
         :ok = run.callbacks.emit.(step, output)
         Enum.each(step.targets, &deliver(run, step.id, &1, output))
         :ok
