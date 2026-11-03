@@ -57,9 +57,9 @@ defmodule AudioFlow.ChatHTTPTest do
     assert request.body == %{
              "model" => "fixture-model",
              "stream" => true,
-             "n" => 1,
+             "stream_options" => %{"include_usage" => true},
              "temperature" => 0,
-             "max_completion_tokens" => 64,
+             "max_tokens" => 64,
              "messages" => [
                %{"role" => "system", "content" => "Be brief."},
                %{"role" => "user", "content" => "First"},

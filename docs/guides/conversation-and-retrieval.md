@@ -43,8 +43,8 @@ config :audio_flow, :chat_tool_profiles, %{
 }
 ```
 
-Set the triage `llm.chat_http` node's `tools_profile` option to `"triage"`, its
-`system` prompt to describe the billing intent, and the billing node's profile to
+Set the triage `llm.req_llm` node's `tools_profile` option to `"triage"`, its
+`system_prompt` prompt to describe the billing intent, and the billing node's profile to
 `"billing"`. The graph runner supplies `%{session: pid, turn: ref}` as tool context.
 `AudioFlow.Graph.Handoff` accepts an `intent` string and stages `{:intent, intent}`.
 It checks the turn reference so late tool results cannot affect another turn.
@@ -59,7 +59,7 @@ a required `processing` phase. Conversation states deliberately live above that
 strategy, rather than treating an execution phase as an agent persona. Existing
 Jido action execution through `AudioFlow.Tool` remains unchanged.
 
-State plans compile once. Change a state's `system` and `tools_profile` before
+State plans compile once. Change a state's `system_prompt` and `tools_profile` before
 constructing the conversation. Graph settings other than history do not override
 session limits per state; set timeout and event limits on `start_session/2`.
 The UI lists retrieval nodes, but conversation authoring/running currently uses

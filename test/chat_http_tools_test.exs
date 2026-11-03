@@ -100,7 +100,7 @@ defmodule AudioFlow.ChatHTTPToolsTest do
     assert_receive {:http_request, _, second}
 
     assert [_system, _user, assistant, weather_result, clock_result] = second.body["messages"]
-    assert assistant["role"] == "assistant" and assistant["content"] == nil
+    assert assistant["role"] == "assistant" and assistant["content"] in [nil, ""]
 
     assert assistant["tool_calls"] == [
              %{
@@ -111,13 +111,19 @@ defmodule AudioFlow.ChatHTTPToolsTest do
              %{
                "id" => "call_b",
                "type" => "function",
-               "function" => %{"name" => "clock", "arguments" => ""}
+               "function" => %{"name" => "clock", "arguments" => "{}"}
              }
            ]
 
     assert %{"role" => "tool", "tool_call_id" => "call_a", "content" => content} = weather_result
     assert JSON.decode!(content) == %{"city" => "Oslo", "forecast" => "sun", "unit" => "C"}
-    assert clock_result == %{"role" => "tool", "tool_call_id" => "call_b", "content" => "12:00"}
+
+    assert clock_result == %{
+             "role" => "tool",
+             "name" => "clock",
+             "tool_call_id" => "call_b",
+             "content" => "12:00"
+           }
   end
 
   test "text before a call is spoken in place of the filler and kept in the assistant message" do

@@ -88,11 +88,13 @@ defmodule Chat.Setup do
            language: s["language"]
          ]},
       llm:
-        {Adapters.ChatHTTP,
+        {Adapters.ReqLLM,
          [
-           endpoint: env.("CHAT_HTTP_ENDPOINT"),
-           model: env.("CHAT_HTTP_MODEL"),
-           api_key: key(env, "CHAT_HTTP_API_KEY")
+           base_url: String.replace_suffix(env.("CHAT_HTTP_ENDPOINT"), "/chat/completions", ""),
+           model: %{provider: :openai, id: env.("CHAT_HTTP_MODEL")},
+           system_prompt: AudioFlow.Prompt.default_system(),
+           max_tokens: 128,
+           api_key: env.("CHAT_HTTP_API_KEY") || "local"
          ]},
       tts: tts,
       history: true
