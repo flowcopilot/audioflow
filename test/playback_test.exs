@@ -138,6 +138,35 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
       assert %{queued_bytes: 0, key: nil} = Playback.stats(player)
     end
 
+    test "endpoint acknowledgements update offsets without treating dispatch as heard" do
+      player = player()
+
+      options =
+        AudioFlow.Adapters.Demo.options()
+        |> Keyword.put(:output, {Playback, player})
+        |> Keyword.put(
+          :tts,
+          {AudioFlow.Adapters.Function, run: fn _, emit -> emit.(audio(1)) end}
+        )
+
+      {:ok, session} = AudioFlow.start_session(options)
+      on_exit(fn -> if Process.alive?(session), do: AudioFlow.stop_session(session) end)
+      {:ok, turn} = AudioFlow.submit(session, audio(0))
+      key = {session, turn}
+      assert_receive {:sink_ready, sink}, 2000
+      assert_receive {AudioFlow, ^session, ^turn, {:done, _}}
+      assert %{played_ns: 0} = Playback.stats(player)
+      demand(sink, 1)
+      assert_receive {:played, ^sink, _}, 2000
+      assert_receive {Playback, ^player, ^key, :drained}, 2000
+      assert :ok = Playback.acknowledge(player, key, 125_000)
+      assert %{played_ns: 125_000, dispatched_ns: 125_000} = Playback.stats(player)
+      assert {:error, :invalid_playback_offset} = Playback.acknowledge(player, key, 125_001)
+      assert {:error, :invalid_playback_offset} = Playback.acknowledge(player, key, 0)
+      assert :ok = AudioFlow.cancel(session)
+      assert {:error, :stale_turn} = Playback.acknowledge(player, key, 125_000)
+    end
+
     test "an abrupt session exit closes its output pipeline" do
       player = player()
       options = Keyword.put(AudioFlow.Adapters.Demo.options(), :output, {Playback, player})
