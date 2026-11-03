@@ -31,6 +31,22 @@ On the preceding combined base, the parent also passed the optional WebRTC suite
 and official PipecatClient/server test, typecheck and production build. Those
 counts predate these acceptance additions. App session results remain pending.
 
+The parent subsequently integrated app PRs #38/#39 and Session bridge #40:
+dashboard **26 passed**, chat demo **7 passed**, browser playback-clock unit test
+**1 passed**, and both supported `mix assets.build` commands passed. These are
+LiveView/engine and JavaScript-fixture checks, not interactive browser/device
+verification. The latest optional WebRTC suite passed **187 tests** (3 skipped,
+5 excluded), and `examples/network/voice_agent.exs` completed actual local
+ICE/DTLS/SRTP negotiation with real Session routing and explicitly synthetic
+Demo inference. The encoded publication example remains independently checked.
+Chat demo runs on Linux without EMLX; Apple native mode remains platform gated.
+
+`.github/workflows/tests.yml` repeats the credential-free root, telephony,
+official Pipecat SDK, dashboard and chat tests and production asset builds on
+pull requests. Native model, real database, WebRTC and physical device checks
+remain separate explicit commands; adding the workflow does not claim its
+hosted run has already passed.
+
 ## Coverage matrix
 
 | Capability / PR | Concrete validation | Evidence class | Example entry point / remaining boundary |
