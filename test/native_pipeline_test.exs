@@ -5,7 +5,10 @@ if System.get_env("AUDIOFLOW_ML") == "1" and System.get_env("AUDIOFLOW_MEDIA") =
     @moduletag :tmp_dir
     @moduletag timeout: 600_000
     @moduletag capture_log: true
-    alias AudioFlow.{Audio, Models, NxAdapter, Playback}
+    alias AudioFlow.Audio
+    alias AudioFlow.Models
+    alias AudioFlow.NxAdapter
+    alias AudioFlow.Playback
     alias Membrane.Testing.Notification
 
     test "recorded speech crosses the real Membrane, Whisper, Qwen3, and Kokoro path", %{
@@ -90,7 +93,7 @@ if System.get_env("AUDIOFLOW_ML") == "1" and System.get_env("AUDIOFLOW_MEDIA") =
 
       source = %AudioFlow.PCMFileSource{
         location: input_path,
-        stream_format: %Membrane.RawAudio{sample_format: :s16le, sample_rate: 16000, channels: 1}
+        stream_format: %Membrane.RawAudio{sample_format: :s16le, sample_rate: 16_000, channels: 1}
       }
 
       {:ok, _supervisor, input} =
@@ -119,8 +122,8 @@ if System.get_env("AUDIOFLOW_ML") == "1" and System.get_env("AUDIOFLOW_MEDIA") =
           System.monotonic_time(:millisecond) + 180_000
         )
 
-      transcript = state.transcripts |> Enum.reverse() |> Enum.join("")
-      reply = state.texts |> Enum.reverse() |> Enum.join("")
+      transcript = state.transcripts |> Enum.reverse() |> Enum.join()
+      reply = state.texts |> Enum.reverse() |> Enum.join()
       audio = state.audio |> Enum.reverse() |> IO.iodata_to_binary()
       assert state.accepted == 1
       assert String.contains?(String.downcase(transcript), "middle classes")
@@ -168,7 +171,7 @@ if System.get_env("AUDIOFLOW_ML") == "1" and System.get_env("AUDIOFLOW_MEDIA") =
             %{state | texts: [text | state.texts]}
 
           {AudioFlow, ^session, _, {:audio, %Audio{data: pcm, sample_rate: rate}}} ->
-            assert rate == 24000
+            assert rate == 24_000
             %{state | audio: [pcm | state.audio]}
 
           {AudioFlow, ^session, _, {:done, metrics}} ->

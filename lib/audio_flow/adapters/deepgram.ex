@@ -42,8 +42,7 @@ defmodule AudioFlow.Adapters.Deepgram do
         },
         seen
         when is_binary(text) ->
-          if text != "", do: :ok = emit.(if(seen, do: " " <> text, else: text))
-          {:cont, seen or text != "", []}
+          final_transcript(text, seen, emit)
 
         %{"type" => "Metadata"}, _ ->
           :done
@@ -59,5 +58,10 @@ defmodule AudioFlow.Adapters.Deepgram do
       end,
       options
     )
+  end
+
+  defp final_transcript(text, seen, emit) do
+    if text != "", do: :ok = emit.(if(seen, do: " " <> text, else: text))
+    {:cont, seen or text != "", []}
   end
 end

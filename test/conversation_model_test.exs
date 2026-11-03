@@ -1,6 +1,8 @@
 if System.get_env("AUDIOFLOW_ML") == "1" do
   defmodule AudioFlow.ConversationModelTest do
     use ExUnit.Case, async: false
+
+    alias AudioFlow.Adapters.Demo
     @moduletag :model
     @moduletag :tmp_dir
     @moduletag timeout: 600_000
@@ -18,7 +20,7 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
       start_supervised!(AudioFlow.Models.child_spec(AudioFlow.ConversationLLM, serving))
 
       options =
-        AudioFlow.Adapters.Demo.options()
+        Demo.options()
         |> Keyword.put(:history, true)
         |> Keyword.put(:timeout_ms, 120_000)
         |> Keyword.put(
@@ -62,7 +64,7 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
 
         {AudioFlow, ^session, ^turn, {:done, metrics}} ->
           assert is_integer(metrics.first_audio_us)
-          chunks |> Enum.reverse() |> Enum.join("")
+          chunks |> Enum.reverse() |> Enum.join()
 
         {AudioFlow, ^session, ^turn, {:error, reason, _}} ->
           flunk("Conversation failed: #{inspect(reason)}")

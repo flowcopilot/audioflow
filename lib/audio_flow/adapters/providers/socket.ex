@@ -13,9 +13,7 @@ defmodule AudioFlow.Adapters.Providers.Socket do
     timeout = positive!(options, :timeout_ms, 30_000)
     limit = positive!(options, :max_response_bytes, 16_777_216)
     deadline = System.monotonic_time(:millisecond) + timeout
-    scheme = if uri.scheme == "wss", do: :https, else: :http
-    port = uri.port || if(scheme == :https, do: 443, else: 80)
-    path = (uri.path || "/") <> if(uri.query, do: "?" <> uri.query, else: "")
+    {scheme, port, path} = target(uri)
 
     case Mint.HTTP.connect(scheme, uri.host, port,
            mode: :passive,
@@ -23,33 +21,34 @@ defmodule AudioFlow.Adapters.Providers.Socket do
            transport_opts: [timeout: timeout]
          ) do
       {:ok, conn} ->
-        try do
-          {:ok, conn, ref} =
-            check(WS.upgrade(if(scheme == :https, do: :wss, else: :ws), conn, path, headers))
-
-          {conn, status, headers, pending} = handshake(conn, ref, deadline, nil, [])
-          {:ok, conn, ws} = check(WS.new(conn, ref, status, headers, mode: :passive))
-
-          socket = %{
-            conn: conn,
-            ws: ws,
-            ref: ref,
-            deadline: deadline,
-            bytes: 0,
-            limit: limit
-          }
-
-          socket = send_frames(socket, frames)
-          loop(socket, pending, state, handler)
-        catch
-          {:provider_socket, reason} -> {:error, reason}
-        after
-          Mint.HTTP.close(conn)
-        end
+        socket = %{conn: conn, ws: nil, ref: nil, deadline: deadline, bytes: 0, limit: limit}
+        upgrade(socket, scheme, path, headers, {frames, state, handler})
 
       {:error, _} ->
         {:error, :connect_failed}
     end
+  end
+
+  defp target(uri) do
+    scheme = if uri.scheme == "wss", do: :https, else: :http
+    port = uri.port || if(scheme == :https, do: 443, else: 80)
+    path = (uri.path || "/") <> if(uri.query, do: "?" <> uri.query, else: "")
+    {scheme, port, path}
+  end
+
+  defp upgrade(%{conn: conn} = socket, scheme, path, headers, {frames, state, handler}) do
+    {:ok, conn, ref} =
+      check(WS.upgrade(if(scheme == :https, do: :wss, else: :ws), conn, path, headers))
+
+    {conn, status, headers, pending} = handshake(conn, ref, socket.deadline, nil, [])
+    {:ok, conn, ws} = check(WS.new(conn, ref, status, headers, mode: :passive))
+
+    socket = send_frames(%{socket | conn: conn, ws: ws, ref: ref}, frames)
+    loop(socket, pending, state, handler)
+  catch
+    {:provider_socket, reason} -> {:error, reason}
+  after
+    Mint.HTTP.close(socket.conn)
   end
 
   defp check({:error, _, _}), do: throw({:provider_socket, :socket_error})

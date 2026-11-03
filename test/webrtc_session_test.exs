@@ -1,9 +1,13 @@
 if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
   defmodule AudioFlow.WebRTCSessionTest do
     use ExUnit.Case, async: false
-    alias AudioFlow.{Audio, WebRTC}
-    alias AudioFlow.WebRTC.{Session, Transport}
-    alias AudioFlow.Telephony.{MuLaw, RateConverter}
+    alias AudioFlow.Adapters.Demo
+    alias AudioFlow.Audio
+    alias AudioFlow.Telephony.MuLaw
+    alias AudioFlow.Telephony.RateConverter
+    alias AudioFlow.WebRTC
+    alias AudioFlow.WebRTC.Session
+    alias AudioFlow.WebRTC.Transport
 
     defmodule Detector do
       def init(_), do: {320, 16_000, nil}
@@ -324,7 +328,7 @@ if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
       {:ok, bridge} =
         Session.start_link(
           owner: owner,
-          session: AudioFlow.Adapters.Demo.options(),
+          session: Demo.options(),
           vad: {Detector, []},
           negotiation_timeout_ms: 30
         )

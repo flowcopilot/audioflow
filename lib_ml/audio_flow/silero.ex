@@ -51,7 +51,7 @@ defmodule AudioFlow.Silero do
   @impl true
   def predict(%AudioFlow.Audio{data: data, sample_rate: 16_000}, state)
       when byte_size(data) == 1024 do
-    samples = for <<value::little-signed-16 <- state.context <> data>>, do: value / 32768
+    samples = for <<value::little-signed-16 <- state.context <> data>>, do: value / 32_768
     batch = Nx.Batch.stack([%{audio: Nx.tensor(samples, type: :f32), state: state.recurrent}])
     result = Nx.Serving.batched_run(state.serving, batch)
 

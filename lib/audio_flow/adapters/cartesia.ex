@@ -1,7 +1,8 @@
 defmodule AudioFlow.Adapters.Cartesia do
   @moduledoc "Cartesia streaming HTTP bytes TTS (raw s16le PCM). See docs/providers.md."
   @behaviour AudioFlow.Adapter
-  alias AudioFlow.Adapters.Providers.{PCMHTTP, Socket}
+  alias AudioFlow.Adapters.Providers.PCMHTTP
+  alias AudioFlow.Adapters.Providers.Socket
 
   @impl true
   def run(text, options, emit) when is_binary(text) do

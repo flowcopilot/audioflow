@@ -31,11 +31,18 @@ defmodule AudioFlow.Session do
   may still finish a batch already submitted to shared hardware.
   """
   use GenServer, restart: :temporary
-  alias AudioFlow.{Adapter, Audio, History, Image, Telemetry, Text}
+  alias AudioFlow.Adapter
+  alias AudioFlow.Audio
+  alias AudioFlow.Graph.Conversation
   alias AudioFlow.Graph.Plan
+  alias AudioFlow.Graph.Runner
+  alias AudioFlow.History
+  alias AudioFlow.Image
+  alias AudioFlow.Telemetry
+  alias AudioFlow.Text
 
   @limits_schema [
-    timeout_ms: [type: :pos_integer, default: 30000],
+    timeout_ms: [type: :pos_integer, default: 30_000],
     max_input_bytes: [type: :pos_integer, default: 960_000],
     max_image_bytes: [type: :pos_integer, default: 6_291_456],
     max_events: [type: :pos_integer, default: 1024],
@@ -52,47 +59,9 @@ defmodule AudioFlow.Session do
     graph = Keyword.get(options, :graph)
 
     speech = Keyword.get(options, :speech_to_speech)
-
-    if speech != nil do
-      unless match?({module, opts} when is_atom(module) and is_list(opts), speech),
-        do: raise(ArgumentError, "speech_to_speech must be an adapter tuple")
-
-      if graph != nil or
-           Enum.any?([:stt, :llm, :tts, :vision, :conversation], &Keyword.has_key?(options, &1)),
-         do: raise(ArgumentError, "speech_to_speech is exclusive with graph and stage adapters")
-
-      if Keyword.get(options, :history, false) not in [false, nil],
-        do: raise(ArgumentError, "speech_to_speech does not support history replay")
-    end
-
-    adapters =
-      case {graph, speech} do
-        {nil, {_, _}} ->
-          %{speech_to_speech: speech}
-
-        {%AudioFlow.Graph.Plan{}, nil} ->
-          %{}
-
-        {nil, nil} ->
-          adapters = Map.new([:llm, :tts], &{&1, Keyword.fetch!(options, &1)})
-          adapters = Map.merge(adapters, Map.new(Keyword.take(options, [:stt, :vision])))
-
-          if not (Map.has_key?(adapters, :stt) or Map.has_key?(adapters, :vision)),
-            do: raise(ArgumentError, "a session requires an :stt or :vision adapter")
-
-          adapters
-
-        _ ->
-          raise ArgumentError, "graph must be an AudioFlow.Graph.Plan"
-      end
-
-    limits =
-      options
-      |> AudioFlow.RuntimeOptions.known!(
-        @limits_schema,
-        Enum.map(@limits_schema, fn {key, _} -> {key, "#{key} must be positive"} end)
-      )
-      |> Map.new()
+    if speech != nil, do: validate_speech!(speech, graph, options)
+    adapters = init_adapters(graph, speech, options)
+    limits = init_limits(options)
 
     telemetry = %{session: self(), owner: owner, graph?: graph != nil}
 
@@ -118,127 +87,57 @@ defmodule AudioFlow.Session do
      }}
   end
 
+  defp validate_speech!(speech, graph, options) do
+    unless match?({module, opts} when is_atom(module) and is_list(opts), speech),
+      do: raise(ArgumentError, "speech_to_speech must be an adapter tuple")
+
+    if graph != nil or
+         Enum.any?([:stt, :llm, :tts, :vision, :conversation], &Keyword.has_key?(options, &1)),
+       do: raise(ArgumentError, "speech_to_speech is exclusive with graph and stage adapters")
+
+    if Keyword.get(options, :history, false) not in [false, nil],
+      do: raise(ArgumentError, "speech_to_speech does not support history replay")
+  end
+
+  defp init_adapters(nil, {_, _} = speech, _options), do: %{speech_to_speech: speech}
+  defp init_adapters(%AudioFlow.Graph.Plan{}, nil, _options), do: %{}
+
+  defp init_adapters(nil, nil, options) do
+    adapters = Map.new([:llm, :tts], &{&1, Keyword.fetch!(options, &1)})
+    adapters = Map.merge(adapters, Map.new(Keyword.take(options, [:stt, :vision])))
+
+    if not (Map.has_key?(adapters, :stt) or Map.has_key?(adapters, :vision)),
+      do: raise(ArgumentError, "a session requires an :stt or :vision adapter")
+
+    adapters
+  end
+
+  defp init_adapters(_graph, _speech, _options),
+    do: raise(ArgumentError, "graph must be an AudioFlow.Graph.Plan")
+
+  defp init_limits(options) do
+    options
+    |> AudioFlow.RuntimeOptions.known!(
+      @limits_schema,
+      Enum.map(@limits_schema, fn {key, _} -> {key, "#{key} must be positive"} end)
+    )
+    |> Map.new()
+  end
+
   @impl true
   def handle_call({:submit, input}, _from, state) do
     {valid?, stage, kind, limit} = input_spec(input, state.limits)
+    reason = if valid?, do: submit_error(input, stage, limit, state), else: invalid_input(input)
 
-    cond do
-      not valid? ->
-        {:reply, {:error, invalid_input(input)}, state}
-
-      state.graph != nil and not Map.has_key?(state.graph.inputs, Plan.input_kind(input)) ->
-        {:reply, {:error, {:unsupported_input, Plan.input_kind(input)}}, state}
-
-      Map.has_key?(state.adapters, :speech_to_speech) and not is_struct(input, Audio) ->
-        {:reply, {:error, {:unsupported_input, Plan.input_kind(input)}}, state}
-
-      state.graph == nil and not Map.has_key?(state.adapters, :speech_to_speech) and
-        stage != nil and not Map.has_key?(state.adapters, stage) ->
-        {:reply, {:error, {:unsupported_input, stage}}, state}
-
-      byte_size(input.data) > limit ->
-        {:reply, {:error, :input_too_large}, state}
-
-      state.active != nil or state.candidate != nil ->
-        {:reply, {:error, :busy}, state}
-
-      true ->
-        session = self()
-        turn = make_ref()
-        started = now()
-
-        case AudioFlow.Output.call(state.output, :start_turn, [{session, turn}]) do
-          :ok ->
-            telemetry = %{session: session, turn: turn, input: Plan.input_kind(input)}
-            telemetry_started = Telemetry.turn_start(telemetry)
-            adapters = state.adapters
-            graph = state.graph
-            output = state.output
-
-            task =
-              Task.Supervisor.async_nolink(AudioFlow.Tasks, fn ->
-                cond do
-                  graph ->
-                    graph_pipeline(session, turn, input, graph, output)
-
-                  adapters[:speech_to_speech] ->
-                    speech_pipeline(session, turn, input, adapters.speech_to_speech, output)
-
-                  true ->
-                    pipeline(session, turn, input, stage, kind, adapters, output)
-                end
-              end)
-
-            timer = Process.send_after(self(), {:timeout, turn}, state.limits.timeout_ms)
-
-            active = %{
-              turn: turn,
-              telemetry: telemetry,
-              telemetry_started: telemetry_started,
-              task: task,
-              timer: timer,
-              started: started,
-              first: %{},
-              events: 0,
-              output_bytes: 0,
-              input_bytes: 0,
-              context: nil,
-              playout: AudioFlow.Playout.new(),
-              conversation: state.conversation
-            }
-
-            {:reply, {:ok, turn},
-             %{
-               state
-               | active: active,
-                 playback_history: nil,
-                 output_turn: turn,
-                 turns: state.turns + 1
-             }}
-
-          {:error, reason} ->
-            {:reply, {:error, {:output, reason}}, state}
-        end
-    end
+    if reason == nil,
+      do: start_turn(input, stage, kind, state),
+      else: {:reply, {:error, reason}, state}
   end
 
   def handle_call({:provisional, ms}, _from, state) do
-    cond do
-      not (is_integer(ms) and ms > 0 and ms <= 30_000) ->
-        {:reply, {:error, :invalid_deadline}, state}
-
-      state.candidate != nil ->
-        {:reply, {:error, :busy}, state}
-
-      state.active == nil and state.playback_history == nil ->
-        {:reply, {:error, :no_active_turn}, state}
-
-      not AudioFlow.PausableOutput.supported?(state.output) ->
-        {:reply, {:error, :unsupported}, state}
-
-      true ->
-        id = make_ref()
-
-        case AudioFlow.Output.call(state.output, :pause, [
-               {self(), (state.active || state.playback_history).turn},
-               id
-             ]) do
-          :ok ->
-            timer = Process.send_after(self(), {:candidate_timeout, id}, ms)
-
-            {:reply, {:ok, id},
-             %{
-               state
-               | candidate: %{id: id, phase: :pausing, timer: timer, deadline: now() + ms * 1_000}
-             }}
-
-          {:error, :unsupported} = error ->
-            {:reply, error, state}
-
-          error ->
-            {:reply, _, state} = handle_call(:cancel, nil, state)
-            {:reply, error, state}
-        end
+    case provisional_error(ms, state) do
+      nil -> pause_for_candidate(ms, state)
+      reason -> {:reply, {:error, reason}, state}
     end
   end
 
@@ -277,32 +176,14 @@ defmodule AudioFlow.Session do
         %{candidate: %{id: id} = candidate} = state
       ) do
     active = state.active || state.playback_history
-    expected = if candidate.phase == :pausing, do: :pause, else: :resume
 
     cond do
       now() >= candidate.deadline ->
         {:reply, _, state} = handle_call(:cancel, nil, state)
         {:reply, {:error, :candidate_timeout}, state}
 
-      (active && active.turn == turn && action == expected) and
-          candidate.phase in [:pausing, :resuming] ->
-        case AudioFlow.Playout.acknowledge(active.playout, ns) do
-          {:ok, playout} ->
-            field = if state.active, do: :active, else: :playback_history
-            state = Map.put(state, field, %{active | playout: playout})
-
-            if action == :pause do
-              {:reply, :ok, %{state | candidate: %{candidate | phase: :paused}}}
-            else
-              Process.cancel_timer(candidate.timer)
-              if state.held, do: send(self(), {:release_emit, state.held})
-              if state.pending_result, do: send(self(), state.pending_result)
-              {:reply, :ok, %{state | candidate: nil, held: nil, pending_result: nil}}
-            end
-
-          error ->
-            {:reply, error, state}
-        end
+      expected_control?(active, turn, action, candidate) ->
+        acknowledge_control(state, active, candidate, action, ns)
 
       true ->
         {:reply, {:error, :stale_control}, state}
@@ -328,12 +209,12 @@ defmodule AudioFlow.Session do
   def handle_call({:conversation_event, event}, _from, state) do
     flow = if state.active, do: state.active.conversation, else: state.conversation
 
-    case flow && AudioFlow.Graph.Conversation.transition(flow, event) do
+    case flow && Conversation.transition(flow, event) do
       {:ok, next} ->
         state =
           if state.active,
             do: put_in(state.active.conversation, next),
-            else: %{state | conversation: next, graph: AudioFlow.Graph.Conversation.plan(next)}
+            else: %{state | conversation: next, graph: Conversation.plan(next)}
 
         {:reply, :ok, state}
 
@@ -371,13 +252,9 @@ defmodule AudioFlow.Session do
     active = state.active || state.playback_history
 
     if active && active.turn == turn do
-      case AudioFlow.Playout.acknowledge(active.playout, ns) do
-        {:ok, playout} ->
-          field = if state.active, do: :active, else: :playback_history
-          {:reply, :ok, Map.put(state, field, %{active | playout: playout})}
-
-        error ->
-          {:reply, error, state}
+      case acknowledge_playout(state, active, ns) do
+        {:ok, state} -> {:reply, :ok, state}
+        error -> {:reply, error, state}
       end
     else
       {:reply, {:error, :stale_turn}, state}
@@ -455,28 +332,8 @@ defmodule AudioFlow.Session do
 
       true ->
         case record_context(state, record, value) do
-          {:ok, active} ->
-            active =
-              if kind == :audio,
-                do: %{active | playout: AudioFlow.Playout.audio(active.playout, value)},
-                else: active
-
-            first = Map.put_new(active.first, kind, now() - active.started)
-            notify(state, if(node, do: {kind, value, node}, else: {kind, value}))
-
-            {:reply, :ok,
-             %{
-               state
-               | active: %{
-                   active
-                   | first: first,
-                     events: active.events + 1,
-                     output_bytes: active.output_bytes + output_bytes(value)
-                 }
-             }}
-
-          {:error, reason} ->
-            {:reply, {:error, reason}, state}
+          {:ok, active} -> {:reply, :ok, accept_output(state, active, kind, value, node)}
+          {:error, reason} -> {:reply, {:error, reason}, state}
         end
     end
   end
@@ -515,47 +372,9 @@ defmodule AudioFlow.Session do
     Process.demonitor(ref, [:flush])
     Process.cancel_timer(state.active.timer)
 
-    result =
-      case result do
-        :ok ->
-          case AudioFlow.Output.call(state.output, :finish, [{self(), state.active.turn}]) do
-            :ok -> :ok
-            {:error, reason} -> {:error, {:output, reason}}
-          end
-
-        error ->
-          error
-      end
-
-    event =
-      case result do
-        :ok ->
-          {:done, metrics(state.active)}
-
-        {:error, reason} ->
-          flush_output(state)
-          {:error, reason, metrics(state.active)}
-      end
-
-    finish_turn(state, event)
-
-    history =
-      if result == :ok and state.active.context != nil,
-        do: History.commit(state.active.context),
-        else: state.history
-
-    flow = if result == :ok, do: state.active.conversation, else: state.conversation
-    graph = if flow, do: AudioFlow.Graph.Conversation.plan(flow), else: state.graph
-
-    {:noreply,
-     %{
-       state
-       | active: nil,
-         history: history,
-         playback_history: if(result == :ok, do: state.active),
-         conversation: flow,
-         graph: graph
-     }}
+    result = finish_output(state, result)
+    finish_turn(state, turn_event(state, result))
+    {:noreply, after_turn(state, result)}
   end
 
   def handle_info({:DOWN, ref, :process, _, _}, %{owner_ref: ref} = state),
@@ -591,38 +410,234 @@ defmodule AudioFlow.Session do
     Telemetry.session_stop(state.telemetry_started, state.turns, metadata)
   end
 
+  defp submit_error(input, stage, limit, state) do
+    cond do
+      unsupported_kind?(input, state) -> {:unsupported_input, Plan.input_kind(input)}
+      missing_stage?(stage, state) -> {:unsupported_input, stage}
+      byte_size(input.data) > limit -> :input_too_large
+      state.active != nil or state.candidate != nil -> :busy
+      true -> nil
+    end
+  end
+
+  defp unsupported_kind?(input, %{graph: nil} = state),
+    do: Map.has_key?(state.adapters, :speech_to_speech) and not is_struct(input, Audio)
+
+  defp unsupported_kind?(input, state),
+    do: not Map.has_key?(state.graph.inputs, Plan.input_kind(input))
+
+  defp missing_stage?(_stage, %{graph: graph}) when graph != nil, do: false
+  defp missing_stage?(nil, _state), do: false
+
+  defp missing_stage?(stage, state),
+    do:
+      not Map.has_key?(state.adapters, :speech_to_speech) and
+        not Map.has_key?(state.adapters, stage)
+
+  defp start_turn(input, stage, kind, state) do
+    session = self()
+    turn = make_ref()
+    started = now()
+
+    case AudioFlow.Output.call(state.output, :start_turn, [{session, turn}]) do
+      :ok ->
+        telemetry = %{session: session, turn: turn, input: Plan.input_kind(input)}
+        telemetry_started = Telemetry.turn_start(telemetry)
+        %{adapters: adapters, graph: graph, output: output} = state
+
+        task =
+          Task.Supervisor.async_nolink(AudioFlow.Tasks, fn ->
+            run_turn(session, turn, input, stage, kind, adapters, graph, output)
+          end)
+
+        timer = Process.send_after(self(), {:timeout, turn}, state.limits.timeout_ms)
+
+        active = %{
+          turn: turn,
+          telemetry: telemetry,
+          telemetry_started: telemetry_started,
+          task: task,
+          timer: timer,
+          started: started,
+          first: %{},
+          events: 0,
+          output_bytes: 0,
+          input_bytes: 0,
+          context: nil,
+          playout: AudioFlow.Playout.new(),
+          conversation: state.conversation
+        }
+
+        {:reply, {:ok, turn},
+         %{
+           state
+           | active: active,
+             playback_history: nil,
+             output_turn: turn,
+             turns: state.turns + 1
+         }}
+
+      {:error, reason} ->
+        {:reply, {:error, {:output, reason}}, state}
+    end
+  end
+
+  defp run_turn(session, turn, input, stage, kind, adapters, graph, output) do
+    cond do
+      graph ->
+        graph_pipeline(session, turn, input, graph, output)
+
+      adapters[:speech_to_speech] ->
+        speech_pipeline(session, turn, input, adapters.speech_to_speech, output)
+
+      true ->
+        pipeline(session, turn, input, stage, kind, adapters, output)
+    end
+  end
+
+  defp provisional_error(ms, state) do
+    cond do
+      not (is_integer(ms) and ms > 0 and ms <= 30_000) -> :invalid_deadline
+      state.candidate != nil -> :busy
+      state.active == nil and state.playback_history == nil -> :no_active_turn
+      not AudioFlow.PausableOutput.supported?(state.output) -> :unsupported
+      true -> nil
+    end
+  end
+
+  defp pause_for_candidate(ms, state) do
+    id = make_ref()
+
+    case AudioFlow.Output.call(state.output, :pause, [
+           {self(), (state.active || state.playback_history).turn},
+           id
+         ]) do
+      :ok ->
+        timer = Process.send_after(self(), {:candidate_timeout, id}, ms)
+
+        {:reply, {:ok, id},
+         %{
+           state
+           | candidate: %{id: id, phase: :pausing, timer: timer, deadline: now() + ms * 1_000}
+         }}
+
+      {:error, :unsupported} = error ->
+        {:reply, error, state}
+
+      error ->
+        {:reply, _, state} = handle_call(:cancel, nil, state)
+        {:reply, error, state}
+    end
+  end
+
+  defp expected_control?(nil, _turn, _action, _candidate), do: false
+
+  defp expected_control?(active, turn, action, candidate) do
+    expected = if candidate.phase == :pausing, do: :pause, else: :resume
+    active.turn == turn and action == expected and candidate.phase in [:pausing, :resuming]
+  end
+
+  defp acknowledge_control(state, active, candidate, action, ns) do
+    case acknowledge_playout(state, active, ns) do
+      {:ok, state} -> {:reply, :ok, apply_control(state, candidate, action)}
+      error -> {:reply, error, state}
+    end
+  end
+
+  # Updates the playout of the active turn, or of the last finished one.
+  defp acknowledge_playout(state, active, ns) do
+    with {:ok, playout} <- AudioFlow.Playout.acknowledge(active.playout, ns) do
+      field = if state.active, do: :active, else: :playback_history
+      {:ok, Map.put(state, field, %{active | playout: playout})}
+    end
+  end
+
+  defp apply_control(state, candidate, :pause),
+    do: %{state | candidate: %{candidate | phase: :paused}}
+
+  defp apply_control(state, candidate, _resume) do
+    Process.cancel_timer(candidate.timer)
+    if state.held, do: send(self(), {:release_emit, state.held})
+    if state.pending_result, do: send(self(), state.pending_result)
+    %{state | candidate: nil, held: nil, pending_result: nil}
+  end
+
+  defp accept_output(state, active, kind, value, node) do
+    active =
+      if kind == :audio,
+        do: %{active | playout: AudioFlow.Playout.audio(active.playout, value)},
+        else: active
+
+    first = Map.put_new(active.first, kind, now() - active.started)
+    notify(state, if(node, do: {kind, value, node}, else: {kind, value}))
+
+    %{
+      state
+      | active: %{
+          active
+          | first: first,
+            events: active.events + 1,
+            output_bytes: active.output_bytes + output_bytes(value)
+        }
+    }
+  end
+
+  defp finish_output(state, :ok) do
+    case AudioFlow.Output.call(state.output, :finish, [{self(), state.active.turn}]) do
+      :ok -> :ok
+      {:error, reason} -> {:error, {:output, reason}}
+    end
+  end
+
+  defp finish_output(_state, error), do: error
+
+  defp turn_event(state, :ok), do: {:done, metrics(state.active)}
+
+  defp turn_event(state, {:error, reason}) do
+    flush_output(state)
+    {:error, reason, metrics(state.active)}
+  end
+
+  defp after_turn(state, result) do
+    history =
+      if result == :ok and state.active.context != nil,
+        do: History.commit(state.active.context),
+        else: state.history
+
+    flow = if result == :ok, do: state.active.conversation, else: state.conversation
+    graph = if flow, do: Conversation.plan(flow), else: state.graph
+
+    %{
+      state
+      | active: nil,
+        history: history,
+        playback_history: if(result == :ok, do: state.active),
+        conversation: flow,
+        graph: graph
+    }
+  end
+
   defp speech_pipeline(session, turn, input, adapter, output) do
     {module, _} = adapter
 
     Telemetry.stage(
       %{session: session, turn: turn, stage: :speech_to_speech, adapter: module},
-      fn ->
-        Adapter.run(adapter, input, fn
-          {kind, value} when kind in [:transcript, :text, :audio] ->
-            case GenServer.call(session, {:emit, turn, kind, value}, :infinity) do
-              :ok -> :ok
-              {:error, reason} -> throw(reason)
-            end
-
-            if kind == :audio do
-              case AudioFlow.Output.call(output, :push, [{session, turn}, value]) do
-                :ok -> :ok
-                {:error, reason} -> throw({:output, reason})
-              end
-            end
-
-            :ok
-
-          _ ->
-            throw(:invalid_output)
-        end)
-      end
+      fn -> Adapter.run(adapter, input, &speech_event(&1, session, turn, output)) end
     )
   rescue
     error -> {:error, {:exception, Exception.message(error)}}
   catch
     reason -> {:error, reason}
   end
+
+  defp speech_event({kind, value}, session, turn, output)
+       when kind in [:transcript, :text, :audio] do
+    call!(session, {:emit, turn, kind, value}, :infinity)
+    if kind == :audio, do: push!(output, session, turn, value)
+    :ok
+  end
+
+  defp speech_event(_event, _session, _turn, _output), do: throw(:invalid_output)
 
   defp pipeline(session, turn, input, stage, kind, adapters, output) do
     run = fn stage, input, emit ->
@@ -631,61 +646,15 @@ defmodule AudioFlow.Session do
       Telemetry.stage(metadata, fn -> Adapter.run(adapter, input, emit) end)
     end
 
-    emit = fn kind, value ->
-      case GenServer.call(session, {:emit, turn, kind, value}, :infinity) do
-        :ok -> :ok
-        {:error, reason} -> throw(reason)
-      end
-    end
+    emit = fn kind, value -> call!(session, {:emit, turn, kind, value}, :infinity) end
 
     # Input chunks describe one utterance or image. Generate only once.
     key = make_ref()
     Process.put(key, [])
 
     try do
-      if stage != nil do
-        run.(stage, input, fn text ->
-          emit.(kind, text)
-          Process.put(key, [text | Process.get(key)])
-          :ok
-        end)
-      else
-        Process.put(key, [input.data])
-      end
-
-      transcript = Process.get(key) |> Enum.reverse() |> Enum.join("") |> String.trim()
-      transcript = input_context(input, transcript)
-
-      if transcript != "" do
-        prompt =
-          case GenServer.call(session, {:context, turn, transcript}) do
-            {:ok, prompt} -> prompt
-            {:error, reason} -> throw(reason)
-          end
-
-        run.(:llm, prompt, fn text ->
-          emit.(:text, text)
-
-          if String.trim(text) != "" do
-            run.(:tts, text, fn audio ->
-              emit.(:audio, audio)
-
-              case AudioFlow.Output.call(output, :push, [{session, turn}, audio]) do
-                :ok -> :ok
-                {:error, reason} -> throw({:output, reason})
-              end
-            end)
-
-            case GenServer.call(session, {:speech_checkpoint, turn}) do
-              :ok -> :ok
-              {:error, reason} -> throw(reason)
-            end
-          end
-
-          :ok
-        end)
-      end
-
+      transcript = input_transcript(run, emit, key, input, stage, kind)
+      if transcript != "", do: respond(run, emit, {session, turn, output}, transcript)
       :ok
     rescue
       error -> {:error, {:exception, Exception.message(error)}}
@@ -693,6 +662,62 @@ defmodule AudioFlow.Session do
       reason -> {:error, reason}
     after
       Process.delete(key)
+    end
+  end
+
+  defp input_transcript(run, emit, key, input, stage, kind) do
+    if stage != nil do
+      run.(stage, input, fn text ->
+        emit.(kind, text)
+        Process.put(key, [text | Process.get(key)])
+        :ok
+      end)
+    else
+      Process.put(key, [input.data])
+    end
+
+    transcript = Process.get(key) |> Enum.reverse() |> Enum.join() |> String.trim()
+    input_context(input, transcript)
+  end
+
+  defp respond(run, emit, {session, turn, _output} = target, transcript) do
+    prompt = fetch!(session, {:context, turn, transcript})
+
+    run.(:llm, prompt, fn text ->
+      emit.(:text, text)
+      if String.trim(text) != "", do: speak(run, emit, target, text)
+      :ok
+    end)
+  end
+
+  defp speak(run, emit, {session, turn, output}, text) do
+    run.(:tts, text, fn audio ->
+      emit.(:audio, audio)
+      push!(output, session, turn, audio)
+    end)
+
+    call!(session, {:speech_checkpoint, turn})
+  end
+
+  # Turn tasks stop on the first refused call; the pipeline catches the reason.
+  defp call!(session, request, timeout \\ 5000) do
+    case GenServer.call(session, request, timeout) do
+      :ok -> :ok
+      {:error, reason} -> throw(reason)
+    end
+  end
+
+  defp fetch!(session, request) do
+    case GenServer.call(session, request) do
+      {:ok, value} -> value
+      {:error, reason} -> throw(reason)
+    end
+  end
+
+  defp push!(output, session, turn, value) do
+    case AudioFlow.Output.call(output, :push, [{session, turn}, value]) do
+      :ok -> :ok
+      {:error, reason} -> throw({:output, reason})
     end
   end
 
@@ -723,7 +748,7 @@ defmodule AudioFlow.Session do
       telemetry: %{session: session, turn: turn}
     }
 
-    AudioFlow.Graph.Runner.run(plan, input, callbacks)
+    Runner.run(plan, input, callbacks)
   rescue
     error -> {:error, {:exception, Exception.message(error)}}
   catch

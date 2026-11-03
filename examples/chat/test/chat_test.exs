@@ -2,6 +2,8 @@ defmodule ChatTest do
   use ExUnit.Case, async: false
   import Phoenix.ConnTest
   import Phoenix.LiveViewTest
+
+  alias AudioFlow.Recording.Store
   @endpoint ChatWeb.Endpoint
 
   test "Linux demo has no model process and runs a complete session" do
@@ -64,7 +66,7 @@ defmodule ChatTest do
       AudioFlow.Recording.consume(capture, {AudioFlow, self(), turn, {:done, %{}}})
 
     assert Chat.Capture.list(capture) == [id]
-    {:ok, data} = AudioFlow.Recording.Store.read(capture.store, id)
+    {:ok, data} = Store.read(capture.store, id)
     encoded = Jason.encode!(data)
     assert encoded =~ "[REDACTED]"
     refute encoded =~ "private"
@@ -112,7 +114,9 @@ defmodule ChatTest do
              AudioFlow.Recording.consume(capture, {AudioFlow, self(), turn, {:done, %{}}})
 
     assert Chat.Capture.list(capture) == []
-    for _ <- 1..21, do: AudioFlow.Recording.Store.write(capture.store, %{safe: "[REDACTED]"})
+    for _ <- 1..21, do: Store.write(capture.store, %{safe: "[REDACTED]"})
+    # Exact size check.
+    # credo:disable-for-next-line ExSlop.Check.Refactor.LengthComparison
     assert length(Chat.Capture.list(capture)) == 20
     expired = %{capture | store: %{capture.store | max_age_ms: 1}}
     Process.sleep(5)

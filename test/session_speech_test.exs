@@ -1,6 +1,8 @@
 defmodule AudioFlow.SessionSpeechTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Adapters.Function, Audio, Text}
+  alias AudioFlow.Adapters.Function
+  alias AudioFlow.Audio
+  alias AudioFlow.Text
 
   defmodule Output do
     @behaviour AudioFlow.Output

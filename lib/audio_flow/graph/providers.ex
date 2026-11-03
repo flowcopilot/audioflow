@@ -43,7 +43,7 @@ defmodule AudioFlow.Graph.Nodes.Providers do
                 %{name: :voice_id, type: :string, required: true},
                 %{
                   name: :sample_rate,
-                  type: {:enum, [8000, 16000, 22050, 24000, 44100, 48000]},
+                  type: {:enum, [8000, 16_000, 22_050, 24_000, 44_100, 48_000]},
                   default: 24_000
                 }
               ]

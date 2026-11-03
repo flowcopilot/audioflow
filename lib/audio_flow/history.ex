@@ -3,7 +3,7 @@ defmodule AudioFlow.History do
 
   @options_schema [
     max_turns: [type: :pos_integer, default: 8],
-    max_bytes: [type: :pos_integer, default: 16384]
+    max_bytes: [type: :pos_integer, default: 16_384]
   ]
 
   def new(false), do: nil

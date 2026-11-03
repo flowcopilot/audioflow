@@ -1,6 +1,8 @@
 defmodule AudioFlow.BenchmarkCLITest do
   use ExUnit.Case, async: false
   import ExUnit.CaptureIO
+
+  alias Mix.Tasks.AudioFlow.Bench
   @tag :tmp_dir
   test "CSV output keeps errors and metadata separate from logs", %{tmp_dir: tmp_dir} do
     config = Path.join(tmp_dir, "config.exs")
@@ -12,7 +14,7 @@ defmodule AudioFlow.BenchmarkCLITest do
     """)
 
     capture_io(fn ->
-      Mix.Tasks.AudioFlow.Bench.run([
+      Bench.run([
         "--config",
         config,
         "--output",

@@ -21,9 +21,13 @@ defmodule AudioFlow.Adapters.ReqLLM do
   Redirects, retries, cache replay and non-HTTP transports are not executed.
   """
   @behaviour AudioFlow.Adapter
-  alias AudioFlow.{TextChunks, Tool}
-  alias ReqLLM.{Context, ToolCall}
+  alias AudioFlow.TextChunks
+  alias AudioFlow.Tool
+  alias ReqLLM.Context
   alias ReqLLM.Provider.ChunkAccumulator, as: Acc
+  alias ReqLLM.Provider.Options
+  alias ReqLLM.Streaming.SSE
+  alias ReqLLM.ToolCall
 
   @impl true
   def run(input, options, emit) do
@@ -34,7 +38,7 @@ defmodule AudioFlow.Adapters.ReqLLM do
     {:ok, provider} = ReqLLM.ProviderDispatch.get(model, :chat, stream: true)
 
     {:ok, opts} =
-      ReqLLM.Provider.Options.normalize_namespaced_provider_options(provider, :chat, model, opts)
+      Options.normalize_namespaced_provider_options(provider, :chat, model, opts)
 
     {:ok, context} = Context.normalize(input, opts)
     tools = tools(execution)
@@ -99,55 +103,47 @@ defmodule AudioFlow.Adapters.ReqLLM do
 
   defp round(config, messages, round, text_bytes) do
     case request(config, messages, text_bytes) do
-      {:ok, %{calls: calls}} when calls == [] ->
-        :ok
-
-      {:ok, _} when round >= config.max_rounds ->
-        {:error, :tool_round_limit}
-
-      {:ok, state} ->
-        calls = state.calls
-
-        if Enum.any?(calls, &(&1.id == "" or &1.name == "")) do
-          {:error, :invalid_tool_call}
-        else
-          content = IO.iodata_to_binary(state.content)
-
-          filler =
-            if config.filler != nil and String.trim(content) == "", do: config.filler, else: ""
-
-          text_bytes = state.text_bytes + byte_size(filler)
-
-          if text_bytes > config.text_limit do
-            {:error, :text_too_large}
-          else
-            if filler != "", do: :ok = config.emit.(filler)
-
-            results =
-              Enum.map(calls, fn call ->
-                Context.tool_result(call.id, call.name, call_tool(config, call))
-              end)
-
-            assistant =
-              Context.assistant(content,
-                tool_calls:
-                  Enum.map(calls, fn call ->
-                    ToolCall.new(call.id, call.name, JSON.encode!(call.arguments))
-                  end)
-              )
-
-            round(
-              config,
-              Context.append(messages, [assistant | results]),
-              round + 1,
-              text_bytes
-            )
-          end
-        end
-
-      {:error, _} = error ->
-        error
+      {:ok, %{calls: calls}} when calls == [] -> :ok
+      {:ok, _} when round >= config.max_rounds -> {:error, :tool_round_limit}
+      {:ok, state} -> tool_round(config, messages, round, state)
+      {:error, _} = error -> error
     end
+  end
+
+  defp tool_round(config, messages, round, state) do
+    content = IO.iodata_to_binary(state.content)
+    filler = if config.filler != nil and String.trim(content) == "", do: config.filler, else: ""
+    text_bytes = state.text_bytes + byte_size(filler)
+
+    cond do
+      Enum.any?(state.calls, &(&1.id == "" or &1.name == "")) ->
+        {:error, :invalid_tool_call}
+
+      text_bytes > config.text_limit ->
+        {:error, :text_too_large}
+
+      true ->
+        if filler != "", do: :ok = config.emit.(filler)
+        messages = Context.append(messages, tool_messages(config, state.calls, content))
+        round(config, messages, round + 1, text_bytes)
+    end
+  end
+
+  defp tool_messages(config, calls, content) do
+    results =
+      Enum.map(calls, fn call ->
+        Context.tool_result(call.id, call.name, call_tool(config, call))
+      end)
+
+    assistant =
+      Context.assistant(content,
+        tool_calls:
+          Enum.map(calls, fn call ->
+            ToolCall.new(call.id, call.name, JSON.encode!(call.arguments))
+          end)
+      )
+
+    [assistant | results]
   end
 
   defp request(config, messages, text_bytes) do
@@ -265,26 +261,33 @@ defmodule AudioFlow.Adapters.ReqLLM do
         fail(state, :response_too_large)
 
       true ->
-        {events, parser} = ReqLLM.Streaming.SSE.accumulate_and_parse(chunk, state.parser)
-        # Bound both completed payloads and retained parser fields. Transport
-        # reads are already bounded by max_response_bytes before parsing.
-        retained =
-          IO.iodata_length(parser.value || "") +
-            if(is_binary(parser.key), do: byte_size(parser.key), else: 0) +
-            Enum.reduce(parser.event || %{}, 0, fn {_, value}, n ->
-              n + if(is_binary(value) or is_list(value), do: IO.iodata_length(value), else: 0)
-            end)
-
-        if retained > state.event_limit or
-             Enum.any?(events, &(byte_size(&1.data) > state.event_limit)) do
-          fail(state, :event_too_large)
-        else
-          events(events, %{state | parser: parser})
-        end
+        parse_events(chunk, state)
     end
   end
 
   defp receive_http({:trailers, _}, state), do: {:cont, state}
+
+  defp parse_events(chunk, state) do
+    {events, parser} = SSE.accumulate_and_parse(chunk, state.parser)
+
+    # Bound both completed payloads and retained parser fields. Transport
+    # reads are already bounded by max_response_bytes before parsing.
+    if retained_bytes(parser) > state.event_limit or
+         Enum.any?(events, &(byte_size(&1.data) > state.event_limit)) do
+      fail(state, :event_too_large)
+    else
+      events(events, %{state | parser: parser})
+    end
+  end
+
+  defp retained_bytes(parser) do
+    IO.iodata_length(parser.value || "") +
+      if(is_binary(parser.key), do: byte_size(parser.key), else: 0) +
+      Enum.reduce(parser.event || %{}, 0, fn {_, value}, n -> n + field_bytes(value) end)
+  end
+
+  defp field_bytes(value) when is_binary(value) or is_list(value), do: IO.iodata_length(value)
+  defp field_bytes(_value), do: 0
 
   defp events([], state), do: {:cont, state}
 
@@ -301,31 +304,9 @@ defmodule AudioFlow.Adapters.ReqLLM do
     with {:ok, decoded} when is_map(decoded) <- JSON.decode(data),
          :ok <- validate_event(decoded, state),
          {:ok, state} <- track_calls(decoded, state) do
-      provider = state.config.provider
-      event = %{raw_event | data: decoded}
-
-      {chunks, provider_state} =
-        if function_exported?(provider, :decode_stream_event, 3),
-          do: provider.decode_stream_event(event, state.config.model, state.provider_state),
-          else: {provider.decode_stream_event(event, state.config.model), state.provider_state}
-
-      state = %{state | provider_state: provider_state}
-
-      result =
-        Enum.reduce_while(chunks, {:cont, state}, fn chunk, {:cont, state} ->
-          case chunk(chunk, state) do
-            {:cont, state} -> {:cont, {:cont, state}}
-            {:halt, state} -> {:halt, {:halt, state}}
-          end
-        end)
-
-      case result do
-        {:cont, state} ->
-          if terminal?(decoded), do: complete(state), else: {:cont, state}
-
-        error ->
-          error
-      end
+      %{raw_event | data: decoded}
+      |> provider_chunks(state)
+      |> push_chunks(decoded)
     else
       {:error, reason}
       when is_atom(reason) or (is_tuple(reason) and elem(reason, 0) == :finish_reason) ->
@@ -333,6 +314,31 @@ defmodule AudioFlow.Adapters.ReqLLM do
 
       _ ->
         fail(state, :invalid_event)
+    end
+  end
+
+  defp provider_chunks(event, state) do
+    provider = state.config.provider
+
+    {chunks, provider_state} =
+      if function_exported?(provider, :decode_stream_event, 3),
+        do: provider.decode_stream_event(event, state.config.model, state.provider_state),
+        else: {provider.decode_stream_event(event, state.config.model), state.provider_state}
+
+    {chunks, %{state | provider_state: provider_state}}
+  end
+
+  defp push_chunks({chunks, state}, decoded) do
+    case Enum.reduce_while(chunks, {:cont, state}, &push_chunk/2) do
+      {:cont, state} -> if terminal?(decoded), do: complete(state), else: {:cont, state}
+      error -> error
+    end
+  end
+
+  defp push_chunk(chunk, {:cont, state}) do
+    case chunk(chunk, state) do
+      {:cont, state} -> {:cont, {:cont, state}}
+      {:halt, state} -> {:halt, {:halt, state}}
     end
   end
 
@@ -355,75 +361,54 @@ defmodule AudioFlow.Adapters.ReqLLM do
 
   defp validate_choice(%{"choices" => choices}, state) do
     Enum.reduce_while(choices, :ok, fn choice, :ok ->
-      delta = choice["delta"] || %{}
-
-      reason =
-        cond do
-          not is_map(delta) ->
-            :invalid_event
-
-          delta["content"] != nil and not is_binary(delta["content"]) ->
-            :invalid_event
-
-          delta["refusal"] not in [nil, ""] ->
-            :refusal
-
-          delta["function_call"] != nil ->
-            :unsupported_tool_call
-
-          (delta["tool_calls"] not in [nil, []] or choice["finish_reason"] == "tool_calls") and
-              not state.tools? ->
-            :unsupported_tool_call
-
-          choice["finish_reason"] not in [nil, "stop", "tool_calls"] ->
-            {:finish_reason, choice["finish_reason"]}
-
-          state.finished? ->
-            :content_after_finish
-
-          not valid_calls?(delta["tool_calls"]) ->
-            :invalid_event
-
-          true ->
-            nil
-        end
-
-      if reason, do: {:halt, {:error, reason}}, else: {:cont, :ok}
+      if reason = choice_error(choice, state),
+        do: {:halt, {:error, reason}},
+        else: {:cont, :ok}
     end)
+  end
+
+  defp choice_error(choice, state) do
+    delta = choice["delta"] || %{}
+
+    if is_map(delta),
+      do: delta_error(delta) || finish_error(choice, delta, state),
+      else: :invalid_event
+  end
+
+  defp delta_error(delta) do
+    cond do
+      delta["content"] != nil and not is_binary(delta["content"]) -> :invalid_event
+      delta["refusal"] not in [nil, ""] -> :refusal
+      delta["function_call"] != nil -> :unsupported_tool_call
+      true -> nil
+    end
+  end
+
+  defp finish_error(choice, delta, state) do
+    cond do
+      (delta["tool_calls"] not in [nil, []] or choice["finish_reason"] == "tool_calls") and
+          not state.tools? ->
+        :unsupported_tool_call
+
+      choice["finish_reason"] not in [nil, "stop", "tool_calls"] ->
+        {:finish_reason, choice["finish_reason"]}
+
+      state.finished? ->
+        :content_after_finish
+
+      not valid_calls?(delta["tool_calls"]) ->
+        :invalid_event
+
+      true ->
+        nil
+    end
   end
 
   defp track_calls(%{"choices" => choices}, state) do
     Enum.reduce_while(choices, {:ok, state}, fn choice, {:ok, state} ->
-      Enum.reduce_while(get_in(choice, ["delta", "tool_calls"]) || [], {:ok, state}, fn call,
-                                                                                        {:ok,
-                                                                                         state} ->
-        cond do
-          not MapSet.member?(state.calls, call["index"]) and call["id"] in [nil, ""] ->
-            {:halt, {:error, :invalid_tool_call}}
+      calls = get_in(choice, ["delta", "tool_calls"]) || []
 
-          true ->
-            calls = MapSet.put(state.calls, call["index"])
-
-            if MapSet.size(calls) > state.max_calls,
-              do: {:halt, {:error, :tool_call_limit}},
-              else:
-                (
-                  id = call["id"] || state.call_ids[call["index"]]
-                  name = get_in(call, ["function", "name"]) || ""
-                  names = Map.update(state.call_names, id, name, &(&1 <> name))
-
-                  {:cont,
-                   {:ok,
-                    %{
-                      state
-                      | calls: calls,
-                        call_names: names,
-                        call_ids: Map.put(state.call_ids, call["index"], id)
-                    }}}
-                )
-        end
-      end)
-      |> case do
+      case Enum.reduce_while(calls, {:ok, state}, &track_call/2) do
         {:ok, state} -> {:cont, {:ok, state}}
         error -> {:halt, error}
       end
@@ -431,6 +416,31 @@ defmodule AudioFlow.Adapters.ReqLLM do
   end
 
   defp track_calls(_, state), do: {:ok, state}
+
+  defp track_call(call, {:ok, state}) do
+    calls = MapSet.put(state.calls, call["index"])
+
+    cond do
+      not MapSet.member?(state.calls, call["index"]) and call["id"] in [nil, ""] ->
+        {:halt, {:error, :invalid_tool_call}}
+
+      MapSet.size(calls) > state.max_calls ->
+        {:halt, {:error, :tool_call_limit}}
+
+      true ->
+        id = call["id"] || state.call_ids[call["index"]]
+        name = get_in(call, ["function", "name"]) || ""
+
+        {:cont,
+         {:ok,
+          %{
+            state
+            | calls: calls,
+              call_names: Map.update(state.call_names, id, name, &(&1 <> name)),
+              call_ids: Map.put(state.call_ids, call["index"], id)
+          }}}
+    end
+  end
 
   defp valid_calls?(nil), do: true
 
@@ -460,38 +470,38 @@ defmodule AudioFlow.Adapters.ReqLLM do
         fail(state, :unsupported_tool_call)
 
       chunk.type == :meta ->
-        case chunk.metadata[:finish_reason] do
-          nil ->
-            {:cont, state}
-
-          reason when reason in [:stop, :tool_calls, "stop", "tool_calls"] ->
-            {:cont, %{state | finished?: true}}
-
-          reason ->
-            fail(state, {:finish_reason, reason})
-        end
+        finish_reason(chunk.metadata[:finish_reason], state)
 
       chunk.type == :content and is_binary(chunk.text) ->
-        text = chunk.text
-
-        if state.text_bytes + byte_size(text) > state.text_limit do
-          fail(state, :text_too_large)
-        else
-          {sentences, pending} = TextChunks.push(state.pending, text)
-          Enum.each(sentences, fn sentence -> :ok = state.emit.(sentence) end)
-
-          {:cont,
-           %{
-             state
-             | pending: pending,
-               content: [state.content | text],
-               text_bytes: state.text_bytes + byte_size(text),
-               has_text?: state.has_text? or String.trim(text) != ""
-           }}
-        end
+        content(chunk.text, state)
 
       true ->
         {:cont, state}
+    end
+  end
+
+  defp finish_reason(nil, state), do: {:cont, state}
+
+  defp finish_reason(reason, state) when reason in [:stop, :tool_calls, "stop", "tool_calls"],
+    do: {:cont, %{state | finished?: true}}
+
+  defp finish_reason(reason, state), do: fail(state, {:finish_reason, reason})
+
+  defp content(text, state) do
+    if state.text_bytes + byte_size(text) > state.text_limit do
+      fail(state, :text_too_large)
+    else
+      {sentences, pending} = TextChunks.push(state.pending, text)
+      Enum.each(sentences, fn sentence -> :ok = state.emit.(sentence) end)
+
+      {:cont,
+       %{
+         state
+         | pending: pending,
+           content: [state.content, text],
+           text_bytes: state.text_bytes + byte_size(text),
+           has_text?: state.has_text? or String.trim(text) != ""
+       }}
     end
   end
 

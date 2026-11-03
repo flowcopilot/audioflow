@@ -1,6 +1,8 @@
 defmodule AudioFlow.RAGPgvectorTest do
   use ExUnit.Case, async: false
 
+  alias AudioFlow.RAG.Pgvector
+
   @moduletag skip: System.get_env("AUDIOFLOW_PGVECTOR_URL") == nil
 
   # Postgrex.start_link/1 expects connection fields; it does not parse :url.
@@ -46,7 +48,7 @@ defmodule AudioFlow.RAGPgvectorTest do
     end
 
     assert {:ok, [%{id: "close", distance: distance}]} =
-             AudioFlow.RAG.Pgvector.retrieve([1, 0, 0],
+             Pgvector.retrieve([1, 0, 0],
                connection: conn,
                collection: "a",
                limit: 5,
@@ -76,7 +78,7 @@ defmodule AudioFlow.RAGPgvectorTest do
     Application.put_env(:audio_flow, :retrieval_profiles, %{
       "acceptance" => [
         dimensions: 3,
-        backend: {AudioFlow.RAG.Pgvector, connection: conn, collection: "a"},
+        backend: {Pgvector, connection: conn, collection: "a"},
         max_distance: 0.5
       ]
     })
@@ -109,7 +111,7 @@ defmodule AudioFlow.RAGPgvectorTest do
     assert_receive {AudioFlow, ^session, ^turn, {:done, _}}
 
     assert {:ok, []} =
-             AudioFlow.RAG.Pgvector.retrieve([1, 0, 0],
+             Pgvector.retrieve([1, 0, 0],
                connection: conn,
                collection: "missing",
                limit: 5,

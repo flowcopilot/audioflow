@@ -23,7 +23,7 @@ defmodule AudioFlow.ReqLLMTest do
         bytes =
           <<239, 187, 191>> <>
             ": comment\r" <>
-            "data: {\"choices\":\r\ndata: [{\"index\":0,\"delta\":{\"content\":\"Héllo. \"}}]}\r\r" <>
+            ~s(data: {"choices":\r\ndata: [{"index":0,"delta":{"content":"Héllo. "}}]}\r\r) <>
             HTTP.event("World", "stop") <> HTTP.done()
 
         for <<byte <- bytes>>, do: HTTP.chunk(socket, <<byte>>)

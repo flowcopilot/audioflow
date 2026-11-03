@@ -26,8 +26,8 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
 
     test "PCM conversion preserves signed sample values and rejects other rates" do
       audio = %AudioFlow.Audio{
-        data: <<-32768::little-signed-16, 0::little-signed-16, 16384::little-signed-16>>,
-        sample_rate: 16000
+        data: <<-32_768::little-signed-16, 0::little-signed-16, 16_384::little-signed-16>>,
+        sample_rate: 16_000
       }
 
       assert Nx.to_flat_list(AudioFlow.NxAdapter.whisper_input(audio)) == [-1.0, 0.0, 0.5]
@@ -38,17 +38,20 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
     end
 
     test "synthesis PCM clamps model overshoot and emits little-endian samples" do
-      output = %{audio: Nx.tensor([-1.5, -0.5, 0.0, 0.5, 1.5]), sampling_rate: 16000}
+      output = %{audio: Nx.tensor([-1.5, -0.5, 0.0, 0.5, 1.5]), sampling_rate: 16_000}
 
-      assert [%AudioFlow.Audio{data: pcm, sample_rate: 16000}] =
+      assert [%AudioFlow.Audio{data: pcm, sample_rate: 16_000}] =
                AudioFlow.NxAdapter.speech_audio(output)
 
       assert pcm ==
-               <<-32768::little-signed-16, -16384::little-signed-16, 0::little-signed-16,
-                 16384::little-signed-16, 32767::little-signed-16>>
+               <<-32_768::little-signed-16, -16_384::little-signed-16, 0::little-signed-16,
+                 16_384::little-signed-16, 32_767::little-signed-16>>
 
       chunks =
-        AudioFlow.NxAdapter.speech_audio(%{audio: Nx.broadcast(0.0, {321}), sampling_rate: 16000})
+        AudioFlow.NxAdapter.speech_audio(%{
+          audio: Nx.broadcast(0.0, {321}),
+          sampling_rate: 16_000
+        })
 
       assert Enum.map(chunks, &byte_size(&1.data)) == [640, 2]
     end

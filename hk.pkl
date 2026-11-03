@@ -1,0 +1,98 @@
+amends "package://github.com/jdx/hk/releases/download/v2.11.0/hk@2.11.0#/Config.pkl"
+
+import "package://github.com/jdx/hk/releases/download/v2.11.0/hk@2.11.0#/Builtins.pkl"
+
+exclude = List("deps/**", "_build/**", "**/node_modules/**", "priv/static/**")
+
+// Credo and git fixtures run their own git commands. Clear the hook's git paths.
+local clean_git_env = "env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE "
+
+local elixir_glob = List("**/*.ex", "**/*.exs")
+
+// Shared steps: these make up the pre-commit, check and fix hooks.
+steps = new Mapping<String, Step | Group> {
+  // ── tier 1: gatekeepers ──
+  ["check-merge-conflict"] = Builtins.check_merge_conflict
+  ["check-added-large-files"] = Builtins.check_added_large_files
+  ["detect-private-key"] = Builtins.detect_private_key
+  ["gitleaks"] = (Builtins.gitleaks) { scan = "staged" }
+
+  // ── tier 2: content fixers ──
+  ["jactionlint"] = Builtins.jactionlint
+  ["ruff"] = Builtins.ruff
+  ["oxlint"] = Builtins.ox_lint
+  ["rumdl"] = Builtins.rumdl
+  // Only issues new since HEAD, so existing findings don't block commits.
+  ["credo"] {
+    glob = elixir_glob
+    check = clean_git_env + "mix credo diff --strict --from-git-ref HEAD"
+  }
+
+  // ── tier 3: formatters ──
+  ["ruff-format"] = (Builtins.ruff_format) { depends = List("ruff") }
+  ["rumdl-format"] = (Builtins.rumdl_format) { depends = List("rumdl") }
+  // ui/ and examples/chat are separate Mix projects with their own formatter
+  // plugins, which need those projects' deps.
+  ["mix-format"] = (Builtins.mix_fmt) {
+    exclude = List("deps/**/*", "ui/**", "examples/chat/**")
+  }
+
+  // ── tier 4: whole-repo hygiene ──
+  // validation/ holds reports written by scripts/comparison_report.py.
+  ["hygiene"] = new Group {
+    steps {
+      ["trailing-whitespace"] = (Builtins.trailing_whitespace) { exclude = List("validation/**") }
+      ["newlines"] = (Builtins.newlines) { exclude = List("validation/**") }
+    }
+  }
+}
+
+// Slow, whole-project checks for the core build profile.
+local slow_steps = new Mapping<String, Step> {
+  // New issues relative to main, so existing findings don't block pushes.
+  ["credo"] {
+    glob = elixir_glob
+    check = clean_git_env + "mix credo diff --strict --from-git-merge-base origin/main"
+  }
+  ["mix-typecheck"] {
+    glob = elixir_glob
+    check = "mix typecheck"
+  }
+  // Builds into _build/core_webrtc, so it can run alongside the core steps.
+  // Needs the OpenSSL dev headers for ex_dtls.
+  ["mix-typecheck-webrtc"] {
+    glob = elixir_glob
+    check = "AUDIOFLOW_WEBRTC=1 mix typecheck"
+  }
+  ["mix-dialyzer"] {
+    glob = elixir_glob
+    check = "mix dialyzer"
+  }
+  ["mix-deps-audit"] {
+    glob = List("mix.exs", "mix.lock")
+    check = "mix deps.audit && mix hex.audit"
+  }
+  ["mix-test"] {
+    glob = elixir_glob
+    check = clean_git_env + "mix test --warnings-as-errors"
+    // Same MIX_ENV and build directory as mix-typecheck.
+    depends = List("mix-typecheck")
+  }
+}
+
+hooks {
+  ["commit-msg"] {
+    steps {
+      ["conventional-commit"] = Builtins.check_conventional_commit
+    }
+  }
+  ["pre-push"] {
+    steps = new Mapping<String, Step | Group> {
+      ...module.steps
+      ...slow_steps
+    }
+  }
+  ["check"] {
+    steps = slow_steps
+  }
+}

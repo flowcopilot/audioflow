@@ -29,16 +29,16 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
       clients =
         for _ <- 1..2 do
           Task.async(fn ->
-            {512, 16000, initial} = AudioFlow.Silero.init(serving: AudioFlow.TestSilero)
+            {512, 16_000, initial} = AudioFlow.Silero.init(serving: AudioFlow.TestSilero)
 
             Enum.map_reduce(0..3, initial, fn index, state ->
               pcm =
                 for i <- 0..511, into: <<>> do
-                  value = rem((index * 512 + i) * 7919, 65536) - 32768
+                  value = rem((index * 512 + i) * 7919, 65_536) - 32_768
                   <<value::little-signed-16>>
                 end
 
-              AudioFlow.Silero.predict(%AudioFlow.Audio{data: pcm, sample_rate: 16000}, state)
+              AudioFlow.Silero.predict(%AudioFlow.Audio{data: pcm, sample_rate: 16_000}, state)
             end)
             |> elem(0)
           end)

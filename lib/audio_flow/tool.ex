@@ -22,6 +22,10 @@ defmodule AudioFlow.Tool do
   results become a JSON object with an `"error"` key. The model can then tell
   the user about the failure.
   """
+
+  alias Jido.Action.Sanitizer
+  alias Jido.Action.Tool
+
   @enforce_keys [:name, :description, :parameters, :run]
   defstruct @enforce_keys
 
@@ -41,10 +45,10 @@ defmodule AudioFlow.Tool do
     if not (Code.ensure_loaded?(module) and function_exported?(module, :__action_metadata__, 0)),
       do: raise(ArgumentError, "#{inspect(module)} is not a Jido action")
 
-    tool = Jido.Action.Tool.to_tool(module)
+    tool = Tool.to_tool(module)
 
     build(tool.name, tool.description || "", tool.parameters_schema, fn arguments, context ->
-      params = Jido.Action.Tool.convert_params_using_schema(arguments, module.schema())
+      params = Tool.convert_params_using_schema(arguments, module.schema())
       Jido.Exec.run(module, params, context, timeout: 0, max_retries: 0)
     end)
   end
@@ -126,9 +130,10 @@ defmodule AudioFlow.Tool do
         {:ok, result}
       else
         try do
-          {:ok, result |> Jido.Action.Sanitizer.sanitize() |> JSON.encode!()}
+          {:ok, result |> Sanitizer.sanitize() |> JSON.encode!()}
         rescue
-          _ -> :error
+          # Unsupported terms raise Protocol.UndefinedError; invalid UTF-8 raises ErlangError.
+          _ in [Protocol.UndefinedError, ErlangError] -> :error
         end
       end
 

@@ -1,6 +1,7 @@
 defmodule AudioFlow.VoiceInputTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Audio, VoiceInput}
+  alias AudioFlow.Audio
+  alias AudioFlow.VoiceInput
 
   defp frame(value), do: :binary.copy(<<value::little-signed-16>>, 512)
   defp audio(data), do: %Audio{data: data, sample_rate: 16_000}
@@ -8,15 +9,15 @@ defmodule AudioFlow.VoiceInputTest do
 
   test "endpoint options preserve zero pre-roll, ignored extras and duplicate precedence" do
     state = input(pre_roll_ms: 0, pre_roll_ms: -1, unused: true, min_speech_ms: 32)
-    assert {[:speech_started], state} = VoiceInput.push(state, audio(frame(32000)))
+    assert {[:speech_started], state} = VoiceInput.push(state, audio(frame(32_000)))
     assert {[{:utterance, result, :end_of_stream}], _} = VoiceInput.flush(state)
-    assert result == audio(frame(32000))
+    assert result == audio(frame(32_000))
   end
 
   test "speech confirmation keeps pre-roll, preserves uncertain speech, and waits for silence" do
     silence = frame(0)
-    speech = frame(32000)
-    uncertain = frame(16000)
+    speech = frame(32_000)
+    uncertain = frame(16_000)
     state = input(min_silence_ms: 64)
     {[], state} = VoiceInput.push(state, audio(silence <> speech <> speech))
     {[:speech_started], state} = VoiceInput.push(state, audio(speech <> uncertain <> silence))
@@ -29,7 +30,7 @@ defmodule AudioFlow.VoiceInputTest do
   end
 
   test "a short sound is rejected and input frame splits do not lose samples" do
-    speech = frame(32000)
+    speech = frame(32_000)
     silence = frame(0)
     data = speech <> silence <> speech <> speech <> speech <> silence <> silence
     <<first::binary-size(300), rest::binary>> = data
@@ -43,7 +44,7 @@ defmodule AudioFlow.VoiceInputTest do
   end
 
   test "maximum duration splits continuous speech into bounded utterances" do
-    data = :binary.copy(frame(32000), 6)
+    data = :binary.copy(frame(32_000), 6)
 
     {events, _} =
       VoiceInput.push(
@@ -51,21 +52,21 @@ defmodule AudioFlow.VoiceInputTest do
         audio(data)
       )
 
-    expected = {:utterance, audio(:binary.copy(frame(32000), 3)), :limit}
+    expected = {:utterance, audio(:binary.copy(frame(32_000), 3)), :limit}
     assert events == [:speech_started, expected, :speech_started, expected]
   end
 
   test "end of stream keeps a partial frame and ends confirmed speech" do
     {[:speech_started], state} =
-      VoiceInput.push(input(pre_roll_ms: 0), audio(:binary.copy(frame(32000), 3) <> <<0, 0>>))
+      VoiceInput.push(input(pre_roll_ms: 0), audio(:binary.copy(frame(32_000), 3) <> <<0, 0>>))
 
     {[{:utterance, result, :end_of_stream}], _} = VoiceInput.flush(state)
-    assert result == audio(:binary.copy(frame(32000), 3) <> frame(0))
+    assert result == audio(:binary.copy(frame(32_000), 3) <> frame(0))
   end
 
   test "invalid format and limits fail before PCM is processed" do
     assert_raise ArgumentError, fn ->
-      VoiceInput.push(input(), %Audio{data: <<0>>, sample_rate: 16000})
+      VoiceInput.push(input(), %Audio{data: <<0>>, sample_rate: 16_000})
     end
 
     assert_raise ArgumentError, fn ->

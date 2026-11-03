@@ -42,7 +42,7 @@ CHAT_PROFILE=native mix setup
 CHAT_PROFILE=native mix phx.server
 ```
 
-Open http://localhost:4000. Set `PORT` to use another port, and
+Open <http://localhost:4000>. Set `PORT` to use another port, and
 `LOG_LEVEL=debug` to log each LiveView event.
 
 ## Models

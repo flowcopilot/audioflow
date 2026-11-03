@@ -5,8 +5,10 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
     import Membrane.ChildrenSpec
     import Membrane.Testing.Assertions
 
+    alias Membrane.Testing.Pipeline
+
     test "a final partial device block is padded at the exact sample boundary" do
-      audio = %AudioFlow.Audio{data: <<123::little-signed-16>>, sample_rate: 24000}
+      audio = %AudioFlow.Audio{data: <<123::little-signed-16>>, sample_rate: 24_000}
 
       broker =
         spawn(fn ->
@@ -23,19 +25,19 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
         child(:source, %AudioFlow.PCMSource{
           playback: broker,
           key: {self(), make_ref()},
-          sample_rate: 24000,
+          sample_rate: 24_000,
           alignment_samples: 256
         })
         |> child(:sink, Membrane.Testing.Sink)
 
-      pipeline = Membrane.Testing.Pipeline.start_link_supervised!(spec: spec)
+      pipeline = Pipeline.start_link_supervised!(spec: spec)
 
       assert_sink_buffer(pipeline, :sink, %Membrane.Buffer{
         payload: <<123::little-signed-16>>,
         pts: 0
       })
 
-      assert_sink_buffer(pipeline, :sink, %Membrane.Buffer{payload: padding, pts: 41666})
+      assert_sink_buffer(pipeline, :sink, %Membrane.Buffer{payload: padding, pts: 41_666})
       assert padding == :binary.copy(<<0, 0>>, 255)
       assert_end_of_stream(pipeline, :sink)
     end

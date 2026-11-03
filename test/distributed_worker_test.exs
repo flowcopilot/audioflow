@@ -1,6 +1,9 @@
 defmodule AudioFlow.DistributedWorkerTest do
   use ExUnit.Case, async: false
-  alias AudioFlow.{Audio, Router, Worker}
+  alias AudioFlow.Adapters.Demo
+  alias AudioFlow.Audio
+  alias AudioFlow.Router
+  alias AudioFlow.Worker
   @moduletag :distributed
 
   setup do
@@ -42,7 +45,7 @@ defmodule AudioFlow.DistributedWorkerTest do
     {:ok, session} =
       AudioFlow.start_session(
         Keyword.put(
-          AudioFlow.Adapters.Demo.options(),
+          Demo.options(),
           :llm,
           {Router, router: router, route: :chat}
         )

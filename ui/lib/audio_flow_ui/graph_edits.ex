@@ -7,6 +7,8 @@ defmodule AudioFlowUI.GraphEdits do
   of different kinds.
   """
 
+  alias AudioFlow.Graph.OptionSchema
+
   @doc "Sets the `\"position\"` of a node."
   def move_node(graph, id, x, y) when is_number(x) and is_number(y) do
     update_node(graph, id, &Map.put(&1, "position", %{"x" => round(x), "y" => round(y)}))
@@ -66,13 +68,12 @@ defmodule AudioFlowUI.GraphEdits do
     with {:ok, node} <- fetch_node(graph, id),
          {:ok, spec} <- fetch_type(types, node["type"]),
          {:ok, options} <- cast_options(node["options"] || %{}, spec["options"], params) do
-      update_node(graph, id, fn node ->
-        if options == %{},
-          do: Map.delete(node, "options"),
-          else: Map.put(node, "options", options)
-      end)
+      update_node(graph, id, &put_options(&1, options))
     end
   end
+
+  defp put_options(node, options) when options == %{}, do: Map.delete(node, "options")
+  defp put_options(node, options), do: Map.put(node, "options", options)
 
   @doc "Sets the graph name."
   def rename(graph, name) when is_binary(name) do
@@ -167,7 +168,7 @@ defmodule AudioFlowUI.GraphEdits do
     Enum.reduce_while(schema, {:ok, options}, fn option, {:ok, options} ->
       name = option["name"]
 
-      case AudioFlow.Graph.OptionSchema.cast(option, Map.get(params, name)) do
+      case OptionSchema.cast(option, Map.get(params, name)) do
         :skip -> {:cont, {:ok, options}}
         :empty -> {:cont, {:ok, Map.delete(options, name)}}
         {:ok, value} -> {:cont, {:ok, Map.put(options, name, value)}}

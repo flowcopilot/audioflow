@@ -1,5 +1,6 @@
 defmodule AudioFlow.NetworkProtocolTest do
   use ExUnit.Case, async: true
+  alias AudioFlow.Adapters.Demo
   alias AudioFlow.Test.WebSocketClient, as: Client
 
   defmodule Endpoint do
@@ -60,7 +61,7 @@ defmodule AudioFlow.NetworkProtocolTest do
       socket =
         connect(AudioFlow.Telephony.WebSocket,
           provider: @provider,
-          session: Keyword.put(AudioFlow.Adapters.Demo.options(), :stt, stt),
+          session: Keyword.put(Demo.options(), :stt, stt),
           vad: {AudioFlow.Test.AlwaysSpeechDetector, []},
           endpoint_options: [pre_roll_ms: 0, max_utterance_ms: 96]
         )
@@ -75,7 +76,7 @@ defmodule AudioFlow.NetworkProtocolTest do
       }
 
       Client.send_json(socket, Map.put(media, stream_key(@provider), "stream-1"))
-      assert_receive {:input, %AudioFlow.Audio{sample_rate: 16000, data: data}}
+      assert_receive {:input, %AudioFlow.Audio{sample_rate: 16_000, data: data}}
       assert byte_size(data) == 3072
 
       for _ <- 1..6 do
@@ -94,7 +95,7 @@ defmodule AudioFlow.NetworkProtocolTest do
     test "#{provider} rejects media before start" do
       options = [
         provider: @provider,
-        session: AudioFlow.Adapters.Demo.options(),
+        session: Demo.options(),
         vad: {AudioFlow.Test.AlwaysSpeechDetector, []}
       ]
 
@@ -105,7 +106,7 @@ defmodule AudioFlow.NetworkProtocolTest do
   end
 
   test "RTVI 2 control handshake, immediate send-text and documented text/audio events" do
-    socket = connect(AudioFlow.RTVI.WebSocket, session: AudioFlow.Adapters.Demo.options())
+    socket = connect(AudioFlow.RTVI.WebSocket, session: Demo.options())
 
     ready = %{
       label: "rtvi-ai",
@@ -141,7 +142,7 @@ defmodule AudioFlow.NetworkProtocolTest do
     assert {:json,
             %{
               "type" => "bot-tts-audio",
-              "data" => %{"audio" => audio, "sample_rate" => 16000, "num_channels" => 1}
+              "data" => %{"audio" => audio, "sample_rate" => 16_000, "num_channels" => 1}
             }} = Client.recv(socket)
 
     assert byte_size(Base.decode64!(audio)) == 3200
@@ -156,13 +157,13 @@ defmodule AudioFlow.NetworkProtocolTest do
 
     options = [
       provider: :twilio,
-      session: AudioFlow.Adapters.Demo.options(),
+      session: Demo.options(),
       vad: {AudioFlow.Test.AlwaysSpeechDetector, []}
     ]
 
     frame = fn message -> {JSON.encode!(message), opcode: :text} end
     {:ok, initial} = handler.init(options)
-    invalid = put_in(start_message(:twilio).start.mediaFormat.sampleRate, 16000)
+    invalid = put_in(start_message(:twilio).start.mediaFormat.sampleRate, 16_000)
     assert {:stop, _, {1008, _}, _} = handler.handle_in(frame.(invalid), initial)
 
     assert {:stop, _, {1008, _}, _} =
@@ -177,7 +178,7 @@ defmodule AudioFlow.NetworkProtocolTest do
           %{
             event: "media",
             streamSid: "stream-1",
-            media: %{chunk: "1", payload: Base.encode64(:binary.copy(<<255>>, 16001))}
+            media: %{chunk: "1", payload: Base.encode64(:binary.copy(<<255>>, 16_001))}
           }
         ] do
       assert {:stop, _, {1008, _}, _} = handler.handle_in(frame.(message), state)
@@ -198,7 +199,7 @@ defmodule AudioFlow.NetworkProtocolTest do
       {AudioFlow.Adapters.Function,
        [
          run: fn _, emit ->
-           emit.(%AudioFlow.Audio{sample_rate: 16000, data: :binary.copy(<<0>>, 1280)})
+           emit.(%AudioFlow.Audio{sample_rate: 16_000, data: :binary.copy(<<0>>, 1280)})
            send(owner, {:speaking, self()})
            Process.sleep(:infinity)
          end
@@ -207,7 +208,7 @@ defmodule AudioFlow.NetworkProtocolTest do
     socket =
       connect(AudioFlow.Telephony.WebSocket,
         provider: :twilio,
-        session: Keyword.put(AudioFlow.Adapters.Demo.options(), :tts, tts),
+        session: Keyword.put(Demo.options(), :tts, tts),
         vad: {AudioFlow.Test.AlwaysSpeechDetector, []},
         endpoint_options: [pre_roll_ms: 0, max_utterance_ms: 96]
       )
@@ -233,13 +234,13 @@ defmodule AudioFlow.NetworkProtocolTest do
 
   test "RTVI custom audio is split into SDK-sized whole-sample messages" do
     handler = AudioFlow.RTVI.WebSocket
-    {:ok, state} = handler.init(session: AudioFlow.Adapters.Demo.options())
+    {:ok, state} = handler.init(session: Demo.options())
     on_exit(fn -> handler.terminate(:normal, state) end)
     ref = make_ref()
     state = %{state | pcm: %{state.pcm | turn: {ref, 1}}}
     data = :binary.copy(<<123, 0>>, 30_001)
     tag = make_ref()
-    audio = %AudioFlow.Audio{sample_rate: 16000, data: data}
+    audio = %AudioFlow.Audio{sample_rate: 16_000, data: data}
 
     assert {:push, frames, _state} =
              handler.handle_info(
@@ -248,7 +249,7 @@ defmodule AudioFlow.NetworkProtocolTest do
              )
 
     assert_receive {^tag, :ok}
-    assert length(frames) == 3
+    assert [_, _, _] = frames
 
     decoded =
       for {:text, json} <- frames do
@@ -256,7 +257,7 @@ defmodule AudioFlow.NetworkProtocolTest do
 
         assert %{
                  "type" => "bot-tts-audio",
-                 "data" => %{"sample_rate" => 16000, "audio" => encoded}
+                 "data" => %{"sample_rate" => 16_000, "audio" => encoded}
                } = JSON.decode!(json)
 
         bytes = Base.decode64!(encoded)

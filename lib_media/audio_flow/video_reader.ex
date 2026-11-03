@@ -49,22 +49,7 @@ defmodule AudioFlow.VideoReader do
     else
       {selected_id, _} = selected
 
-      specs =
-        Enum.map(tracks, fn {id, _} ->
-          link = get_child(:demuxer) |> via_out(Pad.ref(:output, id))
-
-          if id == selected_id do
-            link
-            |> child(:parser, %Membrane.H264.Parser{
-              output_stream_structure: :annexb,
-              output_alignment: :au
-            })
-            |> child(:decoder, Membrane.H264.FFmpeg.Decoder)
-            |> rgb_chain(state.options)
-          else
-            link |> child({:discard, id}, Membrane.Fake.Sink)
-          end
-        end)
+      specs = Enum.map(tracks, fn {id, _} -> track_spec(id, selected_id, state.options) end)
 
       actions = [spec: {specs, group: :decode, crash_group_mode: :temporary}]
 
@@ -113,6 +98,22 @@ defmodule AudioFlow.VideoReader do
   defp fail(state, reason) do
     actions = if state.pending, do: [reply_to: {state.pending, {:error, reason}}], else: []
     {actions, %{state | pending: nil, error: reason}}
+  end
+
+  defp track_spec(id, selected_id, options) do
+    link = get_child(:demuxer) |> via_out(Pad.ref(:output, id))
+
+    if id == selected_id do
+      link
+      |> child(:parser, %Membrane.H264.Parser{
+        output_stream_structure: :annexb,
+        output_alignment: :au
+      })
+      |> child(:decoder, Membrane.H264.FFmpeg.Decoder)
+      |> rgb_chain(options)
+    else
+      link |> child({:discard, id}, Membrane.Fake.Sink)
+    end
   end
 
   defp rgb_chain(builder, options) do

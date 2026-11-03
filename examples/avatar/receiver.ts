@@ -76,7 +76,7 @@ export class Receiver {
     this.room.off(RoomEvent.TrackUnsubscribed, this.detach);
     this.room.off(RoomEvent.TrackSubscriptionFailed, this.failure);
     this.room.off(RoomEvent.Disconnected, this.disconnected);
-    for (const track of [...this.tracks]) this.detach(track);
+    for (const track of this.tracks) this.detach(track);
     await this.room.disconnect();
   }
 }

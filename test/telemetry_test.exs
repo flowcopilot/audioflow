@@ -1,7 +1,9 @@
 defmodule AudioFlow.TelemetryTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Audio, Graph, Text}
   alias AudioFlow.Adapters.Demo
+  alias AudioFlow.Audio
+  alias AudioFlow.Graph
+  alias AudioFlow.Text
 
   @events [
     [:audio_flow, :session, :start],

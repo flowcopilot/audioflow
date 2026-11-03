@@ -21,7 +21,7 @@ defmodule AudioFlow.Worker do
   @behaviour AudioFlow.Adapter
 
   @run_schema [
-    timeout_ms: [type: :pos_integer, default: 30000]
+    timeout_ms: [type: :pos_integer, default: 30_000]
   ]
   @start_schema [max_concurrency: [type: :pos_integer, default: 1]] ++ @run_schema
 
@@ -90,13 +90,7 @@ defmodule AudioFlow.Worker do
 
       task =
         Task.Supervisor.async(AudioFlow.Tasks, fn ->
-          execute(adapter, input, fn value ->
-            send(reply_to, {__MODULE__, request, {:output, self(), value}})
-
-            receive do
-              {^request, :ack} -> :ok
-            end
-          end)
+          execute(adapter, input, &send_output(reply_to, request, &1))
         end)
 
       job = %{
@@ -109,6 +103,15 @@ defmodule AudioFlow.Worker do
       }
 
       {:reply, {:ok, self()}, %{state | jobs: Map.put(state.jobs, task.ref, job)}}
+    end
+  end
+
+  # Runs in the job task: each output waits for the caller's ack before the next.
+  defp send_output(reply_to, request, value) do
+    send(reply_to, {__MODULE__, request, {:output, self(), value}})
+
+    receive do
+      {^request, :ack} -> :ok
     end
   end
 

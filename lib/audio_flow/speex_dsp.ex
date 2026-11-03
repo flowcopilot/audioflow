@@ -9,7 +9,8 @@ defmodule AudioFlow.SpeexDSP do
   samples via `VoiceInput.push/3`. Native failure raises rather than silently
   passing unfiltered audio to VAD. See `docs/input-processing.md`.
   """
-  alias AudioFlow.{Audio, PacketWorker}
+  alias AudioFlow.Audio
+  alias AudioFlow.PacketWorker
 
   def start_link(options), do: PacketWorker.start_link(options)
 

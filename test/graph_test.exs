@@ -1,6 +1,9 @@
 defmodule AudioFlow.GraphTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Audio, Graph, Image, Text}
+  alias AudioFlow.Audio
+  alias AudioFlow.Graph
+  alias AudioFlow.Image
+  alias AudioFlow.Text
 
   # Test nodes. `split` streams two chunks per input, `join` and `echo` record
   # what they receive, and `history` reports how many messages it receives.

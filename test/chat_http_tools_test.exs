@@ -1,6 +1,7 @@
 defmodule AudioFlow.ChatHTTPToolsTest do
   use ExUnit.Case, async: true
   alias AudioFlow.Adapters.ChatHTTP
+  alias AudioFlow.Adapters.Demo
   alias AudioFlow.Test.HTTPFixture, as: HTTP
 
   defmodule Weather do
@@ -166,7 +167,7 @@ defmodule AudioFlow.ChatHTTPToolsTest do
     assert_receive {:http_request, _, third}
     refute_receive {:http_request, _, _}, 20
     results = Enum.filter(third.body["messages"], &(&1["role"] == "tool"))
-    assert length(results) == 2
+    assert [_, _] = results
     assert Enum.all?(results, &Map.has_key?(JSON.decode!(&1["content"]), "error"))
   end
 
@@ -209,7 +210,7 @@ defmodule AudioFlow.ChatHTTPToolsTest do
     llm = {ChatHTTP, options ++ [tools: [wait]]}
 
     {:ok, session} =
-      AudioFlow.start_session(Keyword.put(AudioFlow.Adapters.Demo.options(), :llm, llm))
+      AudioFlow.start_session(Keyword.put(Demo.options(), :llm, llm))
 
     on_exit(fn -> if Process.alive?(session), do: AudioFlow.stop_session(session) end)
     {:ok, turn} = AudioFlow.submit(session, %AudioFlow.Text{data: "Wait"})

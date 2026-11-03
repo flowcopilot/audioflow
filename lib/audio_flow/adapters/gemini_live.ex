@@ -66,16 +66,20 @@ defmodule AudioFlow.Adapters.GeminiLive do
           {:error, :interrupted}
 
         %{"serverContent" => content}, sent ->
-          case content(content, emit) do
-            :ok -> if content["turnComplete"], do: :done, else: {:cont, sent, []}
-            error -> error
-          end
+          server_content(content, sent, emit)
 
         _, sent ->
           {:cont, sent, []}
       end,
       options
     )
+  end
+
+  defp server_content(content, sent, emit) do
+    case content(content, emit) do
+      :ok -> if content["turnComplete"], do: :done, else: {:cont, sent, []}
+      error -> error
+    end
   end
 
   defp content(content, emit) do

@@ -1,12 +1,16 @@
 defmodule AudioFlow.InterruptionTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Adapters.Function, Audio, Output, Text}
+  alias AudioFlow.Adapters.Demo
+  alias AudioFlow.Adapters.Function
+  alias AudioFlow.Audio
+  alias AudioFlow.Output
+  alias AudioFlow.Text
 
   defp session(overrides \\ []) do
     owner = self()
 
     options =
-      AudioFlow.Adapters.Demo.options()
+      Demo.options()
       |> Keyword.put(:history, true)
       |> Keyword.put(
         :tts,

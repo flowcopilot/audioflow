@@ -1,6 +1,9 @@
 defmodule AudioFlow.WorkerTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Adapters.Function, Audio, Worker}
+  alias AudioFlow.Adapters.Demo
+  alias AudioFlow.Adapters.Function
+  alias AudioFlow.Audio
+  alias AudioFlow.Worker
 
   defp worker(run, options \\ []) do
     start_supervised!(
@@ -154,9 +157,7 @@ defmodule AudioFlow.WorkerTest do
       end)
 
     {:ok, session} =
-      AudioFlow.start_session(
-        Keyword.put(AudioFlow.Adapters.Demo.options(), :llm, {Worker, worker: worker})
-      )
+      AudioFlow.start_session(Keyword.put(Demo.options(), :llm, {Worker, worker: worker}))
 
     on_exit(fn -> if Process.alive?(session), do: AudioFlow.stop_session(session) end)
     audio = %Audio{data: <<0, 0>>, sample_rate: 16_000}

@@ -28,11 +28,13 @@ defmodule AudioFlow.Graph.OptionSchema do
           {options, errors}
 
         {:error, _} ->
-          reason = if is_nil(value), do: :required, else: {:invalid, spec.type}
-          {options, errors ++ [{spec.name, reason}]}
+          {options, errors ++ [{spec.name, failure(spec, value)}]}
       end
     end)
   end
+
+  defp failure(_spec, nil), do: :required
+  defp failure(spec, _value), do: {:invalid, spec.type}
 
   defp field(spec) do
     schema = type(spec.type)
@@ -83,13 +85,16 @@ defmodule AudioFlow.Graph.OptionSchema do
   end
 
   defp cast_value({:enum, values} = type, value) do
-    case Enum.find_value(values, fn item -> if to_string(item) == value, do: {:ok, item} end) do
+    case find_item(values, value) do
       {:ok, item} -> validate_form(type, item)
       nil -> {:error, "must be one of #{Enum.map_join(values, ", ", &to_string/1)}"}
     end
   end
 
   defp cast_value(type, value), do: validate_form(type, value)
+
+  defp find_item(values, value),
+    do: Enum.find_value(values, &if(to_string(&1) == value, do: {:ok, &1}))
 
   defp validate_form(type, value) do
     case Zoi.parse(type(type), value) do

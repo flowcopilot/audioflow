@@ -1,6 +1,7 @@
 defmodule AudioFlow.RuntimeOptionsTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{History, Output}
+  alias AudioFlow.History
+  alias AudioFlow.Output
 
   test "history and interruption options remain strict with actionable argument errors" do
     for options <- [[max_turns: 0], [max_bytes: nil]] do

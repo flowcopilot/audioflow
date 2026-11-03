@@ -8,8 +8,10 @@ defmodule AudioFlow.WebRTC.Transport do
   """
   use GenServer
   @behaviour AudioFlow.Output
-  alias AudioFlow.{Audio, WebRTC}
-  alias AudioFlow.Telephony.{MuLaw, RateConverter}
+  alias AudioFlow.Audio
+  alias AudioFlow.Telephony.MuLaw
+  alias AudioFlow.Telephony.RateConverter
+  alias AudioFlow.WebRTC
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
   @impl true
@@ -75,30 +77,9 @@ defmodule AudioFlow.WebRTC.Transport do
   def handle_call({:finish, _}, _, %{sealed: true} = s), do: {:reply, :ok, s}
 
   def handle_call({:push, _, audio}, _, s) do
-    cond do
-      not Audio.valid?(audio) or audio.sample_rate not in [8000, 16_000] ->
-        {:reply, {:error, :unsupported_pcm}, s}
-
-      s.sealed or (s.rate != nil and s.rate != audio.sample_rate) ->
-        {:reply, {:error, :output_format_changed}, s}
-
-      byte_size(audio.data) > s.limit * if(audio.sample_rate == 8000, do: 320, else: 640) ->
-        {:reply, {:error, :queue_limit}, s}
-
-      true ->
-        {data, converter} =
-          if audio.sample_rate == 16_000,
-            do: RateConverter.down(audio.data, s.converter),
-            else: {audio.data, s.converter}
-
-        case enqueue(s.pending <> MuLaw.encode(data), %{
-               s
-               | converter: converter,
-                 rate: audio.sample_rate
-             }) do
-          {:ok, s} -> {:reply, :ok, schedule(s)}
-          {:error, reason} -> {:reply, {:error, reason}, s}
-        end
+    case push_error(audio, s) do
+      nil -> push_audio(audio, s)
+      reason -> {:reply, {:error, reason}, s}
     end
   end
 
@@ -151,6 +132,38 @@ defmodule AudioFlow.WebRTC.Transport do
 
   @impl true
   def terminate(_, s), do: clear(s)
+
+  defp push_error(audio, s) do
+    cond do
+      not Audio.valid?(audio) or audio.sample_rate not in [8000, 16_000] ->
+        :unsupported_pcm
+
+      s.sealed or (s.rate != nil and s.rate != audio.sample_rate) ->
+        :output_format_changed
+
+      byte_size(audio.data) > s.limit * if(audio.sample_rate == 8000, do: 320, else: 640) ->
+        :queue_limit
+
+      true ->
+        nil
+    end
+  end
+
+  defp push_audio(audio, s) do
+    {data, converter} =
+      if audio.sample_rate == 16_000,
+        do: RateConverter.down(audio.data, s.converter),
+        else: {audio.data, s.converter}
+
+    case enqueue(s.pending <> MuLaw.encode(data), %{
+           s
+           | converter: converter,
+             rate: audio.sample_rate
+         }) do
+      {:ok, s} -> {:reply, :ok, schedule(s)}
+      {:error, reason} -> {:reply, {:error, reason}, s}
+    end
+  end
 
   defp enqueue(data, s) do
     count = div(byte_size(data) + 159, 160)

@@ -6,13 +6,14 @@ defmodule AudioFlow.Telephony.WebSocket do
   See `docs/transports.md` for provider configuration and limits.
   """
   @behaviour WebSock
-  alias AudioFlow.Telephony.{MuLaw, RateConverter}
+  alias AudioFlow.Telephony.MuLaw
+  alias AudioFlow.Telephony.RateConverter
   alias AudioFlow.WebSocket, as: PCM
 
   @limits_schema [
     max_playout_packets: [type: :pos_integer, default: 500],
     reorder_window: [type: :pos_integer, default: 32],
-    reorder_max_bytes: [type: :pos_integer, default: 64000],
+    reorder_max_bytes: [type: :pos_integer, default: 64_000],
     reorder_timeout_ms: [type: :pos_integer, default: 200]
   ]
 
@@ -115,34 +116,34 @@ defmodule AudioFlow.Telephony.WebSocket do
   defp stream_message(_, state), do: fail(:invalid_event, state)
 
   defp decode_media(payload, media, state) do
-    chunk =
-      case media["chunk"] do
-        value when is_integer(value) and value > 0 ->
-          value
-
-        value when is_binary(value) ->
-          case Integer.parse(value) do
-            {number, ""} when number > 0 -> number
-            _ -> nil
-          end
-
-        _ ->
-          nil
-      end
+    chunk = chunk_number(media["chunk"])
 
     case Base.decode64(payload) do
       {:ok, bytes} when byte_size(bytes) > 0 and byte_size(bytes) <= 16_000 and chunk != nil ->
-        if state.provider == :telnyx do
-          reorder(chunk, bytes, state)
-        else
-          if state.last_chunk == nil or chunk == state.last_chunk + 1,
-            do: deliver(chunk, bytes, state),
-            else: fail(:unordered_media, state)
-        end
+        accept_media(chunk, bytes, state)
 
       _ ->
         fail(:invalid_payload, state)
     end
+  end
+
+  defp chunk_number(value) when is_integer(value) and value > 0, do: value
+
+  defp chunk_number(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {number, ""} when number > 0 -> number
+      _ -> nil
+    end
+  end
+
+  defp chunk_number(_), do: nil
+
+  defp accept_media(chunk, bytes, %{provider: :telnyx} = state), do: reorder(chunk, bytes, state)
+
+  defp accept_media(chunk, bytes, state) do
+    if state.last_chunk == nil or chunk == state.last_chunk + 1,
+      do: deliver(chunk, bytes, state),
+      else: fail(:unordered_media, state)
   end
 
   # Start at chunk 1 even if the first packet received is chunk 2.
@@ -283,25 +284,24 @@ defmodule AudioFlow.Telephony.WebSocket do
       end)
 
     {immediate, state} =
-      Enum.reduce(frames, {[], state}, fn frame, {now, state} ->
-        case frame do
-          {:text, data} ->
-            case JSON.decode!(data)["event"] do
-              "clear" ->
-                cancel_timer(state.playout_timer)
-                {now ++ [frame], %{state | playout: :queue.new(), playout_timer: nil}}
-
-              "media" ->
-                {now, %{state | playout: :queue.in(frame, state.playout)}}
-            end
-        end
-      end)
+      Enum.reduce(frames, {[], state}, &queue_frame/2)
 
     if :queue.len(state.playout) > state.max_playout_packets do
       fail(:playout_limit, state)
     else
       state = schedule_playout(state)
       if immediate == [], do: {:ok, state}, else: {:push, immediate, state}
+    end
+  end
+
+  defp queue_frame({:text, data} = frame, {now, state}) do
+    case JSON.decode!(data)["event"] do
+      "clear" ->
+        cancel_timer(state.playout_timer)
+        {now ++ [frame], %{state | playout: :queue.new(), playout_timer: nil}}
+
+      "media" ->
+        {now, %{state | playout: :queue.in(frame, state.playout)}}
     end
   end
 

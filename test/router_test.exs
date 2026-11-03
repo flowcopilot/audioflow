@@ -1,6 +1,10 @@
 defmodule AudioFlow.RouterTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Adapters.Function, Audio, Router, Worker}
+  alias AudioFlow.Adapters.Demo
+  alias AudioFlow.Adapters.Function
+  alias AudioFlow.Audio
+  alias AudioFlow.Router
+  alias AudioFlow.Worker
 
   defp worker(run) do
     start_supervised!(
@@ -16,7 +20,7 @@ defmodule AudioFlow.RouterTest do
     {:ok, session} =
       AudioFlow.start_session(
         Keyword.put(
-          AudioFlow.Adapters.Demo.options(),
+          Demo.options(),
           :llm,
           {Router, router: router, route: fn "Hello" -> :chat end}
         )
