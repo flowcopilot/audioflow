@@ -46,7 +46,7 @@ docs · — not applicable.
 | Type | OSS library (Elixir) | OSS framework (Python) + cloud | OSS framework (Py/Node) + cloud | Model API + SDK | Hosted platform | Hosted platform | Hosted platform | OSS framework + Agora | Model (open weights) + hosted | Hosted platform | Hosted API |
 | License | Not stated in repo | BSD-2 | Apache-2.0 | — (SDK OSS) | Proprietary | Proprietary | Proprietary | Apache-2.0 + restrictions | Open weights; hosted proprietary | Proprietary | Proprietary |
 | WebRTC | ❌ | ✅ Daily, LiveKit, SmallWebRTC | ✅ native | ✅ | ✅ web SDK | ✅ web call | ✅ | ✅ Agora RTC | ◐ unverified | ✅ web SDK | ◐ browser SDK |
-| WebSocket | ◐ LiveView push only (example) | ✅ | ✅ (backend) | ✅ | ✅ | ✅ custom LLM | ✅ | ✅ | ◐ | ◐ | ✅ |
+| WebSocket | ✅ raw PCM (`AudioFlow.WebSocket`) | ✅ | ✅ (backend) | ✅ | ✅ | ✅ custom LLM | ✅ | ✅ | ◐ | ◐ | ✅ |
 | SIP / PSTN | ❌ | ✅ Twilio, Telnyx, Plivo, Exotel, Vonage, Genesys… | ✅ SIP trunks + numbers | ✅ SIP | ✅ | ✅ | ✅ | ✅ SIP ext. | ✅ | ✅ | ✅ |
 | Turn detection | Silero VAD + endpoint rules | VAD + Smart Turn (audio ML) | VAD + semantic turn model | server_vad + semantic_vad | ✅ configurable | ✅ managed | ✅ proprietary model | TEN VAD + Turn Detection | Model-native | ✅ managed | ✅ endpointing |
 | Barge-in | ✅ cancel + flush | ✅ | ✅ adaptive, false-interrupt resume | ✅ | ✅ | ✅ sensitivity | ✅ | ✅ | ✅ | ✅ | ✅ |

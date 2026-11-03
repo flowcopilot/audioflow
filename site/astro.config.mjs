@@ -43,6 +43,7 @@ export default defineConfig({
             'docs/guides/routing',
             'docs/guides/membrane-input',
             'docs/guides/output',
+            'docs/guides/websocket',
           ],
         },
         {
