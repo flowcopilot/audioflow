@@ -145,11 +145,8 @@ defmodule AudioFlow.Session do
               events: 0,
               input_bytes: 0,
               context: nil,
-<<<<<<< HEAD
-              playout: AudioFlow.Playout.new()
-=======
+              playout: AudioFlow.Playout.new(),
               conversation: state.conversation
->>>>>>> c737faff0390f8b59f0d6b2505063a397e2388da
             }
 
             {:reply, {:ok, turn},
@@ -339,19 +336,18 @@ defmodule AudioFlow.Session do
         do: History.commit(state.active.context),
         else: state.history
 
-<<<<<<< HEAD
+    flow = if result == :ok, do: state.active.conversation, else: state.conversation
+    graph = if flow, do: AudioFlow.Graph.Conversation.plan(flow), else: state.graph
+
     {:noreply,
      %{
        state
        | active: nil,
          history: history,
-         playback_history: if(result == :ok, do: state.active)
+         playback_history: if(result == :ok, do: state.active),
+         conversation: flow,
+         graph: graph
      }}
-=======
-    flow = if result == :ok, do: state.active.conversation, else: state.conversation
-    graph = if flow, do: AudioFlow.Graph.Conversation.plan(flow), else: state.graph
-    {:noreply, %{state | active: nil, history: history, conversation: flow, graph: graph}}
->>>>>>> c737faff0390f8b59f0d6b2505063a397e2388da
   end
 
   def handle_info({:DOWN, ref, :process, _, _}, %{owner_ref: ref} = state),
