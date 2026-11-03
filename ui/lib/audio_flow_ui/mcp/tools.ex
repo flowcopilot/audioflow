@@ -123,3 +123,23 @@ defmodule AudioFlowUI.MCP.RunGraph do
     end
   end
 end
+
+defmodule AudioFlowUI.MCP.EvaluateConversation do
+  use Sake.Tool,
+    name: "evaluate_conversation",
+    description:
+      "Runs 1–10 text turns in one saved graph session. Script lines are input => exact expected reply. Returns actual replies and pass/fail; no recording or audio grading.",
+    annotations: [open_world: true]
+
+  arg :id, :string, required: true
+  arg :script, :string, required: true
+
+  def execute(%{id: id, script: script}, _) do
+    with {:ok, graph} <- AudioFlowUI.MCP.fetch(id) do
+      case AudioFlowUI.Examples.evaluate(graph, script) do
+        {:ok, results} -> {:ok, %{"results" => results}}
+        {:error, reason} -> {:error, AudioFlowUI.MCP.message(reason)}
+      end
+    end
+  end
+end

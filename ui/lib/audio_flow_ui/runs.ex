@@ -12,17 +12,39 @@ defmodule AudioFlowUI.Runs do
   @timeout_ms 120_000
 
   def run_text(graph, text, timeout_ms \\ @timeout_ms) do
-    with :ok <- text_input(graph),
+    with :ok <- text_input(graph), do: run(graph, %Text{data: text}, timeout_ms)
+  end
+
+  def run_audio(graph, %AudioFlow.Audio{} = audio, timeout_ms \\ @timeout_ms),
+    do: run(graph, audio, timeout_ms)
+
+  def run_browser_text(graph, text) do
+    with :ok <- text_input(graph), do: run(graph, %Text{data: text}, @timeout_ms, true)
+  end
+
+  def run_browser_audio(graph, audio), do: run(graph, audio, @timeout_ms, true)
+
+  defp run(graph, input, timeout_ms, playback \\ false) do
+    with :ok <- prerequisites(graph),
          {:ok, options} <- Graph.session_options(graph, AudioFlowUI.catalog()),
          {:ok, session} <- AudioFlow.start_session(options) do
       try do
-        case AudioFlow.submit(session, %Text{data: text}) do
-          {:ok, turn} -> collect(session, turn, graph, [], timeout_ms)
+        case AudioFlow.submit(session, input) do
+          {:ok, turn} -> collect(session, turn, graph, [], timeout_ms, playback)
           {:error, reason} -> {:error, reason}
         end
       after
         AudioFlow.stop_session(session)
       end
+    end
+  rescue
+    _ -> {:error, "Could not configure graph; check server profiles and node options"}
+  end
+
+  defp prerequisites(graph) do
+    case AudioFlowUI.Prerequisites.errors(graph) do
+      [] -> :ok
+      errors -> {:error, errors}
     end
   end
 
@@ -32,7 +54,7 @@ defmodule AudioFlowUI.Runs do
       else: {:error, ["the graph has no text input node"]}
   end
 
-  defp collect(session, turn, graph, events, timeout_ms) do
+  defp collect(session, turn, graph, events, timeout_ms, playback) do
     receive do
       {AudioFlow, ^session, ^turn, {status, metrics}} when status in [:done, :cancelled] ->
         {:ok, result(status, events, metrics, graph)}
@@ -41,7 +63,23 @@ defmodule AudioFlowUI.Runs do
         {:ok, Map.put(result(:error, events, metrics, graph), "error", inspect(reason))}
 
       {AudioFlow, ^session, ^turn, event} ->
-        collect(session, turn, graph, [event(event) | events], timeout_ms)
+        serialized = event(event)
+
+        serialized =
+          case event do
+            {:audio, audio, _} when playback ->
+              used =
+                Enum.reduce(events, 0, fn e, size -> size + byte_size(Map.get(e, "_pcm", "")) end)
+
+              if used + byte_size(audio.data) <= 8_000_000,
+                do: Map.put(serialized, "_pcm", audio.data),
+                else: serialized
+
+            _ ->
+              serialized
+          end
+
+        collect(session, turn, graph, [serialized | events], timeout_ms, playback)
     after
       timeout_ms ->
         AudioFlow.cancel(session)
@@ -62,7 +100,8 @@ defmodule AudioFlowUI.Runs do
           into: "",
           do: text
         ),
-      "events" => events,
+      "events" => Enum.map(events, &Map.delete(&1, "_pcm")),
+      "audio" => AudioFlowUI.Wave.outputs(events),
       "metrics" => Map.new(metrics, fn {key, value} -> {Atom.to_string(key), value} end)
     }
   end
