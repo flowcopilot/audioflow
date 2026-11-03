@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><title>AudioFlow Pipecat client</title>
+  <body>
+    <h1>AudioFlow Pipecat client</h1>
+    <label
+      >Authenticated WebSocket endpoint
+      <input id="url" value="ws://127.0.0.1:4000/rtvi"
+    /></label>
+    <button id="connect">Connect</button
+    ><button id="disconnect">Disconnect</button>
+    <form id="chat">
+      <input id="text" aria-label="Message" value="Hello" /><button>
+        Send text
+      </button>
+    </form>
+    <pre id="status" aria-live="polite"></pre>
+    <script type="module" src="/main.ts"></script>
+  </body>
+</html>

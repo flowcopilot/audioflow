@@ -230,4 +230,40 @@ defmodule AudioFlow.NetworkProtocolTest do
     assert_receive {:DOWN, ^monitor, :process, ^task, :killed}
     Client.close(socket)
   end
+
+  test "RTVI custom audio is split into SDK-sized whole-sample messages" do
+    handler = AudioFlow.RTVI.WebSocket
+    {:ok, state} = handler.init(session: AudioFlow.Adapters.Demo.options())
+    on_exit(fn -> handler.terminate(:normal, state) end)
+    ref = make_ref()
+    state = %{state | pcm: %{state.pcm | turn: {ref, 1}}}
+    data = :binary.copy(<<123, 0>>, 30_001)
+    tag = make_ref()
+    audio = %AudioFlow.Audio{sample_rate: 16000, data: data}
+
+    assert {:push, frames, _state} =
+             handler.handle_info(
+               {AudioFlow.WebSocket, :push, {state.pcm.session, ref}, audio, {self(), tag}},
+               state
+             )
+
+    assert_receive {^tag, :ok}
+    assert length(frames) == 3
+
+    decoded =
+      for {:text, json} <- frames do
+        assert byte_size(json) < 64_000
+
+        assert %{
+                 "type" => "bot-tts-audio",
+                 "data" => %{"sample_rate" => 16000, "audio" => encoded}
+               } = JSON.decode!(json)
+
+        bytes = Base.decode64!(encoded)
+        assert rem(byte_size(bytes), 2) == 0
+        bytes
+      end
+
+    assert IO.iodata_to_binary(decoded) == data
+  end
 end
