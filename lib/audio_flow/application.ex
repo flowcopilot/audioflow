@@ -10,6 +10,7 @@ defmodule AudioFlow.Application do
          name: AudioFlow.HTTPClient,
          pools: %{default: [protocols: [:http1], conn_opts: [transport_opts: [timeout: 5_000]]]}},
         {Task.Supervisor, name: AudioFlow.Tasks},
+        AudioFlow.Jido,
         {DynamicSupervisor, name: AudioFlow.Sessions, strategy: :one_for_one}
       ] ++ Application.get_env(:audio_flow, :inference_children, [])
 

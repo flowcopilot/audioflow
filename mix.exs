@@ -35,7 +35,7 @@ defmodule AudioFlow.MixProject do
         []
       end
 
-    [{:finch, "~> 0.24.0"}] ++
+    [{:finch, "~> 0.24.0"}, {:jido, "~> 2.4.0"}] ++
       ml ++
       if(enabled?("AUDIOFLOW_MEDIA"),
         do: [
