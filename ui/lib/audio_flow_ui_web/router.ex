@@ -25,6 +25,7 @@ defmodule AudioFlowUIWeb.Router do
   scope "/" do
     pipe_through :browser
     live "/", AudioFlowUIWeb.GraphsLive
+    live "/examples", AudioFlowUIWeb.ExamplesLive
     live "/graphs/:id", AudioFlowUIWeb.GraphLive
   end
 end

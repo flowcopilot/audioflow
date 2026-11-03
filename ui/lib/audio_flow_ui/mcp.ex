@@ -14,11 +14,17 @@ defmodule AudioFlowUI.MCP do
     MCP.SaveGraph,
     MCP.ValidateGraph,
     MCP.DeleteGraph,
-    MCP.RunGraph
+    MCP.RunGraph,
+    MCP.EvaluateConversation
   ]
 
   @doc false
-  def graph_result(graph), do: %{"graph" => graph, "errors" => AudioFlowUI.errors(graph)}
+  def graph_result(graph),
+    do: %{
+      "graph" => graph,
+      "errors" => AudioFlowUI.errors(graph),
+      "prerequisites" => AudioFlowUI.Prerequisites.errors(graph)
+    }
 
   @doc false
   def fetch(id) do

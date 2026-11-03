@@ -30,6 +30,7 @@ defmodule AudioFlowUIWeb.GraphsLive do
       <header class="flex flex-col gap-1">
         <div class="flex items-center justify-between gap-4">
           <h1 class="text-xl font-semibold">Agent graphs</h1>
+          <.link navigate="/examples">Runnable examples</.link>
           <button
             type="button"
             phx-click="new_graph"

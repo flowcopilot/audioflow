@@ -18,6 +18,7 @@ defmodule AudioFlowUI do
     Graph.Nodes.Audio,
     Graph.Nodes.Demo,
     Graph.Nodes.ChatHTTP,
+    Graph.Nodes.Providers,
     Graph.Nodes.RAG
   ]
 
