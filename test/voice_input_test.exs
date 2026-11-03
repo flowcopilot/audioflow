@@ -6,6 +6,13 @@ defmodule AudioFlow.VoiceInputTest do
   defp audio(data), do: %Audio{data: data, sample_rate: 16_000}
   defp input(options \\ []), do: VoiceInput.new({AudioFlow.Test.FrameDetector, []}, options)
 
+  test "endpoint options preserve zero pre-roll, ignored extras and duplicate precedence" do
+    state = input(pre_roll_ms: 0, pre_roll_ms: -1, unused: true, min_speech_ms: 32)
+    assert {[:speech_started], state} = VoiceInput.push(state, audio(frame(32000)))
+    assert {[{:utterance, result, :end_of_stream}], _} = VoiceInput.flush(state)
+    assert result == audio(frame(32000))
+  end
+
   test "speech confirmation keeps pre-roll, preserves uncertain speech, and waits for silence" do
     silence = frame(0)
     speech = frame(32000)

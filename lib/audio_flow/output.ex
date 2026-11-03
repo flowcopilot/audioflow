@@ -6,6 +6,10 @@ defmodule AudioFlow.Output do
   release a blocked push and stop queued output for that key. A completed turn
   can still have queued output, so `finish/2` must drain instead of discard it.
   """
+  @interrupt_schema [
+    min_words: [type: :pos_integer, default: 2]
+  ]
+
   @type key :: {pid(), reference()}
   @callback start_turn(term(), key()) :: :ok | {:error, term()}
   @callback push(term(), key(), AudioFlow.Audio.t()) :: :ok | {:error, term()}
@@ -41,10 +45,12 @@ defmodule AudioFlow.Output do
   pause/resume after cancellation.
   """
   def interrupt(session, transcript, options \\ []) do
-    minimum = Keyword.fetch!(Keyword.validate!(options, min_words: 2), :min_words)
+    options =
+      AudioFlow.RuntimeOptions.validate!(options, @interrupt_schema,
+        min_words: "min_words must be positive"
+      )
 
-    if not (is_integer(minimum) and minimum > 0),
-      do: raise(ArgumentError, "min_words must be positive")
+    minimum = options[:min_words]
 
     if length(String.split(transcript)) < minimum,
       do: {:ok, :ignored},

@@ -8,6 +8,29 @@ defmodule AudioFlow.WorkerTest do
     )
   end
 
+  test "runtime options ignore extras and use the first duplicate deadline" do
+    worker = worker(fn value, emit -> emit.(value) end, unused: true)
+    owner = self()
+
+    assert :ok =
+             Worker.run(
+               :result,
+               [worker: worker, timeout_ms: 1000, timeout_ms: 0, unused: true],
+               fn value ->
+                 send(owner, value)
+                 :ok
+               end
+             )
+
+    assert_receive :result
+
+    for value <- [0, -1, 1.5, nil, :infinity] do
+      assert_raise ArgumentError, "timeout_ms must be positive", fn ->
+        Worker.run(:result, [worker: worker, timeout_ms: value], fn _ -> :ok end)
+      end
+    end
+  end
+
   test "each output waits for acknowledgement and full workers reject new requests" do
     owner = self()
 

@@ -20,13 +20,20 @@ defmodule AudioFlow.Worker do
   use GenServer
   @behaviour AudioFlow.Adapter
 
+  @run_schema [
+    timeout_ms: [type: :pos_integer, default: 30000]
+  ]
+  @start_schema [max_concurrency: [type: :pos_integer, default: 1]] ++ @run_schema
+
+  @doc "Worker resource limits:\n\n" <> NimbleOptions.docs(@start_schema)
   def start_link(options),
     do: GenServer.start_link(__MODULE__, options, Keyword.take(options, [:name]))
 
   @impl AudioFlow.Adapter
   def run(input, options, emit) do
     worker = Keyword.fetch!(options, :worker)
-    timeout = positive!(options, :timeout_ms, 30_000)
+    limits = validate_limits!(options, @run_schema)
+    timeout = limits[:timeout_ms]
     request = make_ref()
     reply_to = :erlang.alias()
     deadline = now() + timeout
@@ -59,12 +66,13 @@ defmodule AudioFlow.Worker do
   @impl GenServer
   def init(options) do
     Process.flag(:trap_exit, true)
+    limits = validate_limits!(options, @start_schema)
 
     {:ok,
      %{
        adapter: Keyword.fetch!(options, :adapter),
-       limit: positive!(options, :max_concurrency, 1),
-       timeout: positive!(options, :timeout_ms, 30_000),
+       limit: limits[:max_concurrency],
+       timeout: limits[:timeout_ms],
        jobs: %{}
      }}
   end
@@ -238,10 +246,12 @@ defmodule AudioFlow.Worker do
     end
   end
 
-  defp positive!(options, key, default) do
-    value = Keyword.get(options, key, default)
-    if not (is_integer(value) and value > 0), do: raise(ArgumentError, "#{key} must be positive")
-    value
+  defp validate_limits!(options, schema) do
+    AudioFlow.RuntimeOptions.known!(
+      options,
+      schema,
+      Enum.map(schema, fn {key, _} -> {key, "#{key} must be positive"} end)
+    )
   end
 
   defp now, do: System.monotonic_time(:millisecond)

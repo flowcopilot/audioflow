@@ -34,6 +34,15 @@ defmodule AudioFlow.Session do
   alias AudioFlow.{Adapter, Audio, History, Image, Telemetry, Text}
   alias AudioFlow.Graph.Plan
 
+  @limits_schema [
+    timeout_ms: [type: :pos_integer, default: 30000],
+    max_input_bytes: [type: :pos_integer, default: 960_000],
+    max_image_bytes: [type: :pos_integer, default: 6_291_456],
+    max_events: [type: :pos_integer, default: 1024],
+    max_output_bytes: [type: :pos_integer, default: 16_777_216]
+  ]
+
+  @doc "Session resource limits:\n\n" <> NimbleOptions.docs(@limits_schema)
   def start_link(options), do: GenServer.start_link(__MODULE__, options)
 
   @impl true
@@ -78,23 +87,12 @@ defmodule AudioFlow.Session do
       end
 
     limits =
-      Map.new(
-        [
-          timeout_ms: 30_000,
-          max_input_bytes: 960_000,
-          max_image_bytes: 6_291_456,
-          max_events: 1_024,
-          max_output_bytes: 16_777_216
-        ],
-        fn {key, default} ->
-          value = Keyword.get(options, key, default)
-
-          if not (is_integer(value) and value > 0),
-            do: raise(ArgumentError, "#{key} must be positive")
-
-          {key, value}
-        end
+      options
+      |> AudioFlow.RuntimeOptions.known!(
+        @limits_schema,
+        Enum.map(@limits_schema, fn {key, _} -> {key, "#{key} must be positive"} end)
       )
+      |> Map.new()
 
     telemetry = %{session: self(), owner: owner, graph?: graph != nil}
 
