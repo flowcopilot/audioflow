@@ -58,7 +58,12 @@ we have not verified the provider's live grants. No agent token is exposed.
 The publisher's opt-in `wait_for_viewer: true` gate prevents sending PCM before
 both audio and video have subscribed and playback has been enabled (15-second readiness deadline). Existing
 publisher callers retain immediate-send behavior. When the room publication arrives, click
-**Enable audio / video** to unlock browser autoplay. Retry that button if blocked.
+**Enable audio / video** after both tracks attach to unlock browser autoplay.
+An early click reports that the tracks are still pending; click again when they
+arrive. Readiness checks both SDK playback flags after the gesture, including
+video autoplay denial that the SDK can report without rejecting its promise.
+Retry that button if blocked. A track subscription failure closes receiver media
+and cancels the provider session.
 Cancel closes receiver media and requests provider stop; Disconnect and leaving
 the page also release the server-owned publisher. Start becomes available after
 cleanup to explicitly run another bounded utterance. The publisher bounds work
@@ -83,7 +88,8 @@ readiness gating, bounded PCM, explicit repeat, credential withholding,
 cancellation/disconnect cleanup and loopback/origin restrictions. Client fixtures
 exercise the actual receiver class with SDK event names and track/transport
 fixtures: both tracks attach, readiness, detach, playback gesture methods,
-subscription/connect errors and idempotent cleanup. Typecheck/build use the
+subscription/connect/disconnect errors, blocked-video and early-gesture readiness,
+pending-playback cancellation and idempotent cleanup. Typecheck/build use the
 installed real SDK. These are not browser interoperability or live-service tests.
 
 **Unverified without credentials:** live generation and synchronized lip-sync,

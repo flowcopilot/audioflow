@@ -6,6 +6,7 @@ import { Receiver } from './receiver';
 class FakeRoom extends EventEmitter {
   disconnected = 0;
   audio = 0; video = 0;
+  canPlaybackAudio = true; canPlaybackVideo = true;
   async connect() {}
   async disconnect() { this.disconnected++; }
   async startAudio() { this.audio++; }
@@ -36,7 +37,7 @@ test('both synchronized provider tracks attach once; readiness waits for both; u
   assert.equal(video.element.removed, 1); assert.equal(room.disconnected, 1);
   assert.equal(room.eventNames().length, 0);
 });
-test('room disconnect and subscription failure surface errors and clear tracks', async () => {
+test('subscription failure is terminal and clears tracks and listeners', async () => {
   const room = new FakeRoom(), errors: string[] = [];
   const receiver = new Receiver({append() {}}, () => {}, e => errors.push(e), room as unknown as Room);
   const audio = track(Track.Kind.Audio);
@@ -44,8 +45,76 @@ test('room disconnect and subscription failure surface errors and clear tracks',
   room.emit(RoomEvent.TrackSubscriptionFailed, 'sid');
   room.emit(RoomEvent.Disconnected);
   await receiver.close();
-  assert.equal(errors.length, 2); assert.equal(audio.element.removed, 1);
+  assert.equal(errors.length, 1); assert.equal(audio.element.removed, 1);
   assert.equal(room.eventNames().length, 0);
+});
+
+test('resolved SDK playback calls with blocked video do not release PCM; retry enables readiness', async () => {
+  const room = new FakeRoom();
+  let ready = 0;
+  const receiver = new Receiver({append() {}}, () => ready++, assert.fail, room as unknown as Room);
+  room.emit(RoomEvent.TrackSubscribed, track(Track.Kind.Audio));
+  room.emit(RoomEvent.TrackSubscribed, track(Track.Kind.Video));
+  // LiveKit 2.17.2 startVideo catches NotAllowedError and resolves.
+  room.canPlaybackVideo = false;
+  await assert.rejects(receiver.play(), /Playback blocked/);
+  assert.equal(ready, 0);
+  room.canPlaybackVideo = true;
+  await receiver.play();
+  assert.equal(ready, 1);
+  await receiver.close();
+});
+
+test('playback permission must be requested after both tracks attach', async () => {
+  const room = new FakeRoom();
+  let ready = 0;
+  const receiver = new Receiver({append() {}}, () => ready++, assert.fail, room as unknown as Room);
+  await assert.rejects(receiver.play(), /Wait for both/);
+  room.emit(RoomEvent.TrackSubscribed, track(Track.Kind.Audio));
+  room.emit(RoomEvent.TrackSubscribed, track(Track.Kind.Video));
+  assert.equal(ready, 0);
+  await receiver.play();
+  assert.equal(ready, 1);
+  await receiver.close();
+});
+
+test('closing during pending playback prevents stale readiness and later playback calls', async () => {
+  const room = new FakeRoom();
+  let finish!: () => void;
+  room.startVideo = () => new Promise<void>(resolve => { finish = resolve; });
+  let ready = 0;
+  const receiver = new Receiver({append() {}}, () => ready++, assert.fail, room as unknown as Room);
+  room.emit(RoomEvent.TrackSubscribed, track(Track.Kind.Audio));
+  room.emit(RoomEvent.TrackSubscribed, track(Track.Kind.Video));
+  const playing = receiver.play();
+  await receiver.close();
+  finish(); await playing;
+  assert.equal(ready, 0);
+  const calls = room.audio;
+  room.startVideo = async () => {};
+  await receiver.play();
+  assert.equal(room.audio, calls);
+});
+
+test('replaced tracks during playback setup require another gesture', async () => {
+  const room = new FakeRoom();
+  let finish!: () => void;
+  room.startVideo = () => new Promise<void>(resolve => { finish = resolve; });
+  let ready = 0;
+  const receiver = new Receiver({append() {}}, () => ready++, assert.fail, room as unknown as Room);
+  const video = track(Track.Kind.Video);
+  room.emit(RoomEvent.TrackSubscribed, track(Track.Kind.Audio));
+  room.emit(RoomEvent.TrackSubscribed, video);
+  const playing = receiver.play();
+  room.emit(RoomEvent.TrackUnsubscribed, video);
+  room.emit(RoomEvent.TrackSubscribed, track(Track.Kind.Video));
+  finish();
+  await assert.rejects(playing, /tracks changed/);
+  assert.equal(ready, 0);
+  room.startVideo = async () => {};
+  await receiver.play();
+  assert.equal(ready, 1);
+  await receiver.close();
 });
 test('connect failure surfaces useful error and cleans up', async () => {
   const room = new FakeRoom(); room.connect = async () => { throw Error('fixture'); };
@@ -53,4 +122,16 @@ test('connect failure surfaces useful error and cleans up', async () => {
   const receiver = new Receiver({append() {}}, () => {}, e => errors.push(e), room as unknown as Room);
   await receiver.connect('wss://fixture', 'token');
   assert.equal(errors.length, 1); assert.equal(room.disconnected, 1);
+});
+
+test('unexpected room disconnect reports failure and removes media', async () => {
+  const room = new FakeRoom(), errors: string[] = [];
+  const receiver = new Receiver({append() {}}, () => {}, e => errors.push(e), room as unknown as Room);
+  const video = track(Track.Kind.Video);
+  room.emit(RoomEvent.TrackSubscribed, video);
+  room.emit(RoomEvent.Disconnected);
+  await receiver.close();
+  assert.deepEqual(errors, ['Provider room disconnected']);
+  assert.equal(video.element.removed, 1);
+  assert.equal(room.eventNames().length, 0);
 });
