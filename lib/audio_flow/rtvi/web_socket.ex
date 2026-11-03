@@ -108,15 +108,19 @@ defmodule AudioFlow.RTVI.WebSocket do
     reply(frames, state)
   end
 
-  defp outgoing({:binary, data}, state),
-    do:
-      {[
-         json("bot-tts-audio", %{
-           audio: Base.encode64(data),
-           sample_rate: state.rate,
-           num_channels: 1
-         })
-       ], state}
+  # Keep custom media events below the SDK transport's 64 KB message bound.
+  defp outgoing({:binary, data}, state) do
+    frames =
+      for chunk <- audio_chunks(data),
+          do:
+            json("bot-tts-audio", %{
+              audio: Base.encode64(chunk),
+              sample_rate: state.rate,
+              num_channels: 1
+            })
+
+    {frames, state}
+  end
 
   defp outgoing({:text, data}, state) do
     case JSON.decode!(data) do
@@ -139,6 +143,12 @@ defmodule AudioFlow.RTVI.WebSocket do
         {[], state}
     end
   end
+
+  defp audio_chunks(<<>>), do: []
+  defp audio_chunks(data) when byte_size(data) <= 24_000, do: [data]
+
+  defp audio_chunks(<<chunk::binary-size(24_000), rest::binary>>),
+    do: [chunk | audio_chunks(rest)]
 
   defp error(id, reason, state),
     do: {:push, [json("error-response", %{error: reason}, id || "")], state}

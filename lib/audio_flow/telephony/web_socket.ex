@@ -26,6 +26,15 @@ defmodule AudioFlow.Telephony.WebSocket do
        pending: <<>>,
        output_rate: nil,
        last_chunk: nil,
+       playout: :queue.new(),
+       playout_timer: nil,
+       max_playout_packets: positive(options, :max_playout_packets, 500),
+       reorder: %{},
+       reorder_bytes: 0,
+       gap_timer: nil,
+       reorder_window: positive(options, :reorder_window, 32),
+       reorder_max_bytes: positive(options, :reorder_max_bytes, 64_000),
+       reorder_timeout_ms: positive(options, :reorder_timeout_ms, 200),
        output?: false
      }}
   end
@@ -107,38 +116,139 @@ defmodule AudioFlow.Telephony.WebSocket do
           nil
       end
 
-    if chunk == nil or (state.last_chunk != nil and chunk != state.last_chunk + 1) do
-      fail(:unordered_media, state)
-    else
-      case Base.decode64(payload) do
-        {:ok, bytes} when byte_size(bytes) <= 16_000 ->
-          {data, up} = RateConverter.up(MuLaw.decode(bytes), state.up)
+    case Base.decode64(payload) do
+      {:ok, bytes} when byte_size(bytes) > 0 and byte_size(bytes) <= 16_000 and chunk != nil ->
+        if state.provider == :telnyx do
+          reorder(chunk, bytes, state)
+        else
+          if state.last_chunk == nil or chunk == state.last_chunk + 1,
+            do: deliver(chunk, bytes, state),
+            else: fail(:unordered_media, state)
+        end
 
-          translate(PCM.handle_in({data, opcode: :binary}, state.pcm), %{
-            state
-            | up: up,
-              last_chunk: chunk
-          })
-
-        _ ->
-          fail(:invalid_payload, state)
-      end
+      _ ->
+        fail(:invalid_payload, state)
     end
   end
 
+  # Start at chunk 1 even if the first packet received is chunk 2.
+  # First copy wins; stale/duplicate packets never enter the resampler twice.
+  defp reorder(chunk, bytes, state) do
+    expected = (state.last_chunk || 0) + 1
+
+    cond do
+      chunk < expected or is_map_key(state.reorder, chunk) ->
+        {:ok, state}
+
+      chunk - expected > state.reorder_window or
+          state.reorder_bytes + byte_size(bytes) > state.reorder_max_bytes ->
+        fail(:reorder_limit, state)
+
+      true ->
+        drain(
+          %{
+            state
+            | reorder: Map.put(state.reorder, chunk, bytes),
+              reorder_bytes: state.reorder_bytes + byte_size(bytes)
+          },
+          []
+        )
+    end
+  end
+
+  defp drain(state, frames) do
+    next = (state.last_chunk || 0) + 1
+
+    case Map.pop(state.reorder, next) do
+      {nil, _} ->
+        state = gap_timer(state)
+        if frames == [], do: {:ok, state}, else: {:push, frames, state}
+
+      {bytes, rest} ->
+        state = %{state | reorder: rest, reorder_bytes: state.reorder_bytes - byte_size(bytes)}
+
+        case deliver(next, bytes, state) do
+          {:ok, state} -> drain(state, frames)
+          {:push, new, state} -> drain(state, frames ++ new)
+          other -> other
+        end
+    end
+  end
+
+  defp deliver(chunk, bytes, state) do
+    {data, up} = RateConverter.up(MuLaw.decode(bytes), state.up)
+
+    translate(
+      PCM.handle_in({data, opcode: :binary}, state.pcm),
+      %{state | up: up, last_chunk: chunk}
+    )
+  end
+
+  defp gap_timer(%{reorder: packets} = state) when map_size(packets) == 0 do
+    cancel_timer(state.gap_timer)
+    %{state | gap_timer: nil}
+  end
+
+  defp gap_timer(%{gap_timer: nil} = state) do
+    token = make_ref()
+
+    timer =
+      Process.send_after(self(), {__MODULE__, :gap_timeout, token}, state.reorder_timeout_ms)
+
+    %{state | gap_timer: {timer, token}}
+  end
+
+  defp gap_timer(state), do: state
+
+  defp cancel_timer(nil), do: :ok
+  defp cancel_timer({timer, _}), do: Process.cancel_timer(timer)
+
+  defp positive(options, key, default) do
+    value = Keyword.get(options, key, default)
+    unless is_integer(value) and value > 0, do: raise(ArgumentError, "#{key} must be positive")
+    value
+  end
+
   @impl true
+  def handle_info({__MODULE__, :playout, token}, %{playout_timer: {_, token}} = state) do
+    case :queue.out(state.playout) do
+      {{:value, frame}, queue} ->
+        state = schedule_playout(%{state | playout: queue, playout_timer: nil})
+        {:push, [frame], state}
+
+      {:empty, _} ->
+        {:ok, %{state | playout_timer: nil}}
+    end
+  end
+
+  def handle_info({__MODULE__, :playout, _}, state), do: {:ok, state}
+
+  def handle_info({__MODULE__, :gap_timeout, token}, %{gap_timer: {_, token}} = state),
+    do: fail(:media_gap_timeout, state)
+
+  def handle_info({__MODULE__, :gap_timeout, _}, state), do: {:ok, state}
+
   def handle_info({PCM, :push, _key, audio, {from, tag}}, state)
       when audio.sample_rate not in [8000, 16_000] do
     send(from, {tag, {:error, :unsupported_telephony_output_rate}})
     {:ok, state}
   end
 
+  def handle_info({PCM, :push, _key, audio, {from, tag}}, state)
+      when byte_size(audio.data) > state.max_playout_packets * 640 do
+    send(from, {tag, {:error, :telephony_output_too_large}})
+    fail(:playout_limit, state)
+  end
+
   def handle_info(_, %{pcm: nil} = state), do: {:ok, state}
   def handle_info(message, state), do: translate(PCM.handle_info(message, state.pcm), state)
 
   @impl true
-  def terminate(reason, %{pcm: pcm}) when pcm != nil, do: PCM.terminate(reason, pcm)
-  def terminate(_, _), do: :ok
+  def terminate(reason, state) do
+    cancel_timer(state.gap_timer)
+    cancel_timer(state.playout_timer)
+    if state.pcm, do: PCM.terminate(reason, state.pcm), else: :ok
+  end
 
   defp translate({:ok, pcm}, state), do: {:ok, %{state | pcm: pcm}}
 
@@ -164,8 +274,40 @@ defmodule AudioFlow.Telephony.WebSocket do
         {frames ++ new, state}
       end)
 
-    if frames == [], do: {:ok, state}, else: {:push, frames, state}
+    {immediate, state} =
+      Enum.reduce(frames, {[], state}, fn frame, {now, state} ->
+        case frame do
+          {:text, data} ->
+            case JSON.decode!(data)["event"] do
+              "clear" ->
+                cancel_timer(state.playout_timer)
+                {now ++ [frame], %{state | playout: :queue.new(), playout_timer: nil}}
+
+              "media" ->
+                {now, %{state | playout: :queue.in(frame, state.playout)}}
+            end
+        end
+      end)
+
+    if :queue.len(state.playout) > state.max_playout_packets do
+      fail(:playout_limit, state)
+    else
+      state = schedule_playout(state)
+      if immediate == [], do: {:ok, state}, else: {:push, immediate, state}
+    end
   end
+
+  defp schedule_playout(%{playout_timer: nil} = state) do
+    if :queue.is_empty(state.playout) do
+      state
+    else
+      token = make_ref()
+      timer = Process.send_after(self(), {__MODULE__, :playout, token}, 20)
+      %{state | playout_timer: {timer, token}}
+    end
+  end
+
+  defp schedule_playout(state), do: state
 
   defp outgoing({:binary, data}, state) do
     {data, down} =
@@ -221,6 +363,18 @@ defmodule AudioFlow.Telephony.WebSocket do
 
   defp wire(_state, message), do: {:text, JSON.encode!(message)}
 
-  defp fail(reason, state),
-    do: {:stop, {:protocol_error, reason}, {1008, "invalid media stream"}, state}
+  defp fail(reason, state) do
+    cancel_timer(state.gap_timer)
+    cancel_timer(state.playout_timer)
+
+    {:stop, {:protocol_error, reason}, {1008, "invalid media stream"},
+     %{
+       state
+       | gap_timer: nil,
+         reorder: %{},
+         reorder_bytes: 0,
+         playout: :queue.new(),
+         playout_timer: nil
+     }}
+  end
 end
