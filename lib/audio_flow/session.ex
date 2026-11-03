@@ -23,7 +23,7 @@ defmodule AudioFlow.Session do
   may still finish a batch already submitted to shared hardware.
   """
   use GenServer, restart: :temporary
-  alias AudioFlow.{Adapter, Audio, History, Image, Text}
+  alias AudioFlow.{Adapter, Audio, History, Image, Telemetry, Text}
   alias AudioFlow.Graph.Plan
 
   def start_link(options), do: GenServer.start_link(__MODULE__, options)
@@ -70,8 +70,13 @@ defmodule AudioFlow.Session do
         end
       )
 
+    telemetry = %{session: self(), owner: owner, graph?: graph != nil}
+
     {:ok,
      %{
+       telemetry: telemetry,
+       telemetry_started: Telemetry.session_start(telemetry),
+       turns: 0,
        owner: owner,
        owner_ref: Process.monitor(owner),
        adapters: adapters,
@@ -111,6 +116,8 @@ defmodule AudioFlow.Session do
 
         case AudioFlow.Output.call(state.output, :start_turn, [{session, turn}]) do
           :ok ->
+            telemetry = %{session: session, turn: turn, input: Plan.input_kind(input)}
+            telemetry_started = Telemetry.turn_start(telemetry)
             adapters = state.adapters
             graph = state.graph
             output = state.output
@@ -126,6 +133,8 @@ defmodule AudioFlow.Session do
 
             active = %{
               turn: turn,
+              telemetry: telemetry,
+              telemetry_started: telemetry_started,
               task: task,
               timer: timer,
               started: started,
@@ -135,7 +144,8 @@ defmodule AudioFlow.Session do
               context: nil
             }
 
-            {:reply, {:ok, turn}, %{state | active: active, output_turn: turn}}
+            {:reply, {:ok, turn},
+             %{state | active: active, output_turn: turn, turns: state.turns + 1}}
 
           {:error, reason} ->
             {:reply, {:error, {:output, reason}}, state}
@@ -177,7 +187,7 @@ defmodule AudioFlow.Session do
         {:error, reason} -> {:error, {:output_flush, reason}, metrics(state.active)}
       end
 
-    notify(state, event)
+    finish_turn(state, event)
     {:reply, result, %{state | active: nil}}
   end
 
@@ -240,7 +250,7 @@ defmodule AudioFlow.Session do
           {:error, reason, metrics(state.active)}
       end
 
-    notify(state, event)
+    finish_turn(state, event)
 
     history =
       if result == :ok and state.active.context != nil,
@@ -256,26 +266,38 @@ defmodule AudioFlow.Session do
   def handle_info({:DOWN, ref, :process, _, reason}, %{active: %{task: %{ref: ref}}} = state) do
     Process.cancel_timer(state.active.timer)
     flush_output(state)
-    notify(state, {:error, {:task_exit, reason}, metrics(state.active)})
+    finish_turn(state, {:error, {:task_exit, reason}, metrics(state.active)})
     {:noreply, %{state | active: nil}}
   end
 
   def handle_info({:timeout, turn}, %{active: %{turn: turn}} = state) do
     kill(state.active)
     flush_output(state)
-    notify(state, {:error, :timeout, metrics(state.active)})
+    finish_turn(state, {:error, :timeout, metrics(state.active)})
     {:noreply, %{state | active: nil}}
   end
 
   def handle_info(_, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_, state) do
-    if state.active, do: kill(state.active)
+  def terminate(reason, state) do
+    if state.active do
+      kill(state.active)
+      turn_stop(state.active, {:error, {:session_stop, reason}, metrics(state.active)})
+    end
+
     flush_output(state)
+    metadata = Map.put(state.telemetry, :reason, reason)
+    Telemetry.session_stop(state.telemetry_started, state.turns, metadata)
   end
 
   defp pipeline(session, turn, input, stage, kind, adapters, output) do
+    run = fn stage, input, emit ->
+      {module, _} = adapter = Map.fetch!(adapters, stage)
+      metadata = %{session: session, turn: turn, stage: stage, adapter: module}
+      Telemetry.stage(metadata, fn -> Adapter.run(adapter, input, emit) end)
+    end
+
     emit = fn kind, value ->
       case GenServer.call(session, {:emit, turn, kind, value}) do
         :ok -> :ok
@@ -289,7 +311,7 @@ defmodule AudioFlow.Session do
 
     try do
       if stage != nil do
-        Adapter.run(Map.fetch!(adapters, stage), input, fn text ->
+        run.(stage, input, fn text ->
           emit.(kind, text)
           Process.put(key, [text | Process.get(key)])
           :ok
@@ -308,11 +330,11 @@ defmodule AudioFlow.Session do
             {:error, reason} -> throw(reason)
           end
 
-        Adapter.run(adapters.llm, prompt, fn text ->
+        run.(:llm, prompt, fn text ->
           emit.(:text, text)
 
           if String.trim(text) != "" do
-            Adapter.run(adapters.tts, text, fn audio ->
+            run.(:tts, text, fn audio ->
               emit.(:audio, audio)
 
               case AudioFlow.Output.call(output, :push, [{session, turn}, audio]) do
@@ -358,7 +380,8 @@ defmodule AudioFlow.Session do
 
         :ok
       end,
-      context: fn text -> call.({:context, turn, text}) end
+      context: fn text -> call.({:context, turn, text}) end,
+      telemetry: %{session: session, turn: turn}
     }
 
     AudioFlow.Graph.Runner.run(plan, input, callbacks)
@@ -422,6 +445,22 @@ defmodule AudioFlow.Session do
   defp invalid_input(_), do: :invalid_audio
   defp now, do: System.monotonic_time(:microsecond)
   defp notify(state, event), do: send(state.owner, {AudioFlow, self(), state.active.turn, event})
+
+  defp finish_turn(state, event) do
+    notify(state, event)
+    turn_stop(state.active, event)
+  end
+
+  defp turn_stop(active, event) do
+    {status, error, metrics} =
+      case event do
+        {:error, reason, metrics} -> {:error, reason, metrics}
+        {status, metrics} -> {status, nil, metrics}
+      end
+
+    metadata = Map.merge(active.telemetry, %{status: status, error: error, metrics: metrics})
+    Telemetry.turn_stop(active.telemetry_started, active.events, metadata)
+  end
 
   defp kill(active) do
     Process.cancel_timer(active.timer)

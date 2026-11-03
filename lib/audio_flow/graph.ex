@@ -106,6 +106,7 @@ defmodule AudioFlow.Graph do
       Map.new(nodes, fn {id, node} ->
         step = %{
           id: id,
+          type: node.type,
           adapter: if(node.spec.input, do: node.module.adapter(node.type, node.options)),
           input_mode: node.spec.input_mode,
           event: node.spec.event,
