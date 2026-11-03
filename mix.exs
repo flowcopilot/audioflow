@@ -35,7 +35,13 @@ defmodule AudioFlow.MixProject do
         []
       end
 
-    [{:finch, "~> 0.24.0"}, {:jido, "~> 2.4.0"}] ++
+    [
+      {:finch, "~> 0.24.0"},
+      {:jido, "~> 2.4.0"},
+      {:websock, "~> 0.5.3"},
+      {:bandit, "~> 1.5", only: [:dev, :test]},
+      {:websock_adapter, "~> 0.5", only: [:dev, :test]}
+    ] ++
       ml ++
       if(enabled?("AUDIOFLOW_MEDIA"),
         do: [
