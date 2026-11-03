@@ -19,7 +19,8 @@ defmodule AudioFlow.MixProject do
     ["lib"] ++
       if(Mix.env() == :test, do: ["test/support"], else: []) ++
       if(enabled?("AUDIOFLOW_ML"), do: ["lib_ml"], else: []) ++
-      if(enabled?("AUDIOFLOW_MEDIA"), do: ["lib_media"], else: [])
+      if(enabled?("AUDIOFLOW_MEDIA"), do: ["lib_media"], else: []) ++
+      if(enabled?("AUDIOFLOW_WEBRTC"), do: ["lib_webrtc"], else: [])
   end
 
   defp deps do
@@ -46,6 +47,7 @@ defmodule AudioFlow.MixProject do
       {:websock_adapter, "~> 0.5", only: [:dev, :test]}
     ] ++
       ml ++
+      if(enabled?("AUDIOFLOW_WEBRTC"), do: [{:ex_webrtc, "~> 0.18.0"}], else: []) ++
       if(enabled?("AUDIOFLOW_MEDIA"),
         do: [
           {:membrane_core, "~> 1.3"},
@@ -66,11 +68,14 @@ defmodule AudioFlow.MixProject do
   defp enabled?(name), do: System.get_env(name) == "1"
 
   defp profile do
-    case {enabled?("AUDIOFLOW_ML"), enabled?("AUDIOFLOW_MEDIA")} do
-      {false, false} -> "core"
-      {true, false} -> "ml"
-      {false, true} -> "media"
-      {true, true} -> "ml_media"
-    end
+    base =
+      case {enabled?("AUDIOFLOW_ML"), enabled?("AUDIOFLOW_MEDIA")} do
+        {false, false} -> "core"
+        {true, false} -> "ml"
+        {false, true} -> "media"
+        {true, true} -> "ml_media"
+      end
+
+    base <> if(enabled?("AUDIOFLOW_WEBRTC"), do: "_webrtc", else: "")
   end
 end
