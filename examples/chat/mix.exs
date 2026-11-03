@@ -1,5 +1,9 @@
-# The chat runs real models, so AudioFlow is built with its model code.
-System.put_env("AUDIOFLOW_ML", "1")
+# Compile native model code only in the Apple profile; demo also supports remote providers.
+native? =
+  System.get_env("CHAT_PROFILE", if(:os.type() == {:unix, :darwin}, do: "native", else: "demo")) ==
+    "native"
+
+System.put_env("AUDIOFLOW_ML", if(native?, do: "1", else: "0"))
 
 defmodule Chat.MixProject do
   use Mix.Project
@@ -15,6 +19,8 @@ defmodule Chat.MixProject do
       version: "0.1.0",
       elixir: "~> 1.18",
       listeners: [Phoenix.CodeReloader],
+      elixirc_paths:
+        ["lib"] ++ if(System.get_env("AUDIOFLOW_ML") == "1", do: ["native"], else: []),
       deps: deps(),
       aliases: aliases()
     ]
@@ -25,10 +31,6 @@ defmodule Chat.MixProject do
   defp deps do
     [
       {:audio_flow, path: "../.."},
-      # MLX on the Apple GPU: an Nx backend and compiler, and native Qwen3 generation.
-      # EMLX main includes non-finite constant compilation (#153), which Whisper needs.
-      {:emlx, github: "elixir-nx/emlx", ref: @emlx, sparse: "emlx", override: true},
-      {:emlx_axon, github: "elixir-nx/emlx", ref: @emlx, sparse: "emlx_axon"},
       live_shadcn(:live_base),
       live_shadcn(:live_shadcn),
       live_shadcn(:live_ai_elements),
@@ -40,7 +42,14 @@ defmodule Chat.MixProject do
       {:lucide_icons, "~> 2.3"},
       # lucide_icons parses its SVG files at runtime.
       {:lazy_html, ">= 0.1.0"}
-    ]
+    ] ++
+      if(System.get_env("AUDIOFLOW_ML") == "1",
+        do: [
+          {:emlx, github: "elixir-nx/emlx", ref: @emlx, sparse: "emlx", override: true},
+          {:emlx_axon, github: "elixir-nx/emlx", ref: @emlx, sparse: "emlx_axon"}
+        ],
+        else: []
+      )
   end
 
   # The packages refer to each other by path. `override` replaces those nested

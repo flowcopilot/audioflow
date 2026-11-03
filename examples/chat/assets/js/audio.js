@@ -40,7 +40,7 @@ const toBase64 = (bytes) => {
 const fromBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
 // Box-filter downsampling is enough for speech recognition input.
-const toPcm16 = (chunks, rate) => {
+const toPcm16 = (chunks, rate, targetRate = INPUT_RATE) => {
   const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
   const samples = new Float32Array(length);
   let offset = 0;
@@ -49,7 +49,7 @@ const toPcm16 = (chunks, rate) => {
     offset += chunk.length;
   }
 
-  const ratio = rate / INPUT_RATE;
+  const ratio = rate / targetRate;
   const out = new Int16Array(Math.floor(length / ratio));
   for (let i = 0; i < out.length; i++) {
     const start = Math.floor(i * ratio);
@@ -84,6 +84,8 @@ export const Recorder = {
     try {
       // Load the worklet while the browser opens the microphone.
       const context = new AudioContext();
+      this.targetRate = Number(this.el.dataset.rate || INPUT_RATE);
+      if (context.sampleRate < this.targetRate) { await context.close(); throw new Error("Capture sample rate is below required PCM rate"); }
       const url = URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: "text/javascript" }));
       const [stream] = await Promise.all([
         navigator.mediaDevices.getUserMedia({
@@ -112,7 +114,7 @@ export const Recorder = {
   send(event) {
     const capture = this.capture;
     if (!capture) return;
-    const pcm = toPcm16(capture.chunks, capture.context.sampleRate);
+    const pcm = toPcm16(capture.chunks, capture.context.sampleRate, this.targetRate);
     const fresh = pcm.subarray(capture.sent);
     capture.sent = pcm.length;
     if (event === "voice_chunk" && fresh.length === 0) return;
@@ -146,10 +148,27 @@ export const Player = {
   mounted() {
     this.sources = new Set();
     this.next = 0;
+    this.segments = [];
+    this.report = () => {
+      if (!playback || !this.token) return;
+      // Match Session's per-chunk ceiling at completed sample boundaries.
+      const ns = this.segments.reduce((sum, item) => {
+        const elapsed = Math.max(0, playback.currentTime - item.start);
+        return sum + (elapsed >= item.duration ? item.ns : Math.floor(elapsed * 1e9));
+      }, 0);
+      this.pushEvent("played", {token: this.token, ns});
+    };
+    this.ticker = setInterval(this.report, 100);
+    this.handleEvent("download", ({name, data}) => {
+      const url = URL.createObjectURL(new Blob([data], {type: "application/json"}));
+      const link = document.createElement("a"); link.href = url; link.download = name; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    });
     this.flush = () => this.stopAll();
     window.addEventListener("chat:flush", this.flush);
 
-    this.handleEvent("play", ({ pcm, rate }) => {
+    this.handleEvent("play", ({ pcm, rate, token }) => {
+      if (this.token !== token) { this.stopAll(); this.token = token; }
       const context = playbackContext();
       const bytes = fromBase64(pcm);
       const samples = new Int16Array(bytes.buffer, 0, bytes.length >> 1);
@@ -162,8 +181,9 @@ export const Player = {
       const source = context.createBufferSource();
       source.buffer = buffer;
       source.connect(context.destination);
-      source.onended = () => this.sources.delete(source);
+      source.onended = () => { this.sources.delete(source); this.report(); };
       this.next = Math.max(this.next, context.currentTime);
+      this.segments.push({start: this.next, duration: buffer.duration, ns: Math.ceil(samples.length * 1e9 / rate)});
       source.start(this.next);
       this.next += buffer.duration;
       this.sources.add(source);
@@ -173,12 +193,16 @@ export const Player = {
   },
 
   destroyed() {
+    clearInterval(this.ticker);
     window.removeEventListener("chat:flush", this.flush);
     this.stopAll();
   },
 
   stopAll() {
-    for (const source of this.sources) source.stop();
+    this.report();
+    for (const source of this.sources) { source.onended = null; source.stop(); }
+    this.segments = [];
+    this.token = null;
     this.sources.clear();
     this.next = 0;
   },
