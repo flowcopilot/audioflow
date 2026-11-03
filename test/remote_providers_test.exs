@@ -190,6 +190,71 @@ defmodule AudioFlow.RemoteProvidersTest do
     end
   end
 
+  test "provider Session events are recorded and redacted without persisting raw PCM by default" do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "audioflow-provider-recording-#{System.unique_integer([:positive])}"
+      )
+
+    on_exit(fn -> File.rm_rf!(root) end)
+    {:ok, store} = AudioFlow.Recording.Store.new(root)
+    {:ok, session} = AudioFlow.start_session(speech_to_speech: {GeminiLive, socket_options()})
+    on_exit(fn -> if Process.alive?(session), do: AudioFlow.stop_session(session) end)
+
+    recorder =
+      AudioFlow.Recording.new(session, store,
+        redactor: AudioFlow.Privacy.rules([{~r/alice@example\.com/, "[EMAIL]"}])
+      )
+
+    {:ok, turn} = AudioFlow.submit(session, %Audio{data: <<1, 0>>, sample_rate: 16_000})
+    assert_receive {:connected, socket}
+    assert_receive {:client, ^socket, :text, %{"setup" => _}}
+    event(socket, %{setupComplete: %{}})
+    assert_receive {:client, ^socket, :text, %{"realtimeInput" => %{"activityEnd" => %{}}}}
+
+    event(socket, %{
+      serverContent: %{
+        inputTranscription: %{text: "alice@example.com"},
+        outputTranscription: %{text: "alice@"}
+      }
+    })
+
+    event(socket, %{
+      serverContent: %{
+        outputTranscription: %{text: "example.com"},
+        modelTurn: %{
+          parts: [%{inlineData: %{mimeType: "audio/pcm;rate=24000", data: "AQACAA=="}}]
+        },
+        turnComplete: true
+      }
+    })
+
+    id = record_provider_turn(recorder, session, turn)
+    assert {:ok, artifact} = AudioFlow.Recording.Store.read(store, id)
+    assert artifact["status"] == "done"
+
+    assert Enum.sort(Enum.map(artifact["streams"], &{&1["kind"], &1["text"]})) ==
+             [{"text", "[EMAIL]"}, {"transcript", "[EMAIL]"}]
+
+    refute File.read!(Path.join(root, id)) =~ "alice"
+    refute Enum.any?(artifact["events"], &(&1["kind"] == "audio"))
+    assert_receive {:disconnected, ^socket}
+  end
+
+  defp record_provider_turn(recorder, session, turn) do
+    receive do
+      {AudioFlow, ^session, ^turn, _} = message ->
+        case AudioFlow.Recording.consume(recorder, message) do
+          {:ok, next, nil} -> record_provider_turn(next, session, turn)
+          {:ok, _, id} -> id
+          error -> flunk(inspect(error))
+        end
+    after
+      3000 -> flunk("provider Session failed to terminate")
+    end
+  end
+
   test "Deepgram sends PCM and CloseStream, excludes interim results and retains final segments" do
     task = start_run(Deepgram, socket_options(), 16_000)
     assert_receive {:connected, socket}
