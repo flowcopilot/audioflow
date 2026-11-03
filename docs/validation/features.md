@@ -47,6 +47,15 @@ pull requests. Native model, real database, WebRTC and physical device checks
 remain separate explicit commands; adding the workflow does not claim its
 hosted run has already passed.
 
+Avatar viewer follow-up #41 is now integrated: the parent passed **184 core and
+standalone-server tests** (3 skipped, 5 excluded), **3 receiver tests**, actual
+LiveKit SDK typechecking and the production viewer build. The standalone server
+checks are explicitly included in CI along with the receiver tests/build.
+Its tests simulate provider messages; no paid generation, real account grants,
+browser playback, lip-sync or acoustic validation is claimed. The preceding
+integration commit's hosted core/dashboard/chat jobs and security checks all
+passed; later pushes trigger new runs whose results must be checked separately.
+
 ## Coverage matrix
 
 | Capability / PR | Concrete validation | Evidence class | Example entry point / remaining boundary |

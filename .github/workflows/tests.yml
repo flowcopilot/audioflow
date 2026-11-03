@@ -29,12 +29,16 @@ jobs:
         with:
           node-version: 24
       - run: mix deps.get
-      - run: mix test
+      - run: mix test test examples/avatar/server_test.exs
       - run: mix run examples/telephony-loopback.exs
       - run: npm --prefix examples/rtvi-client ci
       - run: npm --prefix examples/rtvi-client test
       - run: npm --prefix examples/rtvi-client run typecheck
       - run: npm --prefix examples/rtvi-client run build
+      - run: npm --prefix examples/avatar ci
+      - run: npm --prefix examples/avatar test
+      - run: npm --prefix examples/avatar run typecheck
+      - run: npm --prefix examples/avatar run build
 
   apps:
     runs-on: ubuntu-latest
