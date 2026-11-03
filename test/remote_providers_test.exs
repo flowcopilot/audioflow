@@ -124,6 +124,72 @@ defmodule AudioFlow.RemoteProvidersTest do
     assert_receive {:output, {:audio, %Audio{sample_rate: 24_000}}}
   end
 
+  test "Session bridges provider protocols and closes sockets on cancel, timeout and stop" do
+    for {module, rate} <- [{OpenAIRealtime, 24_000}, {GeminiLive, 16_000}] do
+      {:ok, session} = AudioFlow.start_session(speech_to_speech: {module, socket_options()})
+      {:ok, turn} = AudioFlow.submit(session, %Audio{data: <<1, 0>>, sample_rate: rate})
+      assert_receive {:connected, socket}
+
+      if module == OpenAIRealtime do
+        event(socket, %{type: "session.updated"})
+        event(socket, %{type: "response.output_audio.delta", delta: "AQACAA=="})
+        event(socket, %{type: "response.output_audio_transcript.delta", delta: "Hello"})
+        event(socket, %{type: "response.done", response: %{status: "completed", output: []}})
+
+        event(socket, %{
+          type: "conversation.item.input_audio_transcription.completed",
+          transcript: "Hi"
+        })
+      else
+        event(socket, %{setupComplete: %{}})
+
+        event(socket, %{
+          serverContent: %{
+            inputTranscription: %{text: "Hi"},
+            outputTranscription: %{text: "Hello"},
+            modelTurn: %{
+              parts: [%{inlineData: %{mimeType: "audio/pcm;rate=24000", data: "AQACAA=="}}]
+            },
+            turnComplete: true
+          }
+        })
+      end
+
+      assert_receive {AudioFlow, ^session, ^turn, {:text, "Hello"}}
+      assert_receive {AudioFlow, ^session, ^turn, {:transcript, "Hi"}}
+      assert_receive {AudioFlow, ^session, ^turn, {:audio, %Audio{sample_rate: 24_000}}}
+      assert_receive {AudioFlow, ^session, ^turn, {:done, %{events: 3}}}
+      assert_receive {:disconnected, ^socket}
+      AudioFlow.stop_session(session)
+    end
+
+    for action <- [:cancel, :timeout, :stop] do
+      {:ok, session} =
+        AudioFlow.start_session(
+          speech_to_speech: {OpenAIRealtime, socket_options()},
+          timeout_ms: if(action == :timeout, do: 150, else: 5000)
+        )
+
+      {:ok, turn} = AudioFlow.submit(session, %Audio{data: <<1, 0>>, sample_rate: 24_000})
+      assert_receive {:connected, socket}
+
+      case action do
+        :cancel ->
+          AudioFlow.cancel(session)
+          assert_receive {AudioFlow, ^session, ^turn, {:cancelled, _}}
+
+        :timeout ->
+          assert_receive {AudioFlow, ^session, ^turn, {:error, :timeout, _}}, 1000
+
+        :stop ->
+          AudioFlow.stop_session(session)
+      end
+
+      assert_receive {:disconnected, ^socket}
+      if action != :stop, do: AudioFlow.stop_session(session)
+    end
+  end
+
   test "Deepgram sends PCM and CloseStream, excludes interim results and retains final segments" do
     task = start_run(Deepgram, socket_options(), 16_000)
     assert_receive {:connected, socket}

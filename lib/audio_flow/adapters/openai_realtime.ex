@@ -2,9 +2,10 @@ defmodule AudioFlow.Adapters.OpenAIRealtime do
   @moduledoc """
   One committed audio turn over OpenAI's GA Realtime WebSocket protocol.
   `run/3` emits `{:transcript, text}`, `{:text, delta}`, `{:audio, Audio}`.
-  This mixed event API is for direct callers, not a Session STT/LLM/TTS slot.
+  Use directly or in Session `:speech_to_speech`, never an STT/LLM/TTS slot.
   See docs/providers.md for options and integration limits.
   """
+  @behaviour AudioFlow.Adapter
   alias AudioFlow.Adapters.Providers.Socket
 
   def run(audio, options, emit) do
