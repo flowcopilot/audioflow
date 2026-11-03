@@ -17,7 +17,8 @@ defmodule AudioFlow.Session do
   `AudioFlow.Graph.session_options/2`. The input goes to the graph input nodes
   of its kind, and each node output becomes a `{kind, value, node_id}` event.
   Audio from nodes without targets goes to the `:output` transport. Context limits count UTF-8 text
-  bytes, not tokens. Cancelled and failed turns do not change saved history.
+  bytes, not tokens. Failed turns do not change saved history. Cancelled turns
+  retain only complete reply chunks covered by explicit playback acknowledgements.
   The session stops when its owner exits. Interrupted turns cannot deliver
   further output. Cancellation stops the caller task, but an inference engine
   may still finish a batch already submitted to shared hardware.
@@ -85,6 +86,7 @@ defmodule AudioFlow.Session do
        history: History.new(Keyword.get(options, :history, false)),
        output: Keyword.get(options, :output),
        output_turn: nil,
+       playback_history: nil,
        active: nil
      }}
   end
@@ -141,11 +143,18 @@ defmodule AudioFlow.Session do
               first: %{},
               events: 0,
               input_bytes: 0,
-              context: nil
+              context: nil,
+              playout: AudioFlow.Playout.new()
             }
 
             {:reply, {:ok, turn},
-             %{state | active: active, output_turn: turn, turns: state.turns + 1}}
+             %{
+               state
+               | active: active,
+                 playback_history: nil,
+                 output_turn: turn,
+                 turns: state.turns + 1
+             }}
 
           {:error, reason} ->
             {:reply, {:error, {:output, reason}}, state}
@@ -154,7 +163,7 @@ defmodule AudioFlow.Session do
   end
 
   def handle_call(:clear_history, _from, %{active: nil} = state),
-    do: {:reply, :ok, %{state | history: History.clear(state.history)}}
+    do: {:reply, :ok, %{state | history: History.clear(state.history), playback_history: nil}}
 
   def handle_call(:clear_history, _from, state), do: {:reply, {:error, :busy}, state}
 
@@ -174,11 +183,40 @@ defmodule AudioFlow.Session do
 
   def handle_call({:context, _, _}, _from, state), do: {:reply, {:error, :stale_turn}, state}
 
-  def handle_call(:cancel, _from, %{active: nil} = state),
-    do: {:reply, flush_output(state), state}
+  def handle_call({:played, turn, ns}, _from, state) do
+    active = state.active || state.playback_history
+
+    if active && active.turn == turn do
+      case AudioFlow.Playout.acknowledge(active.playout, ns) do
+        {:ok, playout} ->
+          field = if state.active, do: :active, else: :playback_history
+          {:reply, :ok, Map.put(state, field, %{active | playout: playout})}
+
+        error ->
+          {:reply, error, state}
+      end
+    else
+      {:reply, {:error, :stale_turn}, state}
+    end
+  end
+
+  def handle_call({:speech_checkpoint, turn}, _from, %{active: %{turn: turn} = active} = state) do
+    bytes = if active.context, do: active.context.reply_bytes, else: 0
+    playout = AudioFlow.Playout.checkpoint(active.playout, bytes)
+    {:reply, :ok, %{state | active: %{active | playout: playout}}}
+  end
+
+  def handle_call({:speech_checkpoint, _}, _from, state),
+    do: {:reply, {:error, :stale_turn}, state}
+
+  def handle_call(:cancel, _from, %{active: nil} = state) do
+    state = retain_heard(state, state.playback_history)
+    {:reply, flush_output(state), %{state | playback_history: nil}}
+  end
 
   def handle_call(:cancel, _from, state) do
     kill(state.active)
+    state = retain_heard(state, state.active)
     result = flush_output(state)
 
     event =
@@ -210,6 +248,11 @@ defmodule AudioFlow.Session do
       true ->
         case record_context(state, record, value) do
           {:ok, active} ->
+            active =
+              if kind == :audio,
+                do: %{active | playout: AudioFlow.Playout.audio(active.playout, value)},
+                else: active
+
             first = Map.put_new(active.first, kind, now() - active.started)
             notify(state, if(node, do: {kind, value, node}, else: {kind, value}))
             {:reply, :ok, %{state | active: %{active | first: first, events: active.events + 1}}}
@@ -257,7 +300,13 @@ defmodule AudioFlow.Session do
         do: History.commit(state.active.context),
         else: state.history
 
-    {:noreply, %{state | active: nil, history: history}}
+    {:noreply,
+     %{
+       state
+       | active: nil,
+         history: history,
+         playback_history: if(result == :ok, do: state.active)
+     }}
   end
 
   def handle_info({:DOWN, ref, :process, _, _}, %{owner_ref: ref} = state),
@@ -342,6 +391,11 @@ defmodule AudioFlow.Session do
                 {:error, reason} -> throw({:output, reason})
               end
             end)
+
+            case GenServer.call(session, {:speech_checkpoint, turn}) do
+              :ok -> :ok
+              {:error, reason} -> throw(reason)
+            end
           end
 
           :ok
@@ -416,6 +470,14 @@ defmodule AudioFlow.Session do
   end
 
   defp record_context(%{active: active}, _, _), do: {:ok, active}
+
+  defp retain_heard(state, nil), do: state
+  defp retain_heard(state, %{context: nil}), do: state
+
+  defp retain_heard(state, active) do
+    bytes = AudioFlow.Playout.heard_bytes(active.playout)
+    %{state | history: History.commit_heard(active.context, bytes)}
+  end
 
   defp flush_output(%{output_turn: nil}), do: :ok
 

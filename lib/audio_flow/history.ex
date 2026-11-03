@@ -57,6 +57,14 @@ defmodule AudioFlow.History do
     end
   end
 
+  def commit_heard(nil, _bytes), do: nil
+
+  def commit_heard(context, bytes) do
+    reply = context.reply |> Enum.reverse() |> IO.iodata_to_binary()
+    reply = binary_part(reply, 0, min(bytes, byte_size(reply)))
+    commit(%{context | reply: [reply], reply_bytes: byte_size(reply)})
+  end
+
   def clear(nil), do: nil
   def clear(history), do: %{history | turns: []}
 
