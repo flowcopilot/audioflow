@@ -1,0 +1,68 @@
+defmodule AudioFlow.Graph.Nodes.Providers do
+  @moduledoc """
+  Single-output remote speech stages. Credentials are resolved on the server
+  at execution time from fixed provider environment variables, never graph data.
+  Mixed-output speech-to-speech adapters deliberately do not appear here.
+  """
+  @behaviour AudioFlow.Graph.Node
+  @providers %{
+    "deepgram.stt" => {AudioFlow.Adapters.Deepgram, "DEEPGRAM_API_KEY"},
+    "elevenlabs.tts" => {AudioFlow.Adapters.ElevenLabs, "ELEVENLABS_API_KEY"},
+    "cartesia.tts" => {AudioFlow.Adapters.Cartesia, "CARTESIA_API_KEY"}
+  }
+
+  def providers, do: @providers
+
+  @impl true
+  def nodes do
+    for {type, {_adapter, env}} <- Enum.sort(@providers) do
+      stt? = type == "deepgram.stt"
+
+      %{
+        type: type,
+        title: type,
+        description:
+          "Real remote inference; requires server #{env}. Account model/language availability applies.",
+        input: if(stt?, do: :audio, else: :text),
+        output: if(stt?, do: :text, else: :audio),
+        event: if(stt?, do: :transcript, else: :audio),
+        input_mode: if(stt?, do: :join, else: :stream),
+        options:
+          [
+            %{name: :model, type: :string, required: true},
+            %{
+              name: :language,
+              type: :string,
+              description: "Provider language code, e.g. en or ro; omit for provider default."
+            },
+            %{name: :timeout_ms, type: :integer, default: 30_000}
+          ] ++
+            if(stt?,
+              do: [],
+              else: [
+                %{name: :voice_id, type: :string, required: true},
+                %{
+                  name: :sample_rate,
+                  type: {:enum, [8000, 16000, 22050, 24000, 44100, 48000]},
+                  default: 24_000
+                }
+              ]
+            ) ++
+            if(type == "cartesia.tts",
+              do: [
+                %{name: :api_version, type: :string, required: true}
+              ],
+              else: []
+            )
+      }
+    end
+  end
+
+  @impl true
+  def adapter(type, options) do
+    {module, env} = Map.fetch!(@providers, type)
+    endpoint = Application.get_env(:audio_flow, :speech_provider_endpoints, %{})[type]
+    trusted = if endpoint, do: [endpoint: endpoint], else: []
+    {module, Map.to_list(options) ++ trusted ++ [api_key: fn -> System.get_env(env) end]}
+  end
+end

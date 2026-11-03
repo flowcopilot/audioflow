@@ -24,13 +24,29 @@ defmodule ChatWeb.ChatLive do
     session =
       if connected?(socket) do
         Phoenix.PubSub.subscribe(Chat.PubSub, Chat.Engine.topic())
-        {:ok, session} = AudioFlow.start_session(Chat.Stage.session_options())
+        Process.send_after(self(), :retention, 60_000)
+
+        {:ok, session} =
+          AudioFlow.start_session(
+            elem(Chat.Setup.options(Chat.Setup.defaults()), 1) ++ [output: {Chat.Output, self()}]
+          )
+
         session
       end
 
     {:ok,
      assign(socket,
        session: session,
+       settings: Chat.Setup.defaults(),
+       setup_error: nil,
+       capture: nil,
+       artifacts: [],
+       playback_turn: nil,
+       playback_token: nil,
+       candidate: nil,
+       control: nil,
+       paused: false,
+       played_ms: 0,
        models: Chat.Engine.status(),
        system_memory_gb: system_memory_gb(),
        turn: nil,
@@ -45,7 +61,7 @@ defmodule ChatWeb.ChatLive do
 
   @impl true
   def handle_event("send", %{"text" => text}, socket) do
-    case String.trim(text) do
+    case if(Chat.Setup.speech?(socket.assigns.settings), do: "", else: String.trim(text)) do
       "" ->
         {:reply, %{ok: false}, socket}
 
@@ -59,7 +75,9 @@ defmodule ChatWeb.ChatLive do
   def handle_event("recording", _params, socket) do
     socket = cancel(socket) |> add_message("user", "", pending: true, live: true)
     id = List.last(socket.assigns.messages).id
-    {:noreply, assign(socket, recording: %{id: id, pcm: [], bytes: 0, task: nil, since: 0})}
+
+    {:noreply,
+     assign(socket, recording: %{id: id, pcm: [], bytes: 0, task: nil, since: 0, invalid: false})}
   end
 
   def handle_event("voice_chunk", %{"pcm" => pcm}, %{assigns: %{recording: %{}}} = socket),
@@ -67,14 +85,18 @@ defmodule ChatWeb.ChatLive do
 
   def handle_event("voice_end", %{"pcm" => pcm}, %{assigns: %{recording: %{}}} = socket) do
     socket = append_audio(socket, pcm)
-    %{pcm: pcm, bytes: bytes, id: id} = socket.assigns.recording
+    %{pcm: pcm, bytes: bytes, id: id, invalid: invalid} = socket.assigns.recording
     socket = assign(socket, recording: nil)
 
-    if bytes == 0 do
+    if bytes == 0 or invalid do
       {:noreply, remove_message(socket, id)}
     else
       socket = update_message(socket, id, &%{&1 | text: "", pending: true})
-      submit(socket, %Audio{data: IO.iodata_to_binary(pcm), sample_rate: 16_000})
+
+      submit(socket, %Audio{
+        data: IO.iodata_to_binary(pcm),
+        sample_rate: Chat.Setup.rate(socket.assigns.settings)
+      })
     end
   end
 
@@ -90,26 +112,216 @@ defmodule ChatWeb.ChatLive do
      |> add_message("assistant", "", note: "Microphone error: #{message}")}
   end
 
+  def handle_event("pause", _, socket) do
+    case AudioFlow.Output.provisional(socket.assigns.session, 10_000) do
+      {:ok, id} -> {:noreply, assign(socket, candidate: id)}
+      error -> {:noreply, assign(socket, setup_error: inspect(error))}
+    end
+  end
+
+  def handle_event("resume", _, socket) do
+    result = AudioFlow.Output.resolve(socket.assigns.session, socket.assigns.candidate, :resume)
+    {:noreply, assign(socket, setup_error: if(result == :ok, do: nil, else: inspect(result)))}
+  end
+
+  def handle_event("output_ack", params, socket) do
+    case socket.assigns.control do
+      {turn, id, action} ->
+        if params["token"] == Chat.Output.token(turn) and params["id"] == Chat.Output.token(id) and
+             params["action"] == Atom.to_string(action) do
+          result =
+            AudioFlow.Output.control_ack(socket.assigns.session, turn, id, action, params["ns"])
+
+          if result == :ok do
+            {:noreply,
+             assign(socket,
+               control: nil,
+               paused: action == :pause,
+               candidate: if(action == :pause, do: id),
+               played_ms: div(params["ns"], 1_000_000)
+             )}
+          else
+            {:noreply, socket}
+          end
+        else
+          {:noreply, socket}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("output_failed", params, socket) do
+    case socket.assigns.control do
+      {turn, id, _} ->
+        if params["token"] == Chat.Output.token(turn) and params["id"] == Chat.Output.token(id),
+          do: {:noreply, cancel(socket)},
+          else: {:noreply, socket}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("stop", _params, socket), do: {:noreply, cancel(socket)}
 
   def handle_event("new_chat", _params, socket) do
     socket = cancel(socket)
-    if socket.assigns.session, do: :ok = AudioFlow.clear_history(socket.assigns.session)
+    if socket.assigns.session, do: AudioFlow.clear_history(socket.assigns.session)
     {:noreply, assign(socket, messages: [])}
   end
 
   def handle_event("select_model", %{"_target" => [field]} = params, socket)
       when field in ["stt", "llm", "voice"] do
-    :ok = Chat.Engine.select(String.to_existing_atom(field), params[field])
+    result = Chat.Engine.select(String.to_existing_atom(field), params[field])
+
+    {:noreply,
+     assign(socket, setup_error: if(result == :ok, do: nil, else: "Native profile required"))}
+  end
+
+  def handle_event("configure", params, socket) do
+    settings =
+      Map.merge(socket.assigns.settings, Map.take(params, ["mode", "language", "voice", "tts"]))
+
+    case Chat.Setup.options(settings) do
+      {:error, message} ->
+        {:noreply, assign(socket, setup_error: message)}
+
+      {:ok, options} ->
+        if socket.assigns.recording || socket.assigns.turn do
+          {:noreply,
+           assign(socket,
+             setup_error: "Stop the current turn/recording before changing settings."
+           )}
+        else
+          socket = cancel(socket)
+          AudioFlow.stop_session(socket.assigns.session)
+          Chat.Capture.close(socket.assigns.capture)
+          {:ok, session} = AudioFlow.start_session(options ++ [output: {Chat.Output, self()}])
+
+          {:noreply,
+           assign(socket,
+             session: session,
+             settings: settings,
+             messages: [],
+             capture: nil,
+             artifacts: [],
+             setup_error: nil
+           )}
+        end
+    end
+  end
+
+  def handle_event("played", %{"token" => token, "ns" => ns}, socket)
+      when is_integer(ns) and ns >= 0 do
+    if token == socket.assigns.playback_token && socket.assigns.playback_turn do
+      case GenServer.call(socket.assigns.session, {:played, socket.assigns.playback_turn, ns}) do
+        :ok -> {:noreply, assign(socket, played_ms: div(ns, 1_000_000))}
+        _ -> {:noreply, socket}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("capture", _, socket) do
+    if socket.assigns.turn do
+      {:noreply, assign(socket, setup_error: "Change recording consent between turns.")}
+    else
+      if socket.assigns.capture do
+        Chat.Capture.close(socket.assigns.capture)
+        {:noreply, assign(socket, capture: nil, artifacts: [])}
+      else
+        case Chat.Capture.open(socket.assigns.session) do
+          {:ok, capture} -> {:noreply, assign(socket, capture: capture)}
+          _ -> {:noreply, assign(socket, setup_error: "Cannot open recording store")}
+        end
+      end
+    end
+  end
+
+  def handle_event(action, %{"id" => id}, socket) when action in ["download", "delete"] do
+    capture = socket.assigns.capture
+
+    socket =
+      if capture && id in Chat.Capture.list(capture) do
+        if action == "delete" do
+          AudioFlow.Recording.Store.delete(capture.store, id)
+          assign(socket, artifacts: Chat.Capture.list(capture))
+        else
+          case AudioFlow.Recording.Store.read(capture.store, id) do
+            {:ok, data} -> push_event(socket, "download", %{name: id, data: Jason.encode!(data)})
+            _ -> assign(socket, setup_error: "Recording expired")
+          end
+        end
+      else
+        assign(socket, setup_error: "Recording unavailable")
+      end
+
     {:noreply, socket}
   end
 
   @impl true
+  def terminate(_, socket) do
+    Chat.Capture.close(socket.assigns.capture)
+    if socket.assigns.session, do: AudioFlow.stop_session(socket.assigns.session)
+    :ok
+  end
+
+  @impl true
+  def handle_info({Chat.Output, {:start, turn, token}}, socket),
+    do:
+      {:noreply,
+       socket
+       |> assign(playback_turn: turn, playback_token: token)
+       |> push_event("output_start", %{token: token})}
+
+  def handle_info({Chat.Output, {:pcm, turn, token, audio}}, socket) do
+    if turn == socket.assigns.playback_turn do
+      {:noreply,
+       push_event(socket, "play", %{
+         pcm: Base.encode64(audio.data),
+         rate: audio.sample_rate,
+         token: token
+       })}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({Chat.Output, {:control, turn, id, action}}, socket) do
+    {:noreply,
+     socket
+     |> assign(control: {turn, id, action})
+     |> push_event(
+       "output_control",
+       %{token: Chat.Output.token(turn), id: Chat.Output.token(id), action: action}
+     )}
+  end
+
+  def handle_info({Chat.Output, {:flush, turn}}, socket) do
+    {:noreply,
+     socket
+     |> assign(candidate: nil, control: nil, paused: false)
+     |> push_event("flush", %{token: Chat.Output.token(turn)})}
+  end
+
+  def handle_info(:retention, socket) do
+    Process.send_after(self(), :retention, 60_000)
+    {:noreply, assign(socket, artifacts: Chat.Capture.list(socket.assigns.capture))}
+  end
+
   def handle_info(
         {AudioFlow, session, turn, event},
         %{assigns: %{session: session, turn: turn}} = socket
       ),
-      do: {:noreply, turn_event(socket, event)}
+      do:
+        {:noreply,
+         socket |> capture_event({AudioFlow, session, turn, event}) |> turn_event(event)}
+
+  def handle_info({AudioFlow, session, _, _} = event, %{assigns: %{session: session}} = socket),
+    do: {:noreply, capture_event(socket, event)}
 
   def handle_info({AudioFlow, _, _, _}, socket), do: {:noreply, socket}
   def handle_info({:models, models}, socket), do: {:noreply, assign(socket, models: models)}
@@ -141,6 +353,22 @@ defmodule ChatWeb.ChatLive do
 
   def handle_info({:DOWN, _, :process, _, _}, socket), do: {:noreply, socket}
 
+  defp capture_event(%{assigns: %{capture: nil}} = socket, _), do: socket
+
+  defp capture_event(socket, event) do
+    case AudioFlow.Recording.consume(socket.assigns.capture, event) do
+      {:ok, capture, _} ->
+        assign(socket, capture: capture, artifacts: Chat.Capture.list(capture))
+
+      {:error, _, capture} ->
+        assign(socket,
+          capture: capture,
+          artifacts: Chat.Capture.list(capture),
+          setup_error: "Recording skipped: storage or recording limit. Inference continues."
+        )
+    end
+  end
+
   defp turn_event(socket, {:transcript, text}) do
     update_last(socket, "user", fn message ->
       if message.live,
@@ -158,7 +386,6 @@ defmodule ChatWeb.ChatLive do
 
   defp turn_event(socket, {:audio, %Audio{data: data, sample_rate: rate}}) do
     socket
-    |> push_event("play", %{pcm: Base.encode64(data), rate: rate})
     |> assign(pcm: [socket.assigns.pcm, data], rate: rate)
   end
 
@@ -175,7 +402,12 @@ defmodule ChatWeb.ChatLive do
         do: "First text #{ms(metrics.first_text_us)}, first audio #{ms(metrics.first_audio_us)}",
         else: "No speech was recognized."
 
-    finish(socket, audio: audio, note: note)
+    finish(socket,
+      audio: audio,
+      note:
+        note <>
+          " · Transcript #{ms(metrics[:first_transcript_us])} · Total #{ms(metrics[:duration_us])} · #{metrics[:events]} events · played #{socket.assigns.played_ms} ms"
+    )
   end
 
   defp turn_event(socket, {:cancelled, _metrics}), do: finish(socket, note: "Stopped.")
@@ -195,6 +427,9 @@ defmodule ChatWeb.ChatLive do
         {:reply, %{ok: true},
          assign(socket,
            turn: turn,
+           playback_turn: turn,
+           playback_token: Chat.Output.token(turn),
+           played_ms: 0,
            status: "submitted",
            reply_id: List.last(socket.assigns.messages).id,
            pcm: [],
@@ -213,14 +448,33 @@ defmodule ChatWeb.ChatLive do
     case Base.decode64(pcm) do
       {:ok, data} ->
         r = socket.assigns.recording
-        assign(socket, recording: %{r | pcm: [r.pcm, data], bytes: r.bytes + byte_size(data)})
+
+        if rem(byte_size(data), 2) == 0 and
+             r.bytes + byte_size(data) <= Chat.Setup.rate(socket.assigns.settings) * 60,
+           do:
+             assign(socket,
+               recording: %{r | pcm: [r.pcm, data], bytes: r.bytes + byte_size(data)}
+             ),
+           else: invalid_audio(socket)
 
       :error ->
-        socket
+        invalid_audio(socket)
     end
   end
 
+  defp invalid_audio(socket) do
+    assign(socket,
+      recording: %{socket.assigns.recording | invalid: true, pcm: [], bytes: 0},
+      setup_error: "Microphone input rejected: invalid PCM or duration exceeds 30 seconds."
+    )
+  end
+
   # One partial transcription runs at a time, over the complete recording so far.
+  defp maybe_transcribe(%{assigns: %{recording: %{invalid: true}}} = socket), do: socket
+
+  defp maybe_transcribe(%{assigns: %{settings: %{"mode" => mode}}} = socket) when mode != "local",
+    do: socket
+
   defp maybe_transcribe(%{assigns: %{recording: %{task: nil} = r}} = socket)
        when r.bytes - r.since >= @partial_bytes do
     audio = %Audio{data: IO.iodata_to_binary(r.pcm), sample_rate: 16_000}
@@ -230,12 +484,17 @@ defmodule ChatWeb.ChatLive do
 
   defp maybe_transcribe(socket), do: socket
 
-  defp cancel(%{assigns: %{turn: nil}} = socket), do: socket
-
   defp cancel(socket) do
     # The cancelled event arrives after this call and closes the reply.
-    AudioFlow.cancel(socket.assigns.session)
-    push_event(socket, "flush", %{})
+    if socket.assigns.session, do: AudioFlow.cancel(socket.assigns.session)
+
+    socket =
+      if socket.assigns.turn,
+        do:
+          finish(socket, note: "Stopped; history keeps only acknowledged complete speech chunks."),
+        else: socket
+
+    socket |> assign(candidate: nil, control: nil, paused: false) |> push_event("flush", %{})
   end
 
   defp finish(socket, fields) do
@@ -333,7 +592,90 @@ defmodule ChatWeb.ChatLive do
         <Button.button variant="outline" size="sm" phx-click="new_chat">New chat</Button.button>
       </header>
 
-      <form id="models" phx-change="select_model" class="grid gap-3 sm:grid-cols-3">
+      <section class="rounded border p-3 text-sm">
+        <form id="configuration" phx-submit="configure" class="flex flex-wrap gap-2">
+          <label>Pipeline
+          <select name="mode"><option
+            :for={
+              {id, label} <- [
+                {"demo", "Synthetic demo"},
+                {"local", "Local Apple MLX"},
+                {"remote", "Deepgram → Chat HTTP → TTS"},
+                {"openai", "OpenAI speech-to-speech"},
+                {"gemini", "Gemini speech-to-speech"}
+              ]
+            }
+            value={id}
+            selected={@settings["mode"] == id}
+          >
+            {label}
+          </option></select></label>
+          <label>Remote chain language
+          <select name="language"><option
+            :for={lang <- ~w(en es fr de ro)}
+            value={lang}
+            selected={@settings["language"] == lang}
+          >
+            {lang}
+          </option></select></label>
+          <label>Remote TTS
+          <select name="tts"><option
+            :for={tts <- ~w(elevenlabs cartesia)}
+            value={tts}
+            selected={@settings["tts"] == tts}
+          >
+            {tts}
+          </option></select></label>
+          <label>OpenAI voice
+          <select name="voice"><option
+            :for={voice <- ~w(marin cedar)}
+            value={voice}
+            selected={@settings["voice"] == voice}
+          >
+            {voice}
+          </option></select></label>
+          <button type="submit">Apply (starts new chat)</button>
+        </form>
+        <p :if={@setup_error} role="alert">{@setup_error}</p>
+        <p>
+          Active: {@settings["mode"]} · Input PCM {Chat.Setup.rate(@settings)} Hz mono · Playback acknowledged: {@played_ms} ms
+        </p>
+        <p :if={@settings["mode"] == "demo"}>
+          Synthetic demo: fixed transcript, echoed text, silent PCM. No inference.
+        </p>
+        <p :if={Chat.Setup.speech?(@settings)}>
+          Microphone only; fresh provider connection each turn, no history replay. No text/audio alignment or native history truncation is claimed. Language and Gemini voice use provider defaults.
+        </p>
+        <p>
+          Remote chain requires DEEPGRAM_API_KEY, CHAT_HTTP_ENDPOINT, CHAT_HTTP_MODEL and ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID or CARTESIA_API_KEY / CARTESIA_VOICE_ID. Optional CHAT_HTTP_API_KEY. Speech-to-speech requires OPENAI_API_KEY / OPENAI_REALTIME_MODEL or GEMINI_API_KEY / GEMINI_LIVE_MODEL. Configure these on the server.
+        </p>
+        <button type="button" phx-click="capture">{if @capture,
+          do: "Disable and delete recordings",
+          else: "Enable redacted recordings"}</button>
+        <p>
+          Opt-in text-only JSON: all content replaced with [REDACTED], no PCM. Limit 20 turns, 1 hour, 128 KB buffered per turn. Deleted on disconnect; retention checked every minute and on access.
+        </p>
+        <div :for={id <- @artifacts}>
+          {id} <button phx-click="download" phx-value-id={id}>Download</button>
+          <button phx-click="delete" phx-value-id={id}>Delete</button>
+        </div>
+      </section>
+      <nav aria-label="Standalone transports" class="text-sm underline">
+        <a href="https://github.com/flowcopilot/audioflow/tree/feat/parallel-issue-integration/examples/rtvi-client">Official Pipecat SDK / RTVI client setup</a>
+        ·
+        <a href="https://github.com/flowcopilot/audioflow/blob/feat/parallel-issue-integration/examples/telephony-loopback.exs">Paced telephony loopback setup</a>
+        ·
+        <a href="https://github.com/flowcopilot/audioflow/blob/feat/parallel-issue-integration/examples/network/README.md">Encoded WebRTC / LiveAvatar setup</a>
+        <p>
+          Standalone encoded WebRTC needs AUDIOFLOW_WEBRTC=1 and OpenSSL; it negotiates local peers, not a Session PCM bridge. LiveAvatar LITE requires LIVEAVATAR_API_KEY, LIVEAVATAR_AVATAR_ID and finite 24 kHz PCM; no provider verification is claimed.
+        </p>
+      </nav>
+      <form
+        :if={@settings["mode"] == "local"}
+        id="models"
+        phx-change="select_model"
+        class="grid gap-3 sm:grid-cols-3"
+      >
         <.model_field label="Speech recognition" status={@models.status[:stt]}>
           <NativeSelect.native_select id="model-stt" name="stt" size="sm" class="w-full">
             <NativeSelect.native_select_option
@@ -368,7 +710,7 @@ defmodule ChatWeb.ChatLive do
           </NativeSelect.native_select>
         </.model_field>
       </form>
-      <p class="-mt-2 text-xs text-muted-foreground">
+      <p :if={@settings["mode"] == "local"} class="-mt-2 text-xs text-muted-foreground">
         <Badge.badge variant="secondary">
           ≈ {gb(@models.memory_gb)} GB of model weights{if @system_memory_gb,
             do: " · #{gb(@system_memory_gb)} GB memory"}
@@ -408,15 +750,27 @@ defmodule ChatWeb.ChatLive do
         </Message.message>
       </Conversation.conversation>
 
+      <div>
+        <button phx-click="pause" disabled={@candidate != nil}>Pause / test interruption (10 s)</button>
+        <button phx-click="resume" disabled={not @paused}>Resume false interruption</button>
+        <button phx-click="stop">Confirm / Stop</button>
+        <span>{if @paused, do: "Web Audio suspended", else: "Playback running or awaiting endpoint"}</span>
+      </div>
       <PromptInput.prompt_input id="prompt" on_submit="send">
         <PromptInput.prompt_input_textarea
           id="prompt-text"
           aria-label="Message"
           placeholder="Message AudioFlow"
+          disabled={Chat.Setup.speech?(@settings)}
         />
         <PromptInput.prompt_input_footer>
           <PromptInput.prompt_input_tools>
-            <div id="recorder" phx-hook="Recorder" phx-update="ignore">
+            <div
+              id="recorder"
+              data-rate={Chat.Setup.rate(@settings)}
+              phx-hook="Recorder"
+              phx-update="ignore"
+            >
               <Button.button
                 type="button"
                 variant="ghost"
@@ -437,9 +791,9 @@ defmodule ChatWeb.ChatLive do
     """
   end
 
-  attr :label, :string, required: true
-  attr :status, :any, default: nil
-  slot :inner_block, required: true
+  attr(:label, :string, required: true)
+  attr(:status, :any, default: nil)
+  slot(:inner_block, required: true)
 
   defp model_field(assigns) do
     ~H"""

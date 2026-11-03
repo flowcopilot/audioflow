@@ -32,6 +32,18 @@ defmodule AudioFlow.Playback do
   def finish(pid, key), do: GenServer.call(pid, {:finish, key})
   @impl AudioFlow.Output
   def flush(pid, key), do: GenServer.call(pid, {:flush, key}, :infinity)
+
+  @doc """
+  Acknowledge an endpoint-rendered cumulative PCM offset in nanoseconds.
+  Invoke from the transport driver, not from a sink demand/enqueue callback.
+  PortAudio does not provide this acknowledgement automatically.
+  """
+  def acknowledge(pid, {session, turn} = key, nanoseconds) do
+    with :ok <- GenServer.call(pid, {:played, key, nanoseconds}) do
+      AudioFlow.Output.acknowledge(session, turn, nanoseconds)
+    end
+  end
+
   def stats(pid), do: GenServer.call(pid, :stats)
 
   @impl true
@@ -53,6 +65,7 @@ defmodule AudioFlow.Playback do
        pipeline: nil,
        queue: :queue.new(),
        bytes: 0,
+       playout: AudioFlow.Playout.new(),
        waiting: nil,
        demand: nil,
        rate: nil,
@@ -155,9 +168,25 @@ defmodule AudioFlow.Playback do
 
   def handle_call({:flush, _}, _from, state), do: {:reply, :ok, state}
 
+  def handle_call({:played, key, ns}, _from, %{key: key} = state) when key != nil do
+    case AudioFlow.Playout.acknowledge(state.playout, ns) do
+      {:ok, playout} ->
+        notify(state, key, {:played_offset, ns})
+        {:reply, :ok, %{state | playout: playout}}
+
+      error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:played, _, _}, _from, state),
+    do: {:reply, {:error, :stale_turn}, state}
+
   def handle_call(:stats, _from, state) do
     {:reply,
      %{
+       played_ns: state.playout.played,
+       dispatched_ns: state.playout.emitted,
        queued_bytes: state.bytes,
        blocked?: state.waiting != nil,
        key: state.key,
@@ -207,7 +236,15 @@ defmodule AudioFlow.Playback do
     end
 
     {:noreply,
-     %{state | pipeline: nil, key: nil, queue: :queue.new(), bytes: 0, waiting: nil, demand: nil}}
+     %{
+       state
+       | pipeline: nil,
+         key: if(event == :drained, do: state.key),
+         queue: :queue.new(),
+         bytes: 0,
+         waiting: nil,
+         demand: nil
+     }}
   end
 
   def handle_info(_, state), do: {:noreply, state}
@@ -239,7 +276,15 @@ defmodule AudioFlow.Playback do
           end
 
         send(source, {:pcm, request, audio})
-        state = %{state | queue: queue, bytes: state.bytes - byte_size(audio.data), demand: nil}
+
+        state = %{
+          state
+          | queue: queue,
+            bytes: state.bytes - byte_size(audio.data),
+            demand: nil,
+            playout: AudioFlow.Playout.audio(state.playout, audio)
+        }
+
         release_producer(state)
 
       {:empty, _} when state.finished? ->
@@ -302,6 +347,7 @@ defmodule AudioFlow.Playback do
              waiting: nil,
              queue: :queue.new(),
              bytes: 0,
+             playout: AudioFlow.Playout.new(),
              rate: nil,
              demand: nil,
              finished?: false,

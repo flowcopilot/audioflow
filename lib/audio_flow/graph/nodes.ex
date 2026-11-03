@@ -78,6 +78,11 @@ defmodule AudioFlow.Graph.Nodes.ChatHTTP do
           %{name: :model, type: :string, required: true, description: "Model name."},
           %{name: :system, type: :string, description: "System instruction."},
           %{
+            name: :tools_profile,
+            type: :string,
+            description: "Trusted chat tool profile in application configuration."
+          },
+          %{
             name: :api_key_env,
             type: :string,
             description: "Name of the environment variable with the API key."
@@ -98,7 +103,12 @@ defmodule AudioFlow.Graph.Nodes.ChatHTTP do
         if(options[:system], do: [system: options.system], else: []) ++
         if(api_key, do: [api_key: api_key], else: [])
 
-    {AudioFlow.Adapters.ChatHTTP, adapter_options}
+    tools =
+      if profile = options[:tools_profile],
+        do: Map.fetch!(Application.get_env(:audio_flow, :chat_tool_profiles, %{}), profile),
+        else: []
+
+    {AudioFlow.Adapters.ChatHTTP, Keyword.put(adapter_options, :tools, tools)}
   end
 end
 

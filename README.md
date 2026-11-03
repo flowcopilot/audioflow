@@ -28,7 +28,9 @@ mix audio_flow.bench --runs 20 --concurrency 4
 ```
 
 For a browser chat with typed and spoken messages, see
-[examples/chat](examples/chat/README.md).
+[examples/chat](examples/chat/README.md). Its Linux demo needs no model download;
+the app also exposes server-configured speech providers, languages, redacted
+recordings, playback progress and provisional pause/resume.
 
 To build agents as node graphs, see [ui](ui/README.md). It is a local dashboard
 with a canvas editor and an MCP endpoint for coding agents. A session runs an
@@ -39,6 +41,13 @@ https://flowcopilot.github.io/audioflow/. Their source is in [site](site/README.
 
 Core, ML, media, and combined ML/media builds use separate `_build` directories.
 Changing a feature flag does not remove modules used by another build profile.
+
+Optional WebRTC audio/video and its PCM Session bridge have
+[runnable network examples](examples/network/README.md). The
+[avatar viewer](examples/avatar/README.md) subscribes to finite provider
+publications when explicitly configured with an account. The
+[validation report](docs/validation/features.md) lists tested paths, app entry
+points and remaining issue requirements.
 
 ## Sessions
 
@@ -54,6 +63,10 @@ end
 AudioFlow.cancel(session)
 AudioFlow.stop_session(session)
 ```
+
+For OpenAI Realtime or Gemini Live without chained stages, use the explicit
+[Session speech-to-speech mode](docs/providers.md#session-speech-to-speech-mode).
+It accepts committed PCM and does not replay cross-turn history.
 
 The owner receives transcript, text, audio, and terminal events. See
 `AudioFlow` for the event format. Each turn has a unique reference. A session

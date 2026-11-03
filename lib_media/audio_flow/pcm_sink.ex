@@ -23,7 +23,20 @@ defmodule AudioFlow.PCMSink do
   @impl true
   def handle_init(_ctx, options) do
     input = if options.vad, do: AudioFlow.VoiceInput.new(options.vad, options.endpoint_options)
-    {[], %{session: options.session, rate: nil, input: input}}
+    {[], %{session: options.session, rate: nil, input: input, reference: <<>>}}
+  end
+
+  @impl true
+  def handle_parent_notification({:audio_flow_reference, %AudioFlow.Audio{} = audio}, _ctx, state) do
+    unless AudioFlow.Audio.valid?(audio) and audio.sample_rate == state.rate and
+             byte_size(state.reference) + byte_size(audio.data) <= state.rate * 2,
+           do:
+             raise(
+               ArgumentError,
+               "reference must match input rate and queue must not exceed one second"
+             )
+
+    {[], %{state | reference: state.reference <> audio.data}}
   end
 
   @impl true
@@ -39,8 +52,11 @@ defmodule AudioFlow.PCMSink do
     audio = %AudioFlow.Audio{data: buffer.payload, sample_rate: state.rate}
 
     if state.input do
-      {events, input} = AudioFlow.VoiceInput.push(state.input, audio)
-      {dispatch(events, state.session), %{state | input: input}}
+      count = min(byte_size(state.reference), byte_size(buffer.payload))
+      <<reference::binary-size(^count), remaining::binary>> = state.reference
+      reference = reference <> :binary.copy(<<0>>, byte_size(buffer.payload) - count)
+      {events, input} = AudioFlow.VoiceInput.push(state.input, audio, %{audio | data: reference})
+      {dispatch(events, state.session), %{state | input: input, reference: remaining}}
     else
       {dispatch([{:utterance, audio, :buffer}], state.session), state}
     end

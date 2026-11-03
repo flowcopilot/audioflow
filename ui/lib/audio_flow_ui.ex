@@ -13,7 +13,14 @@ defmodule AudioFlowUI do
   """
   alias AudioFlow.Graph
 
-  @core_nodes [Graph.Nodes.Input, Graph.Nodes.Audio, Graph.Nodes.Demo, Graph.Nodes.ChatHTTP]
+  @core_nodes [
+    Graph.Nodes.Input,
+    Graph.Nodes.Audio,
+    Graph.Nodes.Demo,
+    Graph.Nodes.ChatHTTP,
+    Graph.Nodes.Providers,
+    Graph.Nodes.RAG
+  ]
 
   def catalog, do: Graph.catalog(Application.get_env(:audio_flow_ui, :nodes, default_nodes()))
 

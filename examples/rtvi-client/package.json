@@ -1,0 +1,24 @@
+{
+  "name": "audioflow-rtvi-client",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "tsx --test transport.test.ts",
+    "typecheck": "tsc --noEmit",
+    "sample": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "format:check": "prettier --check \"*.{ts,json,html,md}\""
+  },
+  "dependencies": {
+    "@pipecat-ai/client-js": "1.16.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.0",
+    "prettier": "3.6.2",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.0",
+    "ws": "^8.18.0"
+  }
+}

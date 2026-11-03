@@ -6,7 +6,7 @@ config :chat, ChatWeb.Endpoint,
   adapter: Bandit.PhoenixAdapter,
   http: [ip: {127, 0, 0, 1}, port: String.to_integer(System.get_env("PORT", "4000"))],
   check_origin: false,
-  code_reloader: true,
+  code_reloader: Mix.env() == :dev,
   debug_errors: true,
   secret_key_base: String.duplicate("audioflow_chat_example_development_only", 2),
   live_view: [signing_salt: "audioflow_chat"],
@@ -18,10 +18,13 @@ config :chat, ChatWeb.Endpoint,
 
 config :phoenix, :json_library, Jason
 # Model downloads would print progress bars into the server log.
-config :bumblebee, :progress_bar_enabled, false
-config :transmuter, progress_bar_enabled: false
+if System.get_env("AUDIOFLOW_ML") == "1" do
+  config :bumblebee, :progress_bar_enabled, false
+  config :transmuter, progress_bar_enabled: false
+end
+
 # Keep recorded PCM out of any request log.
-config :phoenix, :filter_parameters, ["password", "pcm"]
+config :phoenix, :filter_parameters, ["password", "pcm", "text"]
 # Debug logs print every LiveView event. Set LOG_LEVEL=debug to see them.
 config :logger, level: String.to_existing_atom(System.get_env("LOG_LEVEL", "info"))
 config :logger, :default_formatter, format: "$time [$level] $message\n"

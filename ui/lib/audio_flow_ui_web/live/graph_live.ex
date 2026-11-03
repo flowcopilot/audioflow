@@ -28,7 +28,8 @@ defmodule AudioFlowUIWeb.GraphLive do
          socket
          |> assign(id: id, run: nil, task: nil, text: "", selected: nil, notice: nil)
          |> assign(view: %{"x" => 0, "y" => 0, "width" => 960, "height" => 640})
-         |> put_graph(graph)}
+         |> put_graph(graph)
+         |> allow_upload(:pcm, accept: :any, max_entries: 1, max_file_size: 2_000_000)}
 
       {:error, :not_found} ->
         {:ok, push_navigate(socket, to: "/")}
@@ -46,7 +47,7 @@ defmodule AudioFlowUIWeb.GraphLive do
 
       task =
         Task.Supervisor.async_nolink(AudioFlowUI.Tasks, fn ->
-          AudioFlowUI.Runs.run_text(graph, text)
+          AudioFlowUI.Runs.run_browser_text(graph, text)
         end)
 
       {:noreply, assign(socket, task: task.ref, text: text, run: :running)}
@@ -54,6 +55,33 @@ defmodule AudioFlowUIWeb.GraphLive do
   end
 
   def handle_event("run", _params, socket), do: {:noreply, socket}
+
+  def handle_event("validate_audio", _, socket), do: {:noreply, socket}
+
+  def handle_event("run_audio", %{"rate" => rate}, %{assigns: %{task: nil}} = socket)
+      when rate in ["8000", "16000", "22050", "24000", "44100", "48000"] do
+    audio =
+      consume_uploaded_entries(socket, :pcm, fn %{path: path}, _ ->
+        {:ok, %AudioFlow.Audio{data: File.read!(path), sample_rate: String.to_integer(rate)}}
+      end)
+
+    case audio do
+      [audio] ->
+        graph = socket.assigns.graph
+
+        task =
+          Task.Supervisor.async_nolink(AudioFlowUI.Tasks, fn ->
+            AudioFlowUI.Runs.run_browser_audio(graph, audio)
+          end)
+
+        {:noreply, assign(socket, task: task.ref, run: :running)}
+
+      _ ->
+        {:noreply, assign(socket, notice: "Upload mono s16le PCM first")}
+    end
+  end
+
+  def handle_event("run_audio", _, socket), do: {:noreply, socket}
 
   def handle_event("move_node", %{"id" => id, "x" => x, "y" => y}, socket),
     do: edit(socket, &GraphEdits.move_node(&1, id, x, y))
@@ -157,7 +185,7 @@ defmodule AudioFlowUIWeb.GraphLive do
       nodes: nodes,
       edges: edges,
       selected: selection(socket.assigns[:selected], nodes, edges),
-      errors: AudioFlowUI.errors(graph)
+      errors: AudioFlowUI.errors(graph) ++ AudioFlowUI.Prerequisites.errors(graph)
     )
   end
 
@@ -311,6 +339,34 @@ defmodule AudioFlowUIWeb.GraphLive do
               Run
             </button>
           </form>
+          <form
+            id="run-audio"
+            phx-submit="run_audio"
+            phx-change="validate_audio"
+            class="flex flex-col gap-2"
+          >
+            <label>
+              Committed mono signed 16-bit little-endian PCM (no WAV header, at most 2 MB)
+              <.live_file_input upload={@uploads.pcm} />
+            </label>
+            <label>
+              Input sample rate
+              <select name="rate">
+                <option
+                  :for={rate <- [8000, 16000, 22050, 24000, 44100, 48000]}
+                  value={rate}
+                  selected={rate == 16000}
+                >
+                  {rate} Hz
+                </option>
+              </select>
+            </label>
+            <p :for={error <- upload_errors(@uploads.pcm)}>{inspect(error)}</p>
+            <button disabled={@task != nil or @errors != []}>Run PCM utterance</button>
+          </form>
+          <p class="text-xs">
+            Speech output can be played after the turn completes (up to 8 MB of PCM).
+          </p>
           <.run_result run={@run} />
         </section>
       </aside>
@@ -335,6 +391,9 @@ defmodule AudioFlowUIWeb.GraphLive do
     <div id="run-result" class="flex flex-col gap-2 text-sm">
       <p :if={@result["error"]} class="text-destructive">{@result["error"]}</p>
       <p>{@result["reply"]}</p>
+      <label :for={audio <- @result["audio"] || []}>
+        {audio["node"]} output (first 8 MB total PCM) <audio controls src={audio["url"]} />
+      </label>
       <ol class="flex flex-col gap-1 font-mono text-xs text-muted-foreground">
         <li :for={event <- @result["events"]}>
           {event["node"]} {event["type"]}: {event_text(event)}

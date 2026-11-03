@@ -67,4 +67,19 @@ defmodule AudioFlowUI.MCPTest do
     assert_receive {:graph_deleted, "voice"}
     refute File.exists?(path)
   end
+
+  test "evaluation MCP tool executes saved graphs and returns assertion outcomes", %{
+    client: client
+  } do
+    {:ok, _} = AudioFlowUI.Graphs.put(voice())
+
+    assert {:ok, %{structured: %{"results" => [row]}}} =
+             call_tool(client, "evaluate_conversation", %{
+               "id" => "voice",
+               "script" => "Hi => wrong"
+             })
+
+    assert row["reply"] == "You said: Hi."
+    assert row["passed"] == false
+  end
 end

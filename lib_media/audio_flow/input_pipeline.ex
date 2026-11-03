@@ -13,6 +13,14 @@ defmodule AudioFlow.InputPipeline do
   def start_link(options),
     do: Membrane.Pipeline.start_link(__MODULE__, Keyword.put_new(options, :observer, self()))
 
+  @doc "Queue aligned, resampled speaker PCM before its corresponding capture buffers arrive."
+  def reference(pipeline, %AudioFlow.Audio{} = audio),
+    do: send(pipeline, {:audio_flow_reference, audio})
+
+  @impl true
+  def handle_info({:audio_flow_reference, audio}, _ctx, state),
+    do: {[notify_child: {:audio_flow_input, {:audio_flow_reference, audio}}], state}
+
   @impl true
   def handle_init(_ctx, options) do
     session = Keyword.fetch!(options, :session)

@@ -113,3 +113,117 @@ several sources and targets. A join node, such as STT or an LLM, runs once on
 the output of all its sources. A stream node, such as TTS, runs for each
 value, so speech starts before the reply is complete. The validation tells
 which node or edge is not correct.
+
+## Runnable examples
+
+Open **Runnable examples** from the graph list (/examples). The workflow button
+uses real Conversation and Jido handoff APIs with deterministic adapters:
+a failed turn rolls back to triage, then a successful turn commits billing.
+Evaluation runs up to ten text turns in one session and compares exact replies.
+Start with "Hello => You said: Hello." on Synthetic echo. A wrong expectation
+returns passed: false. Saved graphs select their last text-output node and
+respect graph history settings. MCP offers evaluate_conversation with id/script.
+These checks do not grade audio or classify intents with a model.
+
+Remote speech nodes are deepgram.stt, elevenlabs.tts and cartesia.tts. Create a
+starter, select its node, and save model, language code and voice options.
+Cartesia also requires an explicit API version; see [contracts](../docs/providers.md).
+Set only the selected provider's DEEPGRAM_API_KEY, ELEVENLABS_API_KEY or
+CARTESIA_API_KEY in the **server environment**, using your secret manager.
+Never paste credentials into graphs, scripts or browser/MCP payloads. Speech
+nodes accept neither raw keys nor arbitrary environment-variable names or URLs.
+A missing key disables dashboard runs and returns an MCP prerequisite error.
+Key presence is not evidence of account/model access.
+
+STT graphs accept committed mono signed 16-bit little-endian PCM uploads,
+without WAV headers, up to 2 MB. Select the file's actual sample rate.
+For example, prepare a local file with:
+
+~~~sh
+ffmpeg -i speech.wav -ac 1 -ar 16000 -f s16le speech.pcm
+~~~
+
+The runner displays transcripts and PCM byte counts, with per-node WAV playback
+after completion (first 8 MB total PCM; no mixing or resampling). Use the [chat app](../examples/chat/README.md) for interactive voice.
+Deepgram receives an already committed utterance, not continuous mic ingress.
+OpenAI Realtime and Gemini Live emit mixed transcript/text/audio and cannot
+occupy single-output graph nodes. Use their dedicated Session examples in
+[providers.md](../docs/providers.md).
+
+### RAG
+
+The starter is text → MiniLM embedding → rag.retrieve → synthetic document echo.
+It reports missing native nodes and missing retrieval profiles, never fabricated
+documents. For a complete local setup install PostgreSQL with pgvector, create
+a dedicated database owned by your user, then run from ui/:
+
+~~~sh
+AUDIOFLOW_ML=1 mix setup
+PGDATABASE=audioflow AUDIOFLOW_ML=1 mix run --no-start --no-halt examples/rag.exs
+~~~
+
+The script uses Postgrex's server-side PGHOST, PGPORT, PGUSER, PGPASSWORD and
+PGDATABASE variables (default host localhost). It provisions the vector extension
+and a 384-dimensional table, computes a real MiniLM embedding for one document,
+upserts it into the ui-starter collection and configures the trusted starter
+retrieval profile. The user needs extension/table permissions. First inference
+downloads/compiles weights. The local script does not configure remote database
+TLS; use a trusted Postgrex SSL connection for remote deployments. Document and
+query embeddings must use the same model/dimensions. Replace demo.llm with
+llm.chat_http for generated answers; until then replies echo retrieved JSON.
+No database or native inference verification is implied by synthetic tests.
+
+### Recording
+
+Set AUDIOFLOW_UI_RECORDINGS to a dedicated private server directory to enable
+the evaluation recording checkbox. Recording is off by default. Completed
+evaluation output events pass through AudioFlow.Recording; input and PCM are not
+stored. Email addresses in complete streams become [email] before disk writes.
+This regex does not cover other PII. Live results remain unredacted. Failed or
+incomplete evaluations write no artifacts. Streams are bounded; retention is
+24 hours and at most 100 artifacts, enforced on store access. For idle cleanup,
+call AudioFlow.Recording.Store.cleanup/1 periodically.
+
+Results show artifact IDs, not paths. Read/delete from a trusted server console:
+
+~~~elixir
+{:ok, store} = AudioFlow.Recording.Store.new(System.fetch_env!("AUDIOFLOW_UI_RECORDINGS"),
+  max_age_ms: 86_400_000, max_records: 100)
+{:ok, record} = AudioFlow.Recording.Store.read(store, artifact_id)
+:ok = AudioFlow.Recording.Store.delete(store, artifact_id)
+~~~
+
+Deletion does not erase backups. Browsers cannot choose storage paths or disable
+redaction for persisted output.
+
+### Standalone transports
+
+Discover the [official Pipecat SDK client](../examples/rtvi-client/README.md)
+(typed input/audio output), [telephony loopback](../examples/telephony-loopback.exs),
+and [network/avatar examples](../examples/network/README.md), including encoded
+WebRTC peer loopback and finite LiveAvatar LITE publishing. Follow their setup
+instructions for encoder, peer and provider prerequisites. Encoded WebRTC does
+not yet bridge PCM Sessions. Protocol fixtures are distinct from actual peer
+negotiation; neither establishes provider inference quality.
+
+### Verification
+
+~~~sh
+# ui/
+mix test
+mix assets.setup
+mix assets.build
+# repository root
+mix test test/graph_test.exs test/conversation_test.exs test/conversation_evaluation_test.exs test/recording_test.exs test/remote_providers_test.exs test/rag_test.exs
+~~~
+
+UI tests cover text/PCM graph runs, LiveView upload, MCP compatibility/evaluation,
+comparison failures, absent key/database configuration, key-free serialization,
+redacted artifacts and workflow rollback/commit. Provider protocol tests use
+local HTTP/WebSocket fixtures. Browser/device testing, live provider accounts,
+native inference and actual WebRTC peer negotiation require separate validation.
+
+For a trusted proxy or local fixture, server configuration may set
+:audio_flow, :speech_provider_endpoints to a map from speech node type to URL.
+This is application configuration only, never a browser graph option. Use
+HTTPS/WSS outside local tests: credentials are sent to that configured endpoint.

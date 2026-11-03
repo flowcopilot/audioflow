@@ -24,6 +24,9 @@ defmodule AudioFlow.Graph.Runner do
 
   `callbacks` has `:emit` (`fn step, value -> :ok end`, called for each node
   output) and `:context` (`fn text -> prompt end`, for the history node).
+  An optional `:checkpoint` callback runs after fully synthesized history chunks
+  on a single active path directly to terminal streaming audio. Other graph
+  shapes provide no text/audio alignment guarantee.
   An optional `:telemetry` map is added to the metadata of each
   `[:audio_flow, :stage, ...]` span. See `AudioFlow.Telemetry`.
   """
@@ -42,7 +45,7 @@ defmodule AudioFlow.Graph.Runner do
 
     key = make_ref()
     Process.put(key, %{pending: pending, buffers: %{}})
-    run = %{plan: plan, key: key, callbacks: callbacks}
+    run = %{plan: plan, key: key, callbacks: callbacks, aligned: aligned_history(plan, active)}
 
     try do
       value = input_value(input)
@@ -118,18 +121,78 @@ defmodule AudioFlow.Graph.Runner do
 
     {module, _} = step.adapter
 
+    adapter =
+      case step.adapter do
+        {AudioFlow.Adapters.ChatHTTP, options} ->
+          context =
+            Map.merge(
+              Keyword.get(options, :tool_context, %{}),
+              Map.get(run.callbacks, :telemetry, %{})
+            )
+
+          {AudioFlow.Adapters.ChatHTTP, Keyword.put(options, :tool_context, context)}
+
+        other ->
+          other
+      end
+
     metadata =
       run.callbacks
       |> Map.get(:telemetry, %{})
       |> Map.merge(%{stage: step.type, node: step.id, adapter: module})
 
     AudioFlow.Telemetry.stage(metadata, fn ->
-      Adapter.run(step.adapter, value, fn output ->
+      Adapter.run(adapter, value, fn output ->
         :ok = run.callbacks.emit.(step, output)
         Enum.each(step.targets, &deliver(run, step.id, &1, output))
+
+        if step.id == run.aligned and String.trim(output) != "" do
+          Map.get(run.callbacks, :checkpoint, fn -> :ok end).()
+        end
+
         :ok
       end)
     end)
+  end
+
+  # Only one active path, with history text directly synthesized to terminal
+  # audio, provides whole-chunk alignment. Joins and branches cannot prove it.
+  defp aligned_history(plan, active) do
+    linear? =
+      Enum.all?(active, fn id ->
+        step = plan.steps[id]
+
+        length(step.targets) <= 1 and
+          Enum.count(step.sources, &MapSet.member?(active, &1)) <= 1
+      end)
+
+    roots =
+      Enum.count(active, fn id ->
+        Enum.all?(plan.steps[id].sources, &(not MapSet.member?(active, &1)))
+      end)
+
+    if linear? and roots == 1 do
+      Enum.find_value(active, fn id ->
+        case plan.steps[id] do
+          %{history: true, event: :text, targets: [target]} ->
+            case plan.steps[target] do
+              %{input_mode: :stream, event: :audio, targets: [], sources: [^id]} ->
+                audio_nodes =
+                  Enum.filter(active, fn node ->
+                    plan.steps[node].adapter != nil and plan.steps[node].event == :audio
+                  end)
+
+                if audio_nodes == [target], do: id
+
+              _ ->
+                nil
+            end
+
+          _ ->
+            nil
+        end
+      end)
+    end
   end
 
   # `groups` has the values of each source, in edge order.
