@@ -37,6 +37,7 @@ defmodule AudioFlow.MixProject do
 
     [
       {:finch, "~> 0.24.0"},
+      {:postgrex, "~> 0.22"},
       {:jido, "~> 2.4.0"},
       {:telemetry, "~> 1.3"},
       {:websock, "~> 0.5.3"},

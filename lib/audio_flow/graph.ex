@@ -36,7 +36,7 @@ defmodule AudioFlow.Graph do
   """
   alias AudioFlow.Graph.Nodes
 
-  @default_nodes [Nodes.Input, Nodes.Audio, Nodes.Demo, Nodes.ChatHTTP]
+  @default_nodes [Nodes.Input, Nodes.Audio, Nodes.Demo, Nodes.ChatHTTP, Nodes.RAG]
   @kinds [:audio, :image, :text, :vector]
   @events [:transcript, :description, :text, :audio, :image, :vector]
   @settings %{"history" => :boolean, "timeout_ms" => :positive, "max_events" => :positive}

@@ -81,6 +81,7 @@ defmodule AudioFlow.Session do
        owner_ref: Process.monitor(owner),
        adapters: adapters,
        graph: graph,
+       conversation: Keyword.get(options, :conversation),
        limits: limits,
        history: History.new(Keyword.get(options, :history, false)),
        output: Keyword.get(options, :output),
@@ -141,7 +142,8 @@ defmodule AudioFlow.Session do
               first: %{},
               events: 0,
               input_bytes: 0,
-              context: nil
+              context: nil,
+              conversation: state.conversation
             }
 
             {:reply, {:ok, turn},
@@ -157,6 +159,40 @@ defmodule AudioFlow.Session do
     do: {:reply, :ok, %{state | history: History.clear(state.history)}}
 
   def handle_call(:clear_history, _from, state), do: {:reply, {:error, :busy}, state}
+
+  def handle_call(:conversation_state, _from, state) do
+    {:reply,
+     if(state.conversation,
+       do: {:ok, state.conversation.current},
+       else: {:error, :no_conversation}
+     ), state}
+  end
+
+  def handle_call({:conversation_event, event}, _from, state) do
+    flow = if state.active, do: state.active.conversation, else: state.conversation
+
+    case flow && AudioFlow.Graph.Conversation.transition(flow, event) do
+      {:ok, next} ->
+        state =
+          if state.active,
+            do: put_in(state.active.conversation, next),
+            else: %{state | conversation: next, graph: AudioFlow.Graph.Conversation.plan(next)}
+
+        {:reply, :ok, state}
+
+      nil ->
+        {:reply, {:error, :no_conversation}, state}
+
+      error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call({:conversation_event, turn, event}, from, %{active: %{turn: turn}} = state),
+    do: handle_call({:conversation_event, event}, from, state)
+
+  def handle_call({:conversation_event, _, _}, _from, state),
+    do: {:reply, {:error, :stale_turn}, state}
 
   def handle_call({:context, turn, input}, _from, %{active: %{turn: turn} = active} = state) do
     if state.history == nil do
@@ -257,7 +293,9 @@ defmodule AudioFlow.Session do
         do: History.commit(state.active.context),
         else: state.history
 
-    {:noreply, %{state | active: nil, history: history}}
+    flow = if result == :ok, do: state.active.conversation, else: state.conversation
+    graph = if flow, do: AudioFlow.Graph.Conversation.plan(flow), else: state.graph
+    {:noreply, %{state | active: nil, history: history, conversation: flow, graph: graph}}
   end
 
   def handle_info({:DOWN, ref, :process, _, _}, %{owner_ref: ref} = state),
