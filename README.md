@@ -281,10 +281,31 @@ Supply `max_completion_tokens` instead when the provider requires that field.
 SSE decoding accepts split UTF-8, CR/LF line endings, comments, and multiline
 data. Output uses sentence chunks with whitespace preserved. A complete stop
 event and `[DONE]` are required before the final text fragment is emitted.
-Truncation, incomplete streams, tool calls, refusals, invalid events, and empty
-replies return errors. Earlier complete sentences can already have reached TTS.
-This adapter handles text chat. It does not implement the Responses API or
-remote STT, TTS, and tool execution.
+Truncation, incomplete streams, refusals, invalid events, and empty replies
+return errors. Earlier complete sentences can already have reached TTS. This
+adapter does not implement the Responses API or remote STT and TTS.
+
+Pass `:tools` to let the model call functions during a turn. A tool is a
+`Jido.Action` module or a map with `:name`, `:description`, `:parameters` (JSON
+Schema), and a one-argument `:run` function (see `AudioFlow.Tool`):
+
+```elixir
+llm = {AudioFlow.Adapters.ChatHTTP,
+  endpoint: endpoint, model: model,
+  tools: [MyApp.Actions.Weather],
+  tool_context: %{user_id: user_id},
+  tool_filler: "One moment."}
+```
+
+The adapter collects the streamed calls and runs them in the turn process.
+Cancellation therefore stops a running tool. The results go back to the model in
+a new request. If the model calls a tool without first saying something,
+`:tool_filler` is spoken while the tool runs. Tool failures, timeouts
+(`:tool_timeout_ms`, 10,000), and oversized results (`:max_tool_result_bytes`,
+8,192) go back to the model as `{"error": ...}` results. `:max_tool_rounds` (4)
+limits the requests in one turn, and `:max_tool_calls` (8) limits the calls in
+one request. Without `:tools`, a tool call returns
+`{:error, :unsupported_tool_call}`.
 
 The shared Finch pool uses HTTP/1 so the output callback applies back pressure
 to socket reads. Cancellation closes the active connection. A failed output
