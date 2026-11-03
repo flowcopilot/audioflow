@@ -44,6 +44,7 @@ export default defineConfig({
             'docs/guides/membrane-input',
             'docs/guides/output',
             'docs/guides/websocket',
+            'docs/guides/telemetry',
           ],
         },
         {

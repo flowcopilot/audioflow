@@ -24,6 +24,8 @@ defmodule AudioFlow.Graph.Runner do
 
   `callbacks` has `:emit` (`fn step, value -> :ok end`, called for each node
   output) and `:context` (`fn text -> prompt end`, for the history node).
+  An optional `:telemetry` map is added to the metadata of each
+  `[:audio_flow, :stage, ...]` span. See `AudioFlow.Telemetry`.
   """
   alias AudioFlow.{Adapter, Audio}
   alias AudioFlow.Graph.Plan
@@ -114,10 +116,19 @@ defmodule AudioFlow.Graph.Runner do
   defp run_step(run, step, value) do
     value = if step.history, do: run.callbacks.context.(value), else: value
 
-    Adapter.run(step.adapter, value, fn output ->
-      :ok = run.callbacks.emit.(step, output)
-      Enum.each(step.targets, &deliver(run, step.id, &1, output))
-      :ok
+    {module, _} = step.adapter
+
+    metadata =
+      run.callbacks
+      |> Map.get(:telemetry, %{})
+      |> Map.merge(%{stage: step.type, node: step.id, adapter: module})
+
+    AudioFlow.Telemetry.stage(metadata, fn ->
+      Adapter.run(step.adapter, value, fn output ->
+        :ok = run.callbacks.emit.(step, output)
+        Enum.each(step.targets, &deliver(run, step.id, &1, output))
+        :ok
+      end)
     end)
   end
 

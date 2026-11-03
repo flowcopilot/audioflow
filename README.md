@@ -724,6 +724,19 @@ Then open http://127.0.0.1:4000. The Demo replies are silent PCM. The
 transport does not include echo cancellation, encoding, or packet loss
 recovery. Use the browser's echo cancellation for speaker playback.
 
+## Telemetry
+
+Sessions emit `:telemetry` events. `[:audio_flow, :session, ...]` and
+`[:audio_flow, :turn, ...]` have start and stop events. Each adapter call is a
+`[:audio_flow, :stage, ...]` span with `:stage` set to `:stt`, `:vision`,
+`:llm`, or `:tts`, or the node type in a graph session. A turn stop event has
+the turn `:status` (`:done`, `:cancelled`, or `:error`) and the terminal
+event metrics. See `AudioFlow.Telemetry` for every event. Turn and stage
+events carry `:telemetry_span_context` for an `opentelemetry_telemetry` bridge,
+and `opentelemetry_process_propagator` nests stage spans under their turn.
+The [telemetry guide](site/src/content/docs/docs/guides/telemetry.md) has an
+example handler.
+
 ## Model validation
 
 The regular tests need no model downloads. With the model flags, tests also
@@ -893,6 +906,9 @@ and closed workload. They do not establish production capacity.
 - [Misaki phoneme mapping](https://github.com/hexgrad/misaki/blob/main/misaki/espeak.py)
 - [FFmpeg resampler](https://membrane-ffmpeg-swresample-plugin.hexdocs.pm/Membrane.FFmpeg.SWResample.Converter.html)
 - [PortAudio plugin](https://hexdocs.pm/membrane_portaudio_plugin/)
+- [telemetry span](https://hexdocs.pm/telemetry/telemetry.html#span/3)
+- [opentelemetry_telemetry](https://hexdocs.pm/opentelemetry_telemetry/)
+- [opentelemetry_process_propagator](https://hexdocs.pm/opentelemetry_process_propagator/)
 
 ## License
 
