@@ -12,7 +12,11 @@ export class AudioFlowTransport extends Transport {
   private audio?: AudioContext;
   private sources = new Set<AudioBufferSourceNode>();
   private nextAudio = 0;
-  private ready?: { resolve: () => void; reject: (error: Error) => void };
+  private ready?: {
+    id: string;
+    resolve: () => void;
+    reject: (error: Error) => void;
+  };
   private readyTimer?: ReturnType<typeof setTimeout>;
   constructor(
     private readonly url: string,
@@ -83,11 +87,25 @@ export class AudioFlowTransport extends Transport {
           const message = JSON.parse(String(event.data)) as RTVIMessage;
           if (message.label !== "rtvi-ai" || typeof message.type !== "string")
             throw new Error("Invalid RTVI message");
-          if (message.type === "bot-ready") {
+          if (
+            message.type === "bot-ready" &&
+            this.ready &&
+            message.id === this.ready.id
+          ) {
             this.state = "ready";
             clearTimeout(this.readyTimer);
             this.ready?.resolve();
             this.ready = undefined;
+          }
+          if (
+            message.type === "error-response" &&
+            this.ready &&
+            message.id === this.ready.id
+          ) {
+            const data = message.data as { error?: unknown } | undefined;
+            this.rejectReady(
+              new Error(String(data?.error ?? "RTVI negotiation failed")),
+            );
           }
           if (message.type === "bot-interrupted") this.stopAudio();
           if (message.type === "bot-tts-audio" && this.playback)
@@ -102,12 +120,19 @@ export class AudioFlowTransport extends Transport {
   }
   sendReadyMessage(): Promise<void> {
     return new Promise((resolve, reject) => {
-      this.ready = { resolve, reject };
+      const message = RTVIMessage.clientReady();
+      this.ready = { id: message.id, resolve, reject };
       this.readyTimer = setTimeout(() => {
         this.rejectReady(new Error("bot-ready timeout"));
         void this.disconnect();
       }, 10_000);
-      this.sendMessage(RTVIMessage.clientReady());
+      try {
+        this.sendMessage(message);
+      } catch (error) {
+        this.rejectReady(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      }
     });
   }
   private rejectReady(error: Error) {

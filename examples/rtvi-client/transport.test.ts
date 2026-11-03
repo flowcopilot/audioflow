@@ -140,6 +140,20 @@ test(
       assert.equal(playback.stopped, 1);
       assert.equal(playback.closed, 1);
       assert.equal(transport.state, "disconnected");
+
+      // A real server rejection must reach connect(), rather than being hidden
+      // behind the transport's generic ten-second readiness timeout.
+      const sendMessage = transport.sendMessage.bind(transport);
+      transport.sendMessage = (message) => {
+        if (message.type === "client-ready") {
+          sendMessage(new RTVIMessage("update-config", {}, "unrelated"));
+          message.data = { ...(message.data as object), version: "1.0.0" };
+        }
+        sendMessage(message);
+      };
+      await assert.rejects(client.connect(), /Supported RTVI major version: 2/);
+      await waitFor(() => transport.state === "disconnected");
+      transport.sendMessage = sendMessage;
       await client.connect();
       assert.equal(transport.state, "ready");
       await client.disconnect();
