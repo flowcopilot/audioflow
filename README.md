@@ -40,6 +40,10 @@ https://flowcopilot.github.io/audioflow/. Their source is in [site](site/README.
 Core, ML, media, and combined ML/media builds use separate `_build` directories.
 Changing a feature flag does not remove modules used by another build profile.
 
+Optional encoded WebRTC audio/video and finite-utterance LiveAvatar publishing
+are described in [WebRTC and avatars](docs/webrtc-avatars.md), including setup,
+local protocol validation, and remaining integration limits.
+
 ## Sessions
 
 ```elixir
