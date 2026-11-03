@@ -1,9 +1,11 @@
 # Interruption and heard reply history
 
 Issue #12 implementation: explicit playback acknowledgements, conservative
-history truncation on cancellation, and an optional minimum-word trigger gate.
-This is partial progress: device acknowledgements, word alignment and actual
-pause/resume after a false interruption are not implemented.
+history truncation on cancellation, an optional minimum-word trigger gate, and
+opt-in provisional pause/resume. Chat implements the pausable Web Audio endpoint;
+native and network transports currently return unsupported. Device render
+acknowledgements, within-chunk word alignment and automatic false-trigger
+classification remain outside this implementation.
 
 ## Transport contract
 
@@ -27,11 +29,11 @@ Only use authenticated reports for the current turn, generated at the actual
 rendering endpoint. Even a rendering acknowledgement is a transport assertion,
 not proof of acoustic audibility.
 
-PortAudio currently supplies no automatic rendered-frame offset here. Existing
-browser and network transports must integrate their endpoint acknowledgements
-explicitly. Without reports, zero reply text is known heard on cancellation.
-No callback is added to the existing Output behaviour, so transports remain
-compatible.
+Chat reports its Web Audio render clock and serializes suspension/resumption
+acknowledgements. PortAudio supplies no automatic rendered-frame offset here;
+other network endpoints must integrate their own reports. Without reports,
+zero reply text is known heard on cancellation. The existing Output behaviour
+remains compatible; pausable endpoints opt into a separate extension.
 
 ## History and cancellation
 
@@ -76,14 +78,31 @@ Call this with one accumulated candidate transcript, not independent STT deltas.
 It neither submits the user's next input nor changes the busy-input policy.
 It is a caller-controlled heuristic, not semantic interruption detection.
 After cancel, workers and queued audio have been discarded and cannot resume.
-True pause/resume remains unimplemented. It requires a separate candidate-pause
-operation rather than cancel: the Output behaviour and each endpoint need
-pause/resume commands with acknowledged turn-scoped played and queued offsets,
-plus guarantees against rendering while paused. The runtime must preserve the
-worker and buffer new generation under explicit byte/event/deadline bounds (or
-backpressure it), retain unsent PCM and its text checkpoints, and define overflow,
-pause-deadline, transport-failure and owner-exit behavior. A false-trigger decision
-can then resume exactly that queue; a confirmed interruption discards it and
-truncates from the final acknowledged played offset. Existing push/flush/finish
-semantics cannot safely implement this by merely suspending a task or replaying
-already dispatched PCM. Automatic false-interruption timeouts remain future work.
+
+## Provisional pause/resume
+
+An endpoint implementing `AudioFlow.PausableOutput` accepts ordered pause and
+resume commands and separately reports actual endpoint completion through
+`Output.control_ack/5`. `Output.provisional(session, deadline_ms)` returns a
+candidate reference. After the pause acknowledgement, resolve it with
+`Output.resolve(session, candidate, :resume)` for a false trigger, or `:confirm`
+to cancel. The deadline must be positive and at most 30 seconds; expiration
+confirms/cancels, including when an endpoint never acknowledges. The original
+turn timeout continues to apply. Legacy endpoints return `{:error, :unsupported}`.
+
+The runtime preserves the worker, turn reference, checkpoints and history, and
+backpressures at most one pending worker emit. Existing event/byte limits remain
+effective. Successful generation completion during a candidate is held until
+resume; failures, owner exit, explicit stop and deadline expiry discard held
+output. A confirmed interruption flushes the endpoint queue and retains only
+the explicitly acknowledged aligned text prefix. Stale commands and offsets
+are rejected. A resumed false candidate neither starts a new turn nor rewrites
+history.
+
+Chat exposes Pause, Resume and Confirm/Stop controls using actual serialized
+Web Audio suspension/resumption. Scheduled sources remain queued and progress
+uses the frozen AudioContext clock while paused. This is a manual provisional
+decision, not automatic VAD or proof of acoustic audibility. Native Playback,
+telephony and WebRTC do not implement provisional pause. Upstream providers must
+tolerate blocked emits; the chat's per-turn queue is finite rather than a sliding
+latency window. See [chat setup and controls](../../examples/chat/README.md).
