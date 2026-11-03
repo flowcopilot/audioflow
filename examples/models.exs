@@ -111,15 +111,20 @@ whisper_revision = "169d4a4341b33bc18d8881c4b69c2e104e1cc0af"
     "http" ->
       key =
         if System.get_env("AUDIOFLOW_CHAT_API_KEY"),
-          do: fn -> System.fetch_env!("AUDIOFLOW_CHAT_API_KEY") end
+          do: System.fetch_env!("AUDIOFLOW_CHAT_API_KEY"),
+          else: "local"
 
       adapter =
-        {AudioFlow.Adapters.ChatHTTP,
-         endpoint: System.fetch_env!("AUDIOFLOW_CHAT_ENDPOINT"),
-         model: llm_repository,
+        {AudioFlow.Adapters.ReqLLM,
+         base_url:
+           System.fetch_env!("AUDIOFLOW_CHAT_ENDPOINT")
+           |> String.replace_suffix("/chat/completions", ""),
+         model: %{provider: :openai, id: llm_repository},
          api_key: key,
-         timeout_ms: 120_000,
-         parameters: %{temperature: 0, max_tokens: 64}}
+         audio_flow: [timeout_ms: 120_000],
+         system_prompt: AudioFlow.Prompt.default_system(),
+         temperature: 0.0,
+         max_tokens: 64}
 
       {adapter, [],
        %{

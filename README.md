@@ -109,7 +109,7 @@ Enable history when the LLM adapter accepts chat messages:
 adapters continue to receive one transcript string. With history enabled, the
 LLM receives a list of `%{role: :user | :assistant, content: text}` maps. Saved
 user/assistant pairs precede the current user message. `Prompt.qwen3/2` and
-`Adapters.ChatHTTP` accept this format. Custom adapters and routing functions
+`Adapters.ReqLLM` accept this format. Custom adapters and routing functions
 must accept the message list when history is enabled. System instructions stay
 in the model adapter or prompt formatter.
 
@@ -264,65 +264,60 @@ continuous streaming speech recognizer.
 
 ## HTTP language inference
 
-`AudioFlow.Adapters.ChatHTTP` implements streaming chat completions for
-compatible local servers and cloud endpoints. It uses the same adapter
-interface as the native models. No native model dependencies are required:
+`AudioFlow.Adapters.ReqLLM` accepts ReqLLM's model, context and generation
+options directly. The AudioFlow bridge groups generated text into sentences
+with whitespace preserved and executes caller-bound tools. Local Nx adapters
+remain independent of ReqLLM.
 
 ```elixir
-llm = {AudioFlow.Adapters.ChatHTTP,
-  endpoint: "http://127.0.0.1:18082/v1/chat/completions",
-  model: "audioflow-qwen",
-  parameters: %{temperature: 0, max_tokens: 64}}
+llm = {AudioFlow.Adapters.ReqLLM,
+  model: %{provider: :openai, id: "audioflow-qwen"},
+  base_url: "http://127.0.0.1:18082/v1",
+  api_key: "local",
+  system_prompt: AudioFlow.Prompt.default_system(),
+  temperature: 0.0, max_tokens: 64,
+  audio_flow: [tools: [MyApp.Actions.Weather],
+               tool_context: %{user_id: user_id}, tool_filler: "One moment."]}
 {:ok, session} = AudioFlow.start_session(
   Keyword.put(session_options, :llm, llm))
 ```
 
-Supply the complete endpoint URL and the model ID expected by the server.
-Use HTTPS for cloud endpoints. Set `:api_key` to a string or a zero-argument
-function. For example, `fn -> System.fetch_env!("AUDIOFLOW_CHAT_API_KEY") end`
-reads the key when a request starts. Additional `:headers` can hold provider
-options. The adapter does not follow redirects or retry HTTP status errors.
-TLS uses the HTTP client's default certificate and hostname verification.
+Use a ReqLLM catalog model such as `"anthropic:claude-sonnet-4-5"`, or an inline
+model for a local endpoint. `:base_url`, `:api_key`, `:system_prompt`,
+`:provider_options`, `:req_http_options` and native `ReqLLM.Tool` definitions
+are ReqLLM options. Resolve credentials when constructing the turn options;
+ReqLLM also supports its provider credential configuration. No implicit system
+prompt is added by the new bridge. Input accepts `ReqLLM.Context`, messages or
+a string; session history still uses messages.
 
-Input can be one string or a list of `%{role: :user | :assistant, content: text}`
-messages. `:system` sets the system instruction. Its default requests one short
-spoken sentence. The adapter prepends this instruction once. `:parameters`
-holds provider-specific JSON fields. The adapter fixes `model`, `messages`,
-`stream: true`, and `n: 1`. The default token limit is `max_tokens: 128`.
-Supply `max_completion_tokens` instead when the provider requires that field.
+The execution bridge currently supports HTTP SSE transports. It uses ReqLLM's
+request builders, SSE parser, provider decoders and chunk accumulator, with
+synchronous Finch reads to enforce byte budgets and backpressure. It does not
+invoke ReqLLM's automatic retries, caches or fixture replays. WebSocket and
+in-process ReqLLM transports are outside this bridge. Refusal, truncation,
+empty replies and incomplete streams return errors; earlier complete sentences
+may already have reached TTS. OpenAI-compatible streams require both a finish
+reason and `[DONE]` before emitting the final fragment.
 
-SSE decoding accepts split UTF-8, CR/LF line endings, comments, and multiline
-data. Output uses sentence chunks with whitespace preserved. A complete stop
-event and `[DONE]` are required before the final text fragment is emitted.
-Truncation, incomplete streams, refusals, invalid events, and empty replies
-return errors. Earlier complete sentences can already have reached TTS. This
-adapter does not implement the Responses API or remote STT and TTS.
+Put AudioFlow execution settings under `:audio_flow`. `:tools` there accepts
+Jido actions and `AudioFlow.Tool` definitions, while top-level `:tools` accepts
+native `ReqLLM.Tool` structs. Both execute in linked tasks with bounded results
+and deadlines, and cancellation stops them. `:tool_filler` is emitted for a
+silent tool round. `:max_tool_rounds` defaults to 4, `:max_tool_calls` to 8,
+`:tool_timeout_ms` to 10,000 and `:max_tool_result_bytes` to 8,192.
 
-Pass `:tools` to let the model call functions during a turn. A tool is a
-`Jido.Action` module or a map with `:name`, `:description`, `:parameters` (JSON
-Schema), and a one-argument `:run` function (see `AudioFlow.Tool`):
-
-```elixir
-llm = {AudioFlow.Adapters.ChatHTTP,
-  endpoint: endpoint, model: model,
-  tools: [MyApp.Actions.Weather],
-  tool_context: %{user_id: user_id},
-  tool_filler: "One moment."}
-```
-
-The adapter collects the streamed calls and runs them in the turn process.
-Cancellation therefore stops a running tool. The results go back to the model in
-a new request. If the model calls a tool without first saying something,
-`:tool_filler` is spoken while the tool runs. Tool failures, timeouts
-(`:tool_timeout_ms`, 10,000), and oversized results (`:max_tool_result_bytes`,
-8,192) go back to the model as `{"error": ...}` results. `:max_tool_rounds` (4)
-limits the requests in one turn, and `:max_tool_calls` (8) limits the calls in
-one request. Without `:tools`, a tool call returns
-`{:error, :unsupported_tool_call}`.
+`AudioFlow.Adapters.ChatHTTP` is a deprecated configuration shim, with no HTTP
+implementation. Its complete `endpoint` URL maps to ReqLLM `base_url` without
+`/chat/completions`; bare model IDs map to inline OpenAI models; `system` maps
+to `system_prompt`; token limits and temperature map to ReqLLM options. Other
+legacy arbitrary `parameters` are no longer forwarded: use ReqLLM generation
+and provider options. ReqLLM chooses token field names, enables usage streaming,
+omits implicit `n: 1`, and normalizes tool argument JSON and empty assistant
+content. These wire differences preserve execution guarantees.
 
 The shared Finch pool uses HTTP/1 so the output callback applies back pressure
 to socket reads. Cancellation closes the active connection. A failed output
-callback also releases the connection. The limits are:
+callback also releases the connection. The following limits belong under `:audio_flow`:
 
 | Option | Default | Bound |
 | --- | ---: | --- |

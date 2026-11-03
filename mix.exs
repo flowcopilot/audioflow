@@ -38,6 +38,7 @@ defmodule AudioFlow.MixProject do
 
     [
       {:nimble_options, "~> 1.1"},
+      {:req_llm, "~> 1.29.0"},
       {:finch, "~> 0.24.0"},
       {:mint_web_socket, "~> 1.0"},
       {:postgrex, "~> 0.22"},

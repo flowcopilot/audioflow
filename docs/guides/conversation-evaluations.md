@@ -14,10 +14,11 @@ alias AudioFlow.Evaluation.Conversation
 
 {:ok, session} = AudioFlow.start_session(
   history: true,
-  llm: {AudioFlow.Adapters.ChatHTTP,
-    endpoint: "http://localhost:8080/v1/chat/completions",
-    model: "your-tool-capable-model",
-    tools: tools}
+  llm: {AudioFlow.Adapters.ReqLLM,
+    base_url: "http://localhost:8080/v1",
+    model: %{provider: :openai, id: "your-tool-capable-model"},
+    api_key: "local",
+    audio_flow: [tools: tools]}
 )
 on_exit(fn -> if Process.alive?(session), do: AudioFlow.stop_session(session) end)
 

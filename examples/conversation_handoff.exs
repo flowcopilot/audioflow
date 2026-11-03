@@ -18,11 +18,11 @@ graph = fn system, profile ->
       %{id: "keyboard", type: "input.text"},
       %{
         id: "agent",
-        type: "llm.chat_http",
+        type: "llm.req_llm",
         options: %{
-          endpoint: endpoint,
-          model: model,
-          system: system,
+          base_url: String.replace_suffix(endpoint, "/chat/completions", ""),
+          model: "openai:" <> model,
+          system_prompt: system,
           api_key_env: "CHAT_API_KEY",
           tools_profile: profile
         }
