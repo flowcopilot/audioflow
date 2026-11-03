@@ -66,7 +66,12 @@ button('start').onclick = async () => {
     send('start', {pcm: btoa(raw)});
   } catch { active = false; status('Could not read PCM file'); controls(); }
 };
-button('play').onclick = () => { void receiver?.play().catch(() => status('Playback blocked. Click Enable audio / video again.')); };
+button('play').onclick = () => {
+  const current = receiver;
+  void current?.play().catch(error => {
+    if (receiver === current) status(error instanceof Error ? error.message : 'Playback failed. Retry Enable audio / video.');
+  });
+};
 button('cancel').onclick = cancel;
 button('disconnect').onclick = disconnect;
 window.addEventListener('pagehide', disconnect);

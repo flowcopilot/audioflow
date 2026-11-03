@@ -4,7 +4,6 @@ import { Room, RoomEvent, Track, type RemoteTrack } from 'livekit-client';
 export class Receiver {
   private tracks = new Set<RemoteTrack>();
   private ready = false;
-  private playbackEnabled = false;
   private closed = false;
   constructor(
     private container: Pick<HTMLElement, 'append'>,
@@ -25,20 +24,16 @@ export class Receiver {
     element.autoplay = true;
     if (element instanceof HTMLVideoElement) element.playsInline = true;
     this.container.append(element);
-    this.checkReady();
   };
-  private checkReady() {
-    if (!this.closed && !this.ready && this.playbackEnabled && [Track.Kind.Audio, Track.Kind.Video].every(kind =>
-      [...this.tracks].some(t => t.kind === kind))) {
-      this.ready = true;
-      this.subscribed();
-    }
-  }
   private detach = (track: RemoteTrack) => {
     for (const element of track.detach()) element.remove();
     this.tracks.delete(track);
   };
-  private failure = () => this.failed('Provider track subscription failed');
+  private failure = () => {
+    if (this.closed) return;
+    void this.close();
+    this.failed('Provider track subscription failed');
+  };
   private disconnected = () => {
     if (!this.closed) this.failed('Provider room disconnected');
     void this.close();
@@ -54,9 +49,25 @@ export class Receiver {
   }
   // Invoke directly from a click to satisfy browser autoplay policies.
   async play() {
+    if (this.closed) return;
+    const tracks = [...this.tracks];
+    if (![Track.Kind.Audio, Track.Kind.Video].every(kind => tracks.some(t => t.kind === kind))) {
+      throw new Error('Wait for both provider tracks, then click Enable audio / video again.');
+    }
     await Promise.all([this.room.startAudio(), this.room.startVideo()]);
-    this.playbackEnabled = true;
-    this.checkReady();
+    if (this.closed) return;
+    if (!tracks.every(track => this.tracks.has(track))) {
+      throw new Error('Provider tracks changed; click Enable audio / video again.');
+    }
+    // startVideo can resolve after NotAllowedError; promise completion alone
+    // does not establish that both media kinds can play.
+    if (!this.room.canPlaybackAudio || !this.room.canPlaybackVideo) {
+      throw new Error('Playback blocked. Click Enable audio / video again.');
+    }
+    if (!this.ready) {
+      this.ready = true;
+      this.subscribed();
+    }
   }
   async close() {
     if (this.closed) return;
