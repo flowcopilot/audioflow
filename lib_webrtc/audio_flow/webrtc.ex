@@ -24,6 +24,8 @@ defmodule AudioFlow.WebRTC do
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
   def offer(pid), do: GenServer.call(pid, :offer)
   def signal(pid, message), do: GenServer.call(pid, {:signal, message})
+  @doc "Negotiated receiver codecs for a track, for transports validating decoded media."
+  def track_codecs(pid, track_id), do: GenServer.call(pid, {:track_codecs, track_id})
   def start_turn(pid, key), do: GenServer.call(pid, {:turn, key})
   def flush(pid, key), do: GenServer.call(pid, {:flush, key})
 
@@ -80,6 +82,17 @@ defmodule AudioFlow.WebRTC do
   end
 
   @impl true
+  def handle_call({:track_codecs, id}, _, s) do
+    codecs =
+      PeerConnection.get_transceivers(s.pc)
+      |> Enum.find_value([], fn transceiver ->
+        if transceiver.receiver.track && transceiver.receiver.track.id == id,
+          do: transceiver.codecs
+      end)
+
+    {:reply, codecs, s}
+  end
+
   def handle_call(:offer, _, s) do
     with {:ok, offer} <- PeerConnection.create_offer(s.pc),
          :ok <- PeerConnection.set_local_description(s.pc, offer) do

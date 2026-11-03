@@ -47,7 +47,7 @@ No live provider credentials or interoperability were used during validation.
   another user's peer. Authenticate before allocating peer resources.
 - Feed an encoded PCMU/VP8 source through `publish/5` with a shared PTS epoch and
   real-time pacing. Use a generation key per turn, `flush/2` on interruption, and
-  `stop/1` on disconnect. Native PCM Session/VAD bridging is still required.
+  `stop/1` on disconnect. For PCM use `AudioFlow.WebRTC.Session`, documented below.
 - Start `AudioFlow.Avatars.LiveAvatar` with `:owner`, `:api_key`, `:avatar_id` and
   the finite 24 kHz `:audio`. The owner receives
   `{LiveAvatar, publisher, {:published, %{url: url, token: token}}}`. Forward only
@@ -65,3 +65,18 @@ test/webrtc_test.exs` for real two-peer negotiation, byte-for-byte RTP reassembl
 clocks, stale-key rejection and peer lifetime cleanup. Provider-generated A/V,
 LiveKit subscription, lip-sync, browser autoplay, NAT/TURN and acoustic quality
 remain live validation requirements.
+
+## Standalone Session voice agent
+
+```sh
+AUDIOFLOW_WEBRTC=1 mix run examples/network/voice_agent.exs
+```
+
+This credential-free terminal example sends synthetic voiced PCM plus silence
+through a real local WebRTC pair. The Session bridge decodes PCMU, runs an
+energy gate through VoiceInput and submits an actual utterance to Session.
+**SYNTHETIC DEMO:** Demo adapters return a fixed transcript/reply and silent
+16 kHz PCM; they perform no speech inference. The reply is resampled, μ-law
+encoded, paced and received as six PCMU packets. No microphone, acoustic,
+browser or TURN claim is made. See the guide's PCM Session bridge section for
+real adapter integration, explicit signaling routing, supported rates and limits.
