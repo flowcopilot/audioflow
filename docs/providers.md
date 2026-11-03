@@ -81,14 +81,53 @@ detection and wraps the audio in `activityStart` / `activityEnd`. Input is
 `turnComplete` ends the run; interruptions, tool calls and `goAway` fail the
 run. Both adapters support optional `:instructions`.
 
-**Integration gap for #8:** these mixed-output callbacks cannot be put into the
-existing Session `:stt`, `:llm`, or `:tts` slots: each slot validates one output
-type and the session runs a chained pipeline. No Session, graph, UI, or history
-routing has been changed. A future speech-to-speech session mode must route
-these events, persist conversation context, and coordinate playback truncation.
-Direct calls open a fresh connection per turn and do not retain provider
-history. There is no continuous duplex input, tool execution, resampling,
-WebRTC, automatic reconnect, or cross-turn provider state.
+## Session speech-to-speech mode
+
+Start a dedicated Session without dummy STT/LLM/TTS adapters:
+
+```elixir
+{:ok, session} = AudioFlow.start_session(
+  speech_to_speech: {AudioFlow.Adapters.OpenAIRealtime,
+    [model: System.fetch_env!("OPENAI_REALTIME_MODEL"),
+     api_key: fn -> System.fetch_env!("OPENAI_API_KEY") end,
+     instructions: "Answer briefly."]},
+  timeout_ms: 30_000, max_input_bytes: 960_000,
+  max_events: 1024, max_output_bytes: 16_777_216)
+{:ok, turn} = AudioFlow.submit(session, audio_24khz)
+# Receive {AudioFlow, session, turn, {:transcript | :text | :audio, value}}
+# followed by {:done, metrics} or {:error, reason, metrics}.
+AudioFlow.cancel(session)
+AudioFlow.stop_session(session)
+```
+
+GeminiLive uses the same option with 16 kHz input. Only committed PCM inputs
+are accepted. One active turn is allowed; busy input is rejected. The optional
+Output transport receives start/push/finish and flush on cancellation or failure.
+Cancellation, timeout, owner exit and stop terminate the socket-owning task.
+Late callbacks for an old turn are rejected. The byte budget counts cumulative
+text/transcript UTF-8 and PCM payload bytes, separately from event count. The
+owner must still consume its mailbox across turns. Provider limits also apply.
+
+This mode explicitly rejects `:history`, stage adapters, graph plans and
+conversation flows. Each turn opens a fresh connection; no prior transcript is
+silently substituted for native provider context. Instructions are supported as
+provider options, but replaying prior text/audio, native item truncation, session
+resumption and provider history are not implemented. No heard-text checkpoints
+are inferred from mixed deltas: their ordering and boundaries do not establish
+text/audio alignment. Acknowledgements can track PCM progress but cannot prove
+which transcript prefix was heard. The official [OpenAI conversation guide](https://developers.openai.com/api/docs/guides/realtime-conversations#interruption-and-truncation)
+also distinguishes native audio truncation from a precisely truncated transcript.
+[Gemini session management](https://aistudio.google.com/docs/live-api/session-management)
+describes persistent connections and explicit resumption handles; this adapter
+does not retain or replay those handles.
+
+Graph/UI registration remains deferred: the current catalog and edge validator
+expose one typed output per stage. A useful mixed-output speech node needs
+explicit typed event ports (transcript, text and audio), routing/validation for
+each, and a dedicated history capability contract. Registering either adapter
+as an existing STT/LLM/TTS node would misrepresent its contract. Use the explicit
+Session mode or direct API today. There is no continuous duplex input, tool
+execution, automatic reconnect, resampling or WebRTC in this mode.
 
 ## Bounds, cancellation and errors
 

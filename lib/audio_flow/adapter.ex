@@ -6,7 +6,10 @@ defmodule AudioFlow.Adapter do
   Return `:ok` or `{:error, reason}`. Exceptions become turn errors.
   STT emits transcript strings, vision emits description strings, LLM emits
   speakable text chunks, and TTS emits `AudioFlow.Audio` values. Embedding
-  adapters emit vectors for direct inference callers. Keep model weights in
+  adapters emit vectors for direct inference callers. A Session `:speech_to_speech`
+  adapter emits tagged `{:transcript, text}`, `{:text, text}`, `{:audio, audio}`
+  values through the same arity-one callback. It is a separate mixed-output
+  contract and cannot occupy a single-output stage slot. Keep model weights in
   shared services.
   """
   @callback run(input :: term(), options :: keyword(), emit :: (term() -> :ok)) ::

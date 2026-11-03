@@ -2,8 +2,9 @@ defmodule AudioFlow.Adapters.GeminiLive do
   @moduledoc """
   One committed audio turn over Gemini Live v1beta WebSocket.
   Direct callers receive transcript/text deltas and Audio tuples, like OpenAIRealtime.
-  See docs/providers.md; this is not a Session stage adapter.
+  Use directly or in Session `:speech_to_speech`; see docs/providers.md.
   """
+  @behaviour AudioFlow.Adapter
   alias AudioFlow.Adapters.Providers.Socket
 
   def run(audio, options, emit) do

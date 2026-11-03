@@ -55,6 +55,10 @@ AudioFlow.cancel(session)
 AudioFlow.stop_session(session)
 ```
 
+For OpenAI Realtime or Gemini Live without chained stages, use the explicit
+[Session speech-to-speech mode](docs/providers.md#session-speech-to-speech-mode).
+It accepts committed PCM and does not replay cross-turn history.
+
 The owner receives transcript, text, audio, and terminal events. See
 `AudioFlow` for the event format. Each turn has a unique reference. A session
 accepts one turn at a time. Further input returns `{:error, :busy}`. To interrupt
