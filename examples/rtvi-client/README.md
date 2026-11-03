@@ -4,7 +4,8 @@ This maintained-in-repo `Transport` subclass targets the official
 `@pipecat-ai/client-js` **1.16.0**, pinned with a lockfile. It carries typed text,
 RTVI control events and base64 mono s16le audio over AudioFlow's RTVI WebSocket.
 It implements the SDK's initialization, ready handshake, connection state,
-disconnect, and reconnection contracts. The browser schedules PCM via Web Audio,
+disconnect, and reconnection contracts. A rejected ready handshake reports the
+correlated server error immediately and releases its readiness timer. The browser schedules PCM via Web Audio,
 stops queued sources on interruption/disconnect, and limits queued playback to
 10 seconds. Connect from a click to permit audio playback.
 

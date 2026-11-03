@@ -1,9 +1,10 @@
 # Network transport integration
 
 The existing `AudioFlow.WebSocket` endpoint remains the raw mono s16le PCM
-transport introduced in PR #24. Its wire protocol is unchanged. These additions
-wrap its session ownership, output acknowledgements, stale-turn rejection and
-VAD path; they do not change Session or history.
+transport introduced in PR #24. Its wire protocol is unchanged. The telephony
+and RTVI endpoints reuse its session ownership, output acknowledgements,
+stale-turn rejection and VAD path. Optional WebRTC uses a
+separate PCM Session bridge; see [the WebRTC guide](webrtc-avatars.md).
 
 ## Telephony WebSockets
 
@@ -104,23 +105,25 @@ behavior, not live inference, browser audio devices or acoustic quality.
 
 ## Issue scope and remaining prerequisites
 
-- #5: raw PCM streaming WebSocket is already supported; this change preserves
-  its seven integration tests. WebRTC remains unimplemented: no
-  `membrane_webrtc_plugin` dependency, signaling API, ICE/TURN configuration,
-  negotiated codecs, or Capture/Player lifecycle exists in this tree.
-- #6: this change adds usable PCMU serializers and WebSock session integration,
-  with offline codec and loopback tests. Live provider validation,
-  call control and SIP remain outstanding; do not close the broad
-  telephony issue on these tests alone.
+- #5: raw PCM streaming WebSocket and optional ExWebRTC PCMU/VP8 publishing
+  plus a PCM Session bridge are implemented. This uses ExWebRTC directly rather
+  than the suggested Membrane Live.Capture/Live.Player wrapper. Local peer tests
+  cover negotiation and media; browser interoperability, TURN/NAT and production
+  loss/congestion handling remain unverified. See the WebRTC guide and
+  `examples/network` for setup and limits.
+- #6: the requested Twilio/Telnyx PCMU serializer scope is implemented with
+  resampling, bounded input reordering, paced output and loopback tests. Live
+  carrier validation requires configured accounts/calls and a deployed endpoint.
+  SIP and call control were explicitly deferred in the original suggestion;
+  they need not block closure of the serializer request.
 - #13: official JavaScript SDK works through the supplied custom transport for
-  text input and audio output. Other SDKs, unmodified provider transports and
-  full media/input coverage remain outstanding. Leave the broad issue open.
-- #20: blocked, not fixed. Existing `VideoFrameSink` consumes RGB frames for
-  inference; it is not a network video output. An avatar integration first needs
-  a WebRTC video publishing sink with codec negotiation, frame pacing and
-  audio/video timestamps, then an authenticated provider session, generated
-  video ingestion, interruption/cleanup handling and real-provider A/V sync tests.
-  No avatar provider is simulated or added here.
+  text input and audio output. Rejected ready handshakes propagate the correlated
+  server error immediately; unrelated request errors do not reject negotiation.
+  Other SDKs, unmodified provider transports and full media/input coverage remain
+  outstanding, so broad SDK interoperability is not established.
+
+Avatar publication scope is documented separately in the
+[WebRTC and LiveAvatar guide](webrtc-avatars.md).
 
 ## Validation
 
@@ -137,8 +140,8 @@ exercise G.711 codewords, resampling chunk continuity and stop-band attenuation,
 real loopback WebSocket upgrades for both provider envelopes, PCM session
 input/output, barge-in clear, malformed input and stream lifecycle, plus the
 RTVI handshake, text/audio events and correlated unsupported-message errors.
-They do not establish provider interoperability, SDK conformance or perceived
-speech quality.
+They do not establish live carrier interoperability, full SDK conformance or
+perceived speech quality.
 
 ## Standalone examples and application integration contract
 
