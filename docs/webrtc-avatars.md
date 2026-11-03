@@ -1,7 +1,7 @@
 # Optional encoded WebRTC and LiveAvatar publishing
 
 This adds partial implementations for #5 and #20. Neither issue is claimed fully
-resolved. The existing raw PCM WebSocket transport remains the Session path.
+resolved. The raw PCM WebSocket transport and optional WebRTC Session bridge are separate paths.
 
 ## Encoded WebRTC audio/video output prerequisite
 
@@ -68,8 +68,9 @@ received packet payloads, clocks, fragmentation, cancellation keys and cleanup.
 The VP8 fixture is a generated FFmpeg test pattern, and the test reassembles
 its first encoded keyframe byte-for-byte after RTP reception. FFmpeg independently
 decodes all three fixture frames locally; this is not browser interoperability.
-Remaining: PCM encoder/decoder integration with Session/VAD, browser signaling
-route/authentication, real-time scheduler, jitter/receiver buffering, congestion
+For the encoded peer alone, scheduling and PCM conversion belong to its caller.
+The optional Session bridge below supplies these plus bounded RTP reordering.
+Remaining: browser signaling route/authentication, adaptive jitter buffering, congestion
 adaptation, acoustic tests, browser interoperability and TURN/NAT deployment
 validation. Flush rejects future stale-key calls; it cannot remove RTP already
 accepted by ExWebRTC or rendered remotely. RTP acceptance is not playout ack.
@@ -129,3 +130,74 @@ await room.connect(publication.url, publication.token);
 await room.startAudio(); // call from a user gesture if autoplay is blocked
 // On leaving the view: await room.disconnect(); cancel the server publisher too.
 ```
+
+## PCM Session bridge (optional WebRTC feature)
+
+`AudioFlow.WebRTC.Session` now connects real Session PCM output and VoiceInput
+utterances to the encoded peer. The core feature flags/dependency graph remain
+unchanged. Run a credential-free standalone exercise:
+
+```sh
+AUDIOFLOW_WEBRTC=1 mix run examples/network/voice_agent.exs
+AUDIOFLOW_WEBRTC=1 mix test test/webrtc_session_test.exs test/webrtc_test.exs
+```
+
+The example explicitly labels **SYNTHETIC DEMO** output: its energy gate detects
+an injected tone, while `Adapters.Demo` returns fixed text and silent PCM, not
+speech recognition or synthesized speech. It negotiates two real local peers,
+submits the decoded utterance to Session and receives six PCMU reply packets.
+`publish.exs` continues to exercise independent encoded audio/video publishing.
+
+For a host integration, supply real adapters and a 16 kHz VoiceDetector:
+
+```elixir
+alias AudioFlow.WebRTC.Session, as: VoicePeer
+{:ok, bridge} = VoicePeer.start_link(owner: self(), session: session_options,
+  vad: {MyVoiceDetector, detector_options},
+  voice_input: [min_speech_ms: 96, min_silence_ms: 320],
+  max_queue_packets: 100, reorder_window: 32, gap_timeout_ms: 200)
+{:ok, offer} = VoicePeer.offer(bridge)
+# Send offer through your signaling channel. Route remote JSON maps explicitly:
+:ok = VoicePeer.signal(bridge, remote_answer_or_candidate)
+# Relay {VoicePeer, bridge, {:signal, message}} back to this same remote endpoint.
+# Incoming offers are also supported; the answer is emitted through that event.
+# Receive {VoicePeer, bridge, {:session, turn, event}} for text/transcript/PCM.
+# Audio events are generated PCM, not a second playback path or played audio.
+VoicePeer.cancel(bridge)
+VoicePeer.stop(bridge)
+```
+
+The owner must authenticate/authorize its signaling route. There is no implicit
+peer discovery or globally registered signaling destination. The bridge accepts
+one audio track negotiated as PCMU/8000 mono, RTP payload type 0, 160 bytes per
+20 ms, no RID. Other audio formats/packet durations are unsupported. Sequence
+and timestamp wrap are supported; up to 32 future packets wait at most 200 ms
+for gaps. Stale/duplicate sequence numbers are discarded; persistent loss,
+changed SSRC, unexpected tracks, invalid packet length, timestamp discontinuity
+or excessive reordering closes the bridge and its Session/output/peer. No loss
+concealment or adaptive jitter buffering is claimed. Video is not a Session input.
+
+Ingress uses the telephony μ-law codec and stateful 8→16 kHz interpolation, then
+VoiceInput emits actual submitted utterances. Confirmed speech cancels the
+previous turn/output before endpoint submission. Egress accepts mono PCM16LE
+at 8 or 16 kHz (the latter uses the telephony low-pass decimator), preserving
+filter state across chunks. Other rates and mid-turn format changes fail the
+turn. Final filter tail and partial packets are padded with silence. Queue size
+is bounded (100 packets by default, configurable 1–1500); overflow fails rather
+than accumulating unbounded delay. Producers should stream small PCM chunks.
+
+Output is sent one packet per 20 ms without catch-up bursts. `finish` seals and
+asynchronously drains the queue, allowing Session to remain responsive to cancel.
+A Session `done` event means generation finished, not delivery or remote playout.
+Cancel/timeout/stale keys clear unsent media, resampler/pending bytes and timers;
+RTP already accepted by the peer cannot be recalled. The RTP clock remains
+monotonic across turns. No Output acknowledgement is emitted, so playback-aware
+history cannot claim unheard replies were heard. Session owner, peer, Session
+or transport exit tears down the complete bridge.
+
+Tests cover local two-peer host ICE/DTLS/SRTP, transcript/text/audio routing,
+byte-exact codec/rate conversion, RTP clocks, reordering/wrap, gap deadlines,
+queue limits, barge-in/stale output, Session timeout and owner cleanup. Remaining:
+browser signaling/client UI and interoperability, production signaling auth,
+acoustic/AEC quality, congestion adaptation, packet-loss concealment, NAT/TURN
+validation and live inference. These are not claimed by the local tests.
