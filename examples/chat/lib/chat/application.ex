@@ -8,7 +8,6 @@ defmodule Chat.Application do
       {Phoenix.PubSub, name: Chat.PubSub},
       {Task.Supervisor, name: Chat.Tasks},
       {DynamicSupervisor, name: Chat.Servings},
-      Chat.Qwen3ASR,
       Chat.Engine,
       ChatWeb.Endpoint
     ]
