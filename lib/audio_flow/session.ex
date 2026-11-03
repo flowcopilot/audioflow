@@ -113,6 +113,9 @@ defmodule AudioFlow.Session do
        output: Keyword.get(options, :output),
        output_turn: nil,
        playback_history: nil,
+       candidate: nil,
+       held: nil,
+       pending_result: nil,
        active: nil
      }}
   end
@@ -138,7 +141,7 @@ defmodule AudioFlow.Session do
       byte_size(input.data) > limit ->
         {:reply, {:error, :input_too_large}, state}
 
-      state.active != nil ->
+      state.active != nil or state.candidate != nil ->
         {:reply, {:error, :busy}, state}
 
       true ->
@@ -201,7 +204,117 @@ defmodule AudioFlow.Session do
     end
   end
 
-  def handle_call(:clear_history, _from, %{active: nil} = state),
+  def handle_call({:provisional, ms}, _from, state) do
+    cond do
+      not (is_integer(ms) and ms > 0 and ms <= 30_000) ->
+        {:reply, {:error, :invalid_deadline}, state}
+
+      state.candidate != nil ->
+        {:reply, {:error, :busy}, state}
+
+      state.active == nil and state.playback_history == nil ->
+        {:reply, {:error, :no_active_turn}, state}
+
+      not AudioFlow.PausableOutput.supported?(state.output) ->
+        {:reply, {:error, :unsupported}, state}
+
+      true ->
+        id = make_ref()
+
+        case AudioFlow.Output.call(state.output, :pause, [
+               {self(), (state.active || state.playback_history).turn},
+               id
+             ]) do
+          :ok ->
+            timer = Process.send_after(self(), {:candidate_timeout, id}, ms)
+
+            {:reply, {:ok, id},
+             %{
+               state
+               | candidate: %{id: id, phase: :pausing, timer: timer, deadline: now() + ms * 1_000}
+             }}
+
+          {:error, :unsupported} = error ->
+            {:reply, error, state}
+
+          error ->
+            {:reply, _, state} = handle_call(:cancel, nil, state)
+            {:reply, error, state}
+        end
+    end
+  end
+
+  def handle_call({:resolve, id, :confirm}, from, %{candidate: %{id: id}} = state),
+    do: handle_call(:cancel, from, state)
+
+  def handle_call(
+        {:resolve, id, :resume},
+        _from,
+        %{candidate: %{id: id, phase: :paused} = candidate} = state
+      ) do
+    if now() >= candidate.deadline do
+      {:reply, _, state} = handle_call(:cancel, nil, state)
+      {:reply, {:error, :candidate_timeout}, state}
+    else
+      case AudioFlow.Output.call(state.output, :resume, [
+             {self(), (state.active || state.playback_history).turn},
+             id
+           ]) do
+        :ok ->
+          {:reply, :ok, %{state | candidate: %{candidate | phase: :resuming}}}
+
+        error ->
+          {_, _, state} = handle_call(:cancel, nil, state)
+          {:reply, error, state}
+      end
+    end
+  end
+
+  def handle_call({:resolve, _, _}, _from, state),
+    do: {:reply, {:error, :stale_candidate}, state}
+
+  def handle_call(
+        {:control_ack, turn, id, action, ns},
+        _from,
+        %{candidate: %{id: id} = candidate} = state
+      ) do
+    active = state.active || state.playback_history
+    expected = if candidate.phase == :pausing, do: :pause, else: :resume
+
+    cond do
+      now() >= candidate.deadline ->
+        {:reply, _, state} = handle_call(:cancel, nil, state)
+        {:reply, {:error, :candidate_timeout}, state}
+
+      (active && active.turn == turn && action == expected) and
+          candidate.phase in [:pausing, :resuming] ->
+        case AudioFlow.Playout.acknowledge(active.playout, ns) do
+          {:ok, playout} ->
+            field = if state.active, do: :active, else: :playback_history
+            state = Map.put(state, field, %{active | playout: playout})
+
+            if action == :pause do
+              {:reply, :ok, %{state | candidate: %{candidate | phase: :paused}}}
+            else
+              Process.cancel_timer(candidate.timer)
+              if state.held, do: send(self(), {:release_emit, state.held})
+              if state.pending_result, do: send(self(), state.pending_result)
+              {:reply, :ok, %{state | candidate: nil, held: nil, pending_result: nil}}
+            end
+
+          error ->
+            {:reply, error, state}
+        end
+
+      true ->
+        {:reply, {:error, :stale_control}, state}
+    end
+  end
+
+  def handle_call({:control_ack, _, _, _, _}, _from, state),
+    do: {:reply, {:error, :stale_control}, state}
+
+  def handle_call(:clear_history, _from, %{active: nil, candidate: nil} = state),
     do: {:reply, :ok, %{state | history: History.clear(state.history), playback_history: nil}}
 
   def handle_call(:clear_history, _from, state), do: {:reply, {:error, :busy}, state}
@@ -283,11 +396,13 @@ defmodule AudioFlow.Session do
     do: {:reply, {:error, :stale_turn}, state}
 
   def handle_call(:cancel, _from, %{active: nil} = state) do
+    state = clear_candidate(state)
     state = retain_heard(state, state.playback_history)
     {:reply, flush_output(state), %{state | playback_history: nil}}
   end
 
   def handle_call(:cancel, _from, state) do
+    state = clear_candidate(state)
     kill(state.active)
     state = retain_heard(state, state.active)
     result = flush_output(state)
@@ -304,6 +419,25 @@ defmodule AudioFlow.Session do
 
   def handle_call({:emit, turn, kind, value}, from, state),
     do: handle_call({:emit, turn, kind, value, nil, kind}, from, state)
+
+  def handle_call(
+        {:emit, turn, kind, value, _, _} = message,
+        from,
+        %{active: %{turn: turn}, candidate: candidate} = state
+      )
+      when candidate != nil do
+    cond do
+      not valid_output?(kind, value) ->
+        {:reply, {:error, :invalid_output}, state}
+
+      state.held != nil or state.active.events >= state.limits.max_events or
+          state.active.output_bytes + output_bytes(value) > state.limits.max_output_bytes ->
+        {:reply, {:error, :output_limit}, state}
+
+      true ->
+        {:noreply, %{state | held: {message, from}}}
+    end
+  end
 
   # `record` is the kind for history and context accounting; `:none` skips it.
   def handle_call(
@@ -353,7 +487,33 @@ defmodule AudioFlow.Session do
     do: {:reply, {:error, :stale_turn}, state}
 
   @impl true
+  def handle_info({:release_emit, {message, from}}, state) do
+    case handle_call(message, from, state) do
+      {:reply, reply, next} ->
+        GenServer.reply(from, reply)
+        {:noreply, next}
+
+      {:noreply, next} ->
+        {:noreply, next}
+    end
+  end
+
+  def handle_info({:candidate_timeout, id}, %{candidate: %{id: id}} = state) do
+    {:reply, _, state} = handle_call(:cancel, nil, state)
+    {:noreply, state}
+  end
+
+  def handle_info(
+        {ref, :ok} = result,
+        %{active: %{task: %{ref: ref}}, candidate: candidate} = state
+      )
+      when candidate != nil do
+    Process.demonitor(ref, [:flush])
+    {:noreply, %{state | pending_result: result}}
+  end
+
   def handle_info({ref, result}, %{active: %{task: %{ref: ref}}} = state) do
+    state = clear_candidate(state)
     Process.demonitor(ref, [:flush])
     Process.cancel_timer(state.active.timer)
 
@@ -404,6 +564,7 @@ defmodule AudioFlow.Session do
     do: {:stop, :normal, state}
 
   def handle_info({:DOWN, ref, :process, _, reason}, %{active: %{task: %{ref: ref}}} = state) do
+    state = clear_candidate(state)
     Process.cancel_timer(state.active.timer)
     flush_output(state)
     finish_turn(state, {:error, {:task_exit, reason}, metrics(state.active)})
@@ -411,6 +572,7 @@ defmodule AudioFlow.Session do
   end
 
   def handle_info({:timeout, turn}, %{active: %{turn: turn}} = state) do
+    state = clear_candidate(state)
     kill(state.active)
     flush_output(state)
     finish_turn(state, {:error, :timeout, metrics(state.active)})
@@ -439,7 +601,7 @@ defmodule AudioFlow.Session do
       fn ->
         Adapter.run(adapter, input, fn
           {kind, value} when kind in [:transcript, :text, :audio] ->
-            case GenServer.call(session, {:emit, turn, kind, value}) do
+            case GenServer.call(session, {:emit, turn, kind, value}, :infinity) do
               :ok -> :ok
               {:error, reason} -> throw(reason)
             end
@@ -472,7 +634,7 @@ defmodule AudioFlow.Session do
     end
 
     emit = fn kind, value ->
-      case GenServer.call(session, {:emit, turn, kind, value}) do
+      case GenServer.call(session, {:emit, turn, kind, value}, :infinity) do
         :ok -> :ok
         {:error, reason} -> throw(reason)
       end
@@ -538,7 +700,7 @@ defmodule AudioFlow.Session do
 
   defp graph_pipeline(session, turn, input, plan, output) do
     call = fn message ->
-      case GenServer.call(session, message) do
+      case GenServer.call(session, message, :infinity) do
         :ok -> :ok
         {:ok, value} -> value
         {:error, reason} -> throw(reason)
@@ -595,6 +757,12 @@ defmodule AudioFlow.Session do
   end
 
   defp record_context(%{active: active}, _, _), do: {:ok, active}
+
+  defp clear_candidate(state) do
+    if state.candidate, do: Process.cancel_timer(state.candidate.timer)
+    if state.held, do: GenServer.reply(elem(state.held, 1), {:error, :stale_turn})
+    %{state | candidate: nil, held: nil, pending_result: nil}
+  end
 
   defp retain_heard(state, nil), do: state
   defp retain_heard(state, %{context: nil}), do: state

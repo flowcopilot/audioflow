@@ -212,3 +212,40 @@ acknowledgements and local protocol fixtures. It does not verify Apple models,
 provider credentials, browser capture/speaker behavior or actual WebRTC peer
 negotiation. `npm install` reported 6 dependency audit findings (2 low, 4 moderate);
 no breaking dependency upgrades were made as part of this feature.
+
+### Provisional interruption / real browser pause
+
+The chat's **Pause / test interruption (10 s)** control requests a provisional
+interruption. **Resume false interruption** continues the same turn, worker,
+queued speech and speech checkpoints. **Confirm / Stop**, the 10-second candidate
+deadline, the original turn timeout, or an endpoint failure cancels and flushes.
+Resume must be acknowledged before the candidate deadline too. This is an
+explicit manual test control, not an automatic microphone/VAD classifier.
+
+Chat opts into `AudioFlow.PausableOutput` through `Chat.Output`. Web Audio
+`suspend()`/`resume()` operations are serialized and acknowledged only after
+their promises resolve, with turn and candidate tokens. A false candidate does
+not commit, truncate or otherwise change history. Confirmation uses the existing
+heard-prefix policy (complete text chunks covered by rendered-PCM progress).
+Completed generation with queued browser audio can also be paused/resumed.
+
+The Session retains at most one deferred emit, backpressuring the worker rather
+than collecting generated speech in an unbounded pause queue. Its original
+per-turn timeout, byte and event limits remain effective. Chat has a hard total
+16 MiB payload limit and 4096 events per turn; its browser schedules that finite
+PCM queue, rather than implementing a sliding latency window. A paused adapter
+must tolerate blocked emits; upstream providers may still buffer or time out.
+
+Playback progress comes from elapsed segments on the AudioContext clock, which
+freezes during suspension. Future scheduled segments contribute zero. This is
+browser rendering progress, **not proof of physical acoustic delivery**; device
+latency, muting and operating-system buffers cannot be measured here. The demo
+produces silence; use local or remote TTS to hear continuity. Pause affects the
+streamed Web Audio endpoint, not the separate WAV replay element.
+
+Only this browser endpoint implements the new contract. Native Playback,
+telephony, WebRTC and other legacy outputs have not gained device pause support:
+Session returns `{:error, :unsupported}` for outputs without both control
+callbacks. `Output.interrupt/3` retains its older transcript-filter/cancel
+behavior. No provider-side pause, automatic VAD integration, or universal
+endpoint support is claimed.

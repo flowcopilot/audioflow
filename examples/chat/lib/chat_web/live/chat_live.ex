@@ -27,7 +27,9 @@ defmodule ChatWeb.ChatLive do
         Process.send_after(self(), :retention, 60_000)
 
         {:ok, session} =
-          AudioFlow.start_session(elem(Chat.Setup.options(Chat.Setup.defaults()), 1))
+          AudioFlow.start_session(
+            elem(Chat.Setup.options(Chat.Setup.defaults()), 1) ++ [output: {Chat.Output, self()}]
+          )
 
         session
       end
@@ -41,6 +43,9 @@ defmodule ChatWeb.ChatLive do
        artifacts: [],
        playback_turn: nil,
        playback_token: nil,
+       candidate: nil,
+       control: nil,
+       paused: false,
        played_ms: 0,
        models: Chat.Engine.status(),
        system_memory_gb: system_memory_gb(),
@@ -107,6 +112,58 @@ defmodule ChatWeb.ChatLive do
      |> add_message("assistant", "", note: "Microphone error: #{message}")}
   end
 
+  def handle_event("pause", _, socket) do
+    case AudioFlow.Output.provisional(socket.assigns.session, 10_000) do
+      {:ok, id} -> {:noreply, assign(socket, candidate: id)}
+      error -> {:noreply, assign(socket, setup_error: inspect(error))}
+    end
+  end
+
+  def handle_event("resume", _, socket) do
+    result = AudioFlow.Output.resolve(socket.assigns.session, socket.assigns.candidate, :resume)
+    {:noreply, assign(socket, setup_error: if(result == :ok, do: nil, else: inspect(result)))}
+  end
+
+  def handle_event("output_ack", params, socket) do
+    case socket.assigns.control do
+      {turn, id, action} ->
+        if params["token"] == Chat.Output.token(turn) and params["id"] == Chat.Output.token(id) and
+             params["action"] == Atom.to_string(action) do
+          result =
+            AudioFlow.Output.control_ack(socket.assigns.session, turn, id, action, params["ns"])
+
+          if result == :ok do
+            {:noreply,
+             assign(socket,
+               control: nil,
+               paused: action == :pause,
+               candidate: if(action == :pause, do: id),
+               played_ms: div(params["ns"], 1_000_000)
+             )}
+          else
+            {:noreply, socket}
+          end
+        else
+          {:noreply, socket}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("output_failed", params, socket) do
+    case socket.assigns.control do
+      {turn, id, _} ->
+        if params["token"] == Chat.Output.token(turn) and params["id"] == Chat.Output.token(id),
+          do: {:noreply, cancel(socket)},
+          else: {:noreply, socket}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("stop", _params, socket), do: {:noreply, cancel(socket)}
 
   def handle_event("new_chat", _params, socket) do
@@ -141,7 +198,7 @@ defmodule ChatWeb.ChatLive do
           socket = cancel(socket)
           AudioFlow.stop_session(socket.assigns.session)
           Chat.Capture.close(socket.assigns.capture)
-          {:ok, session} = AudioFlow.start_session(options)
+          {:ok, session} = AudioFlow.start_session(options ++ [output: {Chat.Output, self()}])
 
           {:noreply,
            assign(socket,
@@ -213,6 +270,43 @@ defmodule ChatWeb.ChatLive do
   end
 
   @impl true
+  def handle_info({Chat.Output, {:start, turn, token}}, socket),
+    do:
+      {:noreply,
+       socket
+       |> assign(playback_turn: turn, playback_token: token)
+       |> push_event("output_start", %{token: token})}
+
+  def handle_info({Chat.Output, {:pcm, turn, token, audio}}, socket) do
+    if turn == socket.assigns.playback_turn do
+      {:noreply,
+       push_event(socket, "play", %{
+         pcm: Base.encode64(audio.data),
+         rate: audio.sample_rate,
+         token: token
+       })}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({Chat.Output, {:control, turn, id, action}}, socket) do
+    {:noreply,
+     socket
+     |> assign(control: {turn, id, action})
+     |> push_event(
+       "output_control",
+       %{token: Chat.Output.token(turn), id: Chat.Output.token(id), action: action}
+     )}
+  end
+
+  def handle_info({Chat.Output, {:flush, turn}}, socket) do
+    {:noreply,
+     socket
+     |> assign(candidate: nil, control: nil, paused: false)
+     |> push_event("flush", %{token: Chat.Output.token(turn)})}
+  end
+
   def handle_info(:retention, socket) do
     Process.send_after(self(), :retention, 60_000)
     {:noreply, assign(socket, artifacts: Chat.Capture.list(socket.assigns.capture))}
@@ -292,11 +386,6 @@ defmodule ChatWeb.ChatLive do
 
   defp turn_event(socket, {:audio, %Audio{data: data, sample_rate: rate}}) do
     socket
-    |> push_event("play", %{
-      pcm: Base.encode64(data),
-      rate: rate,
-      token: socket.assigns.playback_token
-    })
     |> assign(pcm: [socket.assigns.pcm, data], rate: rate)
   end
 
@@ -339,7 +428,7 @@ defmodule ChatWeb.ChatLive do
          assign(socket,
            turn: turn,
            playback_turn: turn,
-           playback_token: Integer.to_string(System.unique_integer([:positive])),
+           playback_token: Chat.Output.token(turn),
            played_ms: 0,
            status: "submitted",
            reply_id: List.last(socket.assigns.messages).id,
@@ -405,7 +494,7 @@ defmodule ChatWeb.ChatLive do
           finish(socket, note: "Stopped; history keeps only acknowledged complete speech chunks."),
         else: socket
 
-    push_event(socket, "flush", %{})
+    socket |> assign(candidate: nil, control: nil, paused: false) |> push_event("flush", %{})
   end
 
   defp finish(socket, fields) do
@@ -661,6 +750,12 @@ defmodule ChatWeb.ChatLive do
         </Message.message>
       </Conversation.conversation>
 
+      <div>
+        <button phx-click="pause" disabled={@candidate != nil}>Pause / test interruption (10 s)</button>
+        <button phx-click="resume" disabled={not @paused}>Resume false interruption</button>
+        <button phx-click="stop">Confirm / Stop</button>
+        <span>{if @paused, do: "Web Audio suspended", else: "Playback running or awaiting endpoint"}</span>
+      </div>
       <PromptInput.prompt_input id="prompt" on_submit="send">
         <PromptInput.prompt_input_textarea
           id="prompt-text"
@@ -696,9 +791,9 @@ defmodule ChatWeb.ChatLive do
     """
   end
 
-  attr :label, :string, required: true
-  attr :status, :any, default: nil
-  slot :inner_block, required: true
+  attr(:label, :string, required: true)
+  attr(:status, :any, default: nil)
+  slot(:inner_block, required: true)
 
   defp model_field(assigns) do
     ~H"""
