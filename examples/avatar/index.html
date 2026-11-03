@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>AudioFlow avatar viewer</title>
+<style>body{font:18px system-ui;max-width:800px;margin:40px auto;padding:16px}video{width:100%;max-height:480px}button,input{margin:8px;padding:8px}#status{white-space:pre-wrap}</style>
+<h1>LiveAvatar finite utterance viewer</h1>
+<p>Select raw mono PCM16LE at 24 kHz, at most 10 seconds. Each start provisions a new paid provider session. No local PCM playback. No persistent avatar continuity.</p>
+<p>Live calls are disabled unless the server has AVATAR_LIVE=1 and credentials. Generation, lip-sync, acoustics, account permissions and TURN remain unverified without credentials.</p>
+<input id="pcm" type="file" accept=".pcm,.raw" aria-label="24 kHz raw PCM file">
+<button id="start" disabled>Start utterance</button><button id="play" disabled>Enable audio / video</button><button id="cancel" disabled>Cancel utterance</button><button id="disconnect" disabled>Disconnect</button><button id="connect">Connect controls</button>
+<p id="status" role="status">Connect controls to begin. No provider call is made on connection.</p><div id="media"></div>
+<script type="module" src="/main.ts"></script></html>

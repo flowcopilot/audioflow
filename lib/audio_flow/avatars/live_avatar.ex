@@ -9,6 +9,10 @@ defmodule AudioFlow.Avatars.LiveAvatar do
   that room's provider-generated synchronized audio and video tracks. Do not
   play the original PCM separately. The subscription token is sensitive.
 
+  Set `:wait_for_viewer` to true to hold PCM until `viewer_ready/1` is called
+  after subscribing to both tracks and enabling playback. The gate times out
+  after 15 seconds and cleans up; default callers send immediately as before.
+
   The process ends after `agent.speak_ended`, failure, owner exit, cancellation
   or a 60 second deadline, and requests provider session stop. Cancellation
   closes the media websocket and stops the provider session; it cannot retract
@@ -18,6 +22,8 @@ defmodule AudioFlow.Avatars.LiveAvatar do
   alias AudioFlow.Adapters.Providers.Socket
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
+  @doc "Release the opt-in `:wait_for_viewer` gate after subscribing both tracks."
+  def viewer_ready(pid), do: GenServer.cast(pid, :viewer_ready)
   def cancel(pid), do: GenServer.stop(pid, :normal, 12_000)
 
   @impl true
@@ -61,6 +67,14 @@ defmodule AudioFlow.Avatars.LiveAvatar do
                         s.owner,
                         {__MODULE__, parent, {:published, %{url: url, token: client_token}}}
                       )
+
+                      if Keyword.get(s.opts, :wait_for_viewer, false) do
+                        receive do
+                          :viewer_ready -> :ok
+                        after
+                          15_000 -> throw({:provider_socket, :viewer_timeout})
+                        end
+                      end
                     end)
                   end,
                   timeout_ms: 60_000,
@@ -79,6 +93,14 @@ defmodule AudioFlow.Avatars.LiveAvatar do
         fail(:token_failed, s)
     end
   end
+
+  @impl true
+  def handle_cast(:viewer_ready, %{worker: %Task{pid: pid}} = s) do
+    send(pid, :viewer_ready)
+    {:noreply, s}
+  end
+
+  def handle_cast(:viewer_ready, s), do: {:noreply, s}
 
   @doc false
   def event(
