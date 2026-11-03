@@ -53,3 +53,83 @@ test('reports elapsed PCM only, excluding future queue and paused clock; flush r
     assert.equal(reports.at(-1).ns, 83_334); // per-chunk ceiling matches Session checkpoints
   } finally {player.destroyed();}
 });
+
+test('real suspension preserves sources, serializes resume and rejects stale commands', async () => {
+  const handlers = {}, reports = [];
+  const player = {...Player, handleEvent(name, fn) {handlers[name] = fn;}, pushEvent(name, data) {reports.push({name, ...data});}};
+  player.mounted();
+  try {
+    handlers.play({pcm: Buffer.alloc(32_000).toString('base64'), rate: 16_000, token: 'pause-turn'});
+    const sources = [...player.sources];
+    let suspended;
+    context.suspend = () => new Promise(resolve => { suspended = () => {context.state = 'suspended'; resolve();}; });
+    const operations = [];
+    context.resume = async () => { operations.push('resume'); context.state = 'running'; };
+    context.currentTime += 0.25;
+    handlers.output_control({token: 'pause-turn', id: 'candidate', action: 'pause'});
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(reports.filter(x => x.name === 'output_ack').length, 0);
+    handlers.output_control({token: 'pause-turn', id: 'candidate', action: 'resume'});
+    assert.deepEqual(operations, []);
+    suspended();
+    await player.commands;
+    assert.deepEqual(reports.filter(x => x.name === 'output_ack').map(x => [x.action, x.ns]), [['pause', 250_000_000], ['resume', 250_000_000]]);
+    assert.deepEqual([...player.sources], sources);
+    assert.ok(sources.every(source => !source.stopped));
+    handlers.output_control({token: 'old-turn', id: 'old', action: 'pause'});
+    await player.commands;
+    assert.equal(reports.filter(x => x.name === 'output_ack').length, 2);
+    handlers.output_control({token: 'pause-turn', id: 'race', action: 'pause'});
+    await new Promise(resolve => setImmediate(resolve));
+    handlers.flush({token: 'pause-turn'});
+    suspended();
+    await player.commands;
+    assert.equal(reports.filter(x => x.id === 'race').length, 0);
+    assert.equal(context.state, 'running');
+    assert.ok(sources.every(source => source.stopped));
+  } finally {player.destroyed();}
+});
+
+test('new PCM and user gestures do not resume an intentional pause; endpoint errors report failure', async () => {
+  const handlers = {}, reports = [];
+  const player = {...Player, handleEvent(name, fn) {handlers[name] = fn;}, pushEvent(name, data) {reports.push({name, ...data});}};
+  player.mounted();
+  try {
+    const play = {pcm: Buffer.alloc(32_000).toString('base64'), rate: 16_000, token: 'error-turn'};
+    handlers.play(play);
+    let resumes = 0;
+    context.resume = async () => {resumes++; context.state = 'running';};
+    context.suspend = async () => {context.state = 'suspended';};
+    handlers.output_control({token: play.token, id: 'c', action: 'pause'});
+    await player.commands;
+    const next = player.next;
+    handlers.play(play);
+    assert.equal(resumes, 0);
+    assert.equal(player.next, next + 1);
+    assert.equal(context.state, 'suspended');
+    context.resume = async () => {throw new Error('driver failure');};
+    handlers.output_control({token: play.token, id: 'c', action: 'resume'});
+    await player.commands;
+    assert.equal(reports.at(-1).name, 'output_failed');
+    assert.match(reports.at(-1).message, /driver failure/);
+  } finally {player.destroyed();}
+});
+
+test('pause before the first PCM holds later audio against the frozen clock', async () => {
+  const handlers = {}, reports = [];
+  const player = {...Player, handleEvent(name, fn) {handlers[name] = fn;}, pushEvent(name, data) {reports.push({name, ...data});}};
+  player.mounted();
+  try {
+    handlers.output_start({token: 'early'});
+    context.suspend = async () => {context.state = 'suspended';};
+    context.resume = async () => {context.state = 'running';};
+    handlers.output_control({token: 'early', id: 'early-candidate', action: 'pause'});
+    await player.commands;
+    assert.equal(reports.at(-1).name, 'output_ack');
+    assert.equal(reports.at(-1).ns, 0);
+    handlers.play({pcm: Buffer.alloc(32_000).toString('base64'), rate: 16_000, token: 'early'});
+    assert.equal(context.state, 'suspended');
+    assert.equal(player.rendered(), 0);
+    assert.equal(player.sources.size, 1);
+  } finally {player.destroyed();}
+});

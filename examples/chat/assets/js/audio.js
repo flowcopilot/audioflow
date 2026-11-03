@@ -17,11 +17,12 @@ registerProcessor("capture", class extends AudioWorkletProcessor {
 });`;
 
 let playback = null;
+let intentionallyPaused = false;
 
 // Browsers start an AudioContext only after a user gesture.
 const playbackContext = () => {
   playback ??= new AudioContext();
-  if (playback.state === "suspended") playback.resume();
+  if (playback.state === "suspended" && !intentionallyPaused) Promise.resolve(playback.resume()).catch(() => {});
   return playback;
 };
 
@@ -146,16 +147,15 @@ export const Recorder = {
 
 export const Player = {
   mounted() {
+    this.commands = Promise.resolve();
+    this.epoch = 0;
     this.sources = new Set();
     this.next = 0;
     this.segments = [];
     this.report = () => {
       if (!playback || !this.token) return;
       // Match Session's per-chunk ceiling at completed sample boundaries.
-      const ns = this.segments.reduce((sum, item) => {
-        const elapsed = Math.max(0, playback.currentTime - item.start);
-        return sum + (elapsed >= item.duration ? item.ns : Math.floor(elapsed * 1e9));
-      }, 0);
+      const ns = this.rendered();
       this.pushEvent("played", {token: this.token, ns});
     };
     this.ticker = setInterval(this.report, 100);
@@ -164,8 +164,16 @@ export const Player = {
       const link = document.createElement("a"); link.href = url; link.download = name; link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
-    this.flush = () => this.stopAll();
+    this.flush = ({token} = {}) => {
+      if (!token || token === this.token) this.stopAll();
+    };
     window.addEventListener("chat:flush", this.flush);
+
+    this.handleEvent("output_start", ({token}) => {
+      this.stopAll();
+      this.token = token;
+      playbackContext();
+    });
 
     this.handleEvent("play", ({ pcm, rate, token }) => {
       if (this.token !== token) { this.stopAll(); this.token = token; }
@@ -189,6 +197,30 @@ export const Player = {
       this.sources.add(source);
     });
 
+    this.handleEvent("output_control", (command) => {
+      const epoch = this.epoch;
+      // Serialize actual Web Audio operations. A resume never overtakes suspend.
+      this.commands = this.commands.then(async () => {
+        if (epoch !== this.epoch || command.token !== this.token) return;
+        try {
+          const context = playback;
+          if (!context) throw new Error("No playback context");
+          if (command.action === "pause") {
+            intentionallyPaused = true;
+            await context.suspend();
+          } else if (command.action === "resume") {
+            await context.resume();
+            intentionallyPaused = false;
+          } else throw new Error("Invalid output control");
+          if (epoch !== this.epoch || command.token !== this.token) return;
+          const ns = this.rendered();
+          this.pushEvent("output_ack", {...command, ns});
+        } catch (error) {
+          if (epoch === this.epoch) this.pushEvent("output_failed", {...command, message: error.message});
+        }
+      });
+    });
+
     this.handleEvent("flush", this.flush);
   },
 
@@ -198,12 +230,24 @@ export const Player = {
     this.stopAll();
   },
 
+  rendered() {
+    return this.segments.reduce((sum, item) => {
+      const elapsed = Math.max(0, playback.currentTime - item.start);
+      return sum + (elapsed >= item.duration ? item.ns : Math.floor(elapsed * 1e9));
+    }, 0);
+  },
+
   stopAll() {
+    this.epoch++;
+    intentionallyPaused = false;
     this.report();
     for (const source of this.sources) { source.onended = null; source.stop(); }
     this.segments = [];
     this.token = null;
     this.sources.clear();
     this.next = 0;
+    this.commands = this.commands.then(async () => {
+      if (!intentionallyPaused && playback?.state === "suspended") await playback.resume();
+    }).catch(() => {});
   },
 };

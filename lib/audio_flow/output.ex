@@ -21,6 +21,21 @@ defmodule AudioFlow.Output do
     do: GenServer.call(session, {:played, turn, nanoseconds})
 
   @doc """
+  Request a provisional pause on an explicitly pausable endpoint. Returns a
+  candidate reference; resolve it with `resolve/3` after the pause acknowledgement.
+  Deadline expiry confirms interruption (flush/cancel), never silently resumes.
+  """
+  def provisional(session, timeout_ms \\ 2_000),
+    do: GenServer.call(session, {:provisional, timeout_ms})
+
+  def resolve(session, candidate, decision) when decision in [:resume, :confirm],
+    do: GenServer.call(session, {:resolve, candidate, decision})
+
+  @doc "Endpoint control acknowledgement, after actual suspension/resumption."
+  def control_ack(session, turn, candidate, action, ns),
+    do: GenServer.call(session, {:control_ack, turn, candidate, action, ns})
+
+  @doc """
   Ignore transcripts shorter than min_words (default 2), otherwise cancel.
   Ignored triggers leave generation and playback running; this is not
   pause/resume after cancellation.
