@@ -14,7 +14,7 @@ defmodule AudioFlow.Graph.Nodes.Models do
   British English phonemes.
   """
   @behaviour AudioFlow.Graph.Node
-  alias AudioFlow.{Kokoro, Models, NxAdapter}
+  alias AudioFlow.{Kokoro, ModelLanguages, Models, NxAdapter}
 
   @whisper %{
     "openai/whisper-tiny" => "169d4a4341b33bc18d8881c4b69c2e104e1cc0af",
@@ -39,7 +39,7 @@ defmodule AudioFlow.Graph.Nodes.Models do
   @voices ~w(af_heart af_alloy af_aoede af_bella af_jessica af_kore af_nicole af_nova af_river
              af_sarah af_sky am_adam am_echo am_eric am_fenrir am_liam am_michael am_onyx am_puck
              am_santa bf_alice bf_emma bf_isabella bf_lily bm_daniel bm_fable bm_george bm_lewis)
-  @vits %{"Xenova/mms-tts-eng" => "3f8955a2adbd6487ce57420620d4916de22b9dac"}
+  @vits Map.new(ModelLanguages.vits_models(), fn {model, info} -> {model, info.revision} end)
   @blip %{
     "Salesforce/blip-image-captioning-base" => "82a37760796d32b1411fe092ab5d4e227313294b",
     "Salesforce/blip-image-captioning-large" => nil
@@ -63,7 +63,15 @@ defmodule AudioFlow.Graph.Nodes.Models do
         input: :audio,
         output: :text,
         event: :transcript,
-        options: [model(@whisper, "openai/whisper-tiny")]
+        options: [
+          model(@whisper, "openai/whisper-tiny"),
+          %{
+            name: :language,
+            type: {:enum, ModelLanguages.whisper_languages()},
+            default: "auto",
+            description: "Speech language (auto detects)."
+          }
+        ]
       },
       %{
         type: "qwen3.llm",
@@ -150,11 +158,17 @@ defmodule AudioFlow.Graph.Nodes.Models do
     do: %{name: :max_new_tokens, type: :integer, default: default, description: "Reply limit."}
 
   @impl true
-  def adapter("whisper.stt", %{model: model}) do
+  def adapter("whisper.stt", %{model: model} = options) do
+    language = Map.get(options, :language, "auto")
+    language_options = ModelLanguages.whisper_options!(model, language)
+
     serving(
-      {:whisper, model},
+      {:whisper, model, language},
       fn ->
-        Models.whisper(model, load_options: load(@whisper, model), model_options: exla())
+        Models.whisper(
+          model,
+          [load_options: load(@whisper, model), model_options: exla()] ++ language_options
+        )
       end,
       input: &NxAdapter.whisper_input/1,
       output: &NxAdapter.transcript/1
