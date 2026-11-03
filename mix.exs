@@ -41,6 +41,7 @@ defmodule AudioFlow.MixProject do
       {:mint_web_socket, "~> 1.0"},
       {:postgrex, "~> 0.22"},
       {:jido, "~> 2.4.0"},
+      {:zoi, "~> 0.18.11"},
       {:telemetry, "~> 1.3"},
       {:websock, "~> 0.5.3"},
       {:bandit, "~> 1.5", only: [:dev, :test]},
