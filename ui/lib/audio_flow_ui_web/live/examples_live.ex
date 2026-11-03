@@ -115,6 +115,7 @@ defmodule AudioFlowUIWeb.ExamplesLive do
         <a href="https://github.com/flowcopilot/audioflow/tree/feat/parallel-issue-integration/examples/rtvi-client">Official Pipecat SDK RTVI client (typed input/audio output)</a>
         <a href="https://github.com/flowcopilot/audioflow/blob/feat/parallel-issue-integration/examples/telephony-loopback.exs">Telephony loopback</a>
         <a href="https://github.com/flowcopilot/audioflow/tree/feat/parallel-issue-integration/examples/network">Encoded WebRTC loopback and finite LiveAvatar LITE publishing</a>
+        <a href="https://github.com/flowcopilot/audioflow/tree/feat/parallel-issue-integration/examples/avatar">Standalone LiveAvatar browser viewer (local server; live credentials optional)</a>
         <p>Network examples require their documented encoder, peer and provider setup.
           Encoded WebRTC is a standalone peer path; it does not yet bridge PCM Sessions.
           Local protocol fixtures do not establish actual peer negotiation or provider inference.</p>

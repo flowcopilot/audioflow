@@ -77,6 +77,15 @@ accepted by ExWebRTC or rendered remotely. RTP acceptance is not playout ack.
 
 ## LiveAvatar finite-utterance publication
 
+The [standalone server-backed browser viewer](../examples/avatar/README.md)
+invokes this publisher with supplied 24 kHz PCM and subscribes to both provider
+tracks using `livekit-client`. It defaults to no paid calls, keeps provider
+secrets server-side, checks room-scoped subscription-only grants, and demonstrates
+explicit start/cancel/disconnect and repeated finite sessions. Its opt-in viewer
+readiness gate waits at most 15 seconds for both track subscriptions before PCM.
+See its fixture-backed tests and live verification limits; live generation,
+lip-sync, acoustics, account permissions and TURN are unverified.
+
 The adapter uses maintained LiveAvatar LITE, not the sunset HeyGen Streaming
 Avatar API. Protocol references checked on 2026-11-03:
 
@@ -114,7 +123,7 @@ LiveKit subscription, generated A/V, lip-sync, end-to-end latency and live remot
 cleanup remain unverified. This implementation requests actual provider A/V
 publication; it does not implement a LiveKit receiver/relay into the separate
 ExWebRTC peer, continuous multi-turn Session output or local avatar rendering.
-Use a LiveKit client in the host application to receive the provider tracks.
+Use the standalone viewer above or a LiveKit client in the host application to receive the provider tracks.
 
 For example, a host application's JavaScript client with the optional
 `livekit-client` package can subscribe to the returned publication:
