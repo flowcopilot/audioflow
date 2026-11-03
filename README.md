@@ -812,3 +812,7 @@ and closed workload. They do not establish production capacity.
 - [Misaki phoneme mapping](https://github.com/hexgrad/misaki/blob/main/misaki/espeak.py)
 - [FFmpeg resampler](https://membrane-ffmpeg-swresample-plugin.hexdocs.pm/Membrane.FFmpeg.SWResample.Converter.html)
 - [PortAudio plugin](https://hexdocs.pm/membrane_portaudio_plugin/)
+
+## License
+
+AudioFlow is licensed under the [Apache License 2.0](LICENSE).
