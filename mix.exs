@@ -50,6 +50,9 @@ defmodule AudioFlow.MixProject do
       if(enabled?("AUDIOFLOW_WEBRTC"), do: [{:ex_webrtc, "~> 0.18.0"}], else: []) ++
       if(enabled?("AUDIOFLOW_MEDIA"),
         do: [
+          # Ratio 4.0.1's optional constraint predates Decimal 3. Postgrex and
+          # Numbers share Decimal 3; media arithmetic compatibility is tested.
+          {:decimal, "~> 3.2", override: true},
           {:membrane_core, "~> 1.3"},
           {:membrane_raw_audio_format, "~> 0.12"},
           {:membrane_ffmpeg_swresample_plugin, "~> 0.21.0"},

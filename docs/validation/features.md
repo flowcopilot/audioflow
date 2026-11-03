@@ -5,6 +5,32 @@ This branch starts at integration commit `be74ac5` (PR #33 including #26–#34).
 It adds acceptance tests and setup documentation, not app controls or runtime code.
 Results below are scoped to this checkout, not proof that all associated issues are fixed.
 
+## Parent integration rerun
+
+The newer combined integration branch includes #35 and #36 as well as these
+acceptance tests. The parent independently verified:
+
+- Core: **175 passed, 3 skipped, 5 excluded**.
+- Private-cluster pgvector graph routing: **1 passed**.
+- Cross-feature acceptance plus actual SpeexDSP, pinned Smart Turn and pgvector:
+  **7 passed**, using the native/model environment below.
+- Combined ML/media: **205 passed, 3 skipped, 15 excluded**, with FFmpeg on PATH
+  and the committed Decimal **3.2.0** / Numbers **5.2.5** lock entries unchanged.
+
+The optional media dependencies now explicitly override Ratio 4.0.1's older
+optional Decimal constraint with `{:decimal, "~> 3.2", override: true}`. A media
+compatibility regression covers Ratio's Decimal construction, Numbers mixed
+Decimal/rational arithmetic, and exact sample-clock arithmetic. The real media
+suite also passes. This resolves the clean-install dependency conflict described
+in the historical run below without the experimental Decimal/Numbers downgrade.
+Hardware PortAudio remains unverified: its NIF reports missing `libasound.so.2`;
+the passing media tests use software sinks.
+
+On the preceding combined base, the parent also passed the optional WebRTC suite
+(174 tests), actual two-peer publication example, both paced telephony loopbacks,
+and official PipecatClient/server test, typecheck and production build. Those
+counts predate these acceptance additions. App session results remain pending.
+
 ## Coverage matrix
 
 | Capability / PR | Concrete validation | Evidence class | Example entry point / remaining boundary |
