@@ -21,12 +21,25 @@ know which one it calls.
 ## What is included
 
 - **Sessions** with one active turn, cancellation, deadlines, and bounded output.
-- **Conversation history** with limits on turns and bytes.
+- **Conversation history** with limits on turns and bytes, trimmed to the part
+  of a reply the user heard after an [interruption](features/interruption/).
 - **Native models** through Bumblebee, EXLA, and Transmuter: Silero VAD,
   Whisper, Qwen3 and other text models, Kokoro and VITS speech, BERT and CLIP
-  embeddings, and BLIP captions.
-- **HTTP language models** through streaming chat completions, for llama.cpp and
-  compatible cloud endpoints.
+  embeddings, and BLIP captions, with [language choices](features/model-languages/).
+- **HTTP language models** through [ReqLLM](guides/http-inference/), for
+  llama.cpp and cloud providers, with tool calls.
+- **Remote speech providers**: Deepgram, Cartesia, and ElevenLabs, and
+  speech-to-speech sessions with OpenAI Realtime and Gemini Live
+  ([providers](features/providers/)).
+- **Transports**: a raw PCM WebSocket, Twilio and Telnyx telephony, the Pipecat
+  RTVI client, and optional WebRTC and LiveAvatar output
+  ([transports](features/transports/), [WebRTC](features/webrtc-avatars/)).
+- **Input processing**: SpeexDSP denoising and echo cancellation, and Smart Turn
+  endpoints ([input processing](features/input-processing/)).
+- **Conversation states** with Jido handoffs, pgvector retrieval, and scripted
+  [evaluations](features/conversation-evaluations/).
+- **Recordings** that are off by default, with transcript redaction
+  ([recording](features/recording-and-privacy/)).
 - **Image and video input** as packed RGB frames.
 - **Model routing** across local and remote workers, with route changes while
   sessions stay open.
@@ -35,14 +48,15 @@ know which one it calls.
 
 ## Build profiles
 
-The core needs no model downloads. Two environment variables add the optional
+The core needs no model downloads. Environment variables add the optional
 parts. Each combination uses its own `_build` directory.
 
 | Variable | Adds | Source directory |
 | --- | --- | --- |
-| none | Sessions, history, routing, HTTP inference | `lib` |
+| none | Sessions, history, routing, HTTP inference, remote providers | `lib` |
 | `AUDIOFLOW_ML=1` | Bumblebee, EXLA, Transmuter models | `lib_ml` |
 | `AUDIOFLOW_MEDIA=1` | Membrane audio and video | `lib_media` |
+| `AUDIOFLOW_WEBRTC=1` | ExWebRTC media output and the PCM bridge | `lib_webrtc` |
 
 ## Next steps
 

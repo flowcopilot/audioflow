@@ -40,7 +40,7 @@ const servings = [
 
 const sessionCode = `{:ok, session} = AudioFlow.start_session(
   stt: {AudioFlow.NxAdapter, serving: MyApp.Whisper, ...},
-  llm: {AudioFlow.Adapters.ChatHTTP, endpoint: url, model: "qwen3"},
+  llm: {AudioFlow.Adapters.ReqLLM, model: "anthropic:claude-sonnet-4-5"},
   tts: {AudioFlow.NxAdapter, serving: MyApp.Kokoro, ...},
   output: {AudioFlow.Playback, playback},
   history: [max_turns: 8]
@@ -59,7 +59,7 @@ const features = [
   { title: 'A process per conversation', body: 'Each session is supervised. One crash ends one conversation, not the server.', href: 'guides/sessions/' },
   { title: 'Interrupt at any time', body: 'Cancel kills the turn task and flushes queued audio. Silero voice detection does it for you on barge-in.', href: 'guides/membrane-input/' },
   { title: 'Native inference', body: 'Whisper, Qwen3, Kokoro, VITS, CLIP, and BLIP run through Bumblebee, EXLA, and Transmuter.', href: 'guides/local-models/' },
-  { title: 'Any language model server', body: 'Stream chat completions from llama.cpp or a cloud endpoint, with strict byte limits.', href: 'guides/http-inference/' },
+  { title: 'Any language model server', body: 'Stream replies from llama.cpp or any ReqLLM provider, with tool calls and strict byte limits.', href: 'guides/http-inference/' },
   { title: 'Routes across nodes', body: 'Send requests to bounded workers on other Erlang nodes. Change routes while sessions stay open.', href: 'guides/routing/' },
   { title: 'Images and video', body: 'Describe RGB frames from MP4 files or cameras, and talk about them in later voice turns.', href: 'guides/images/' },
   { title: 'Memory with limits', body: 'History keeps complete turn pairs, capped by count and by bytes.', href: 'guides/history/' },

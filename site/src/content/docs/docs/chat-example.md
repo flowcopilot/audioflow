@@ -13,8 +13,10 @@ Apple Silicon Mac with macOS 26.2 or later.
 
 ## Run
 
-The repository `mise.toml` pins Erlang, Elixir, Node.js, and uv. Kokoro also
-needs `espeak-ng`, which mise does not provide.
+The repository `mise.toml` pins Erlang, Elixir, Node.js, and uv. uv runs the
+separate Qwen3-ASR Python process. The reply models download through Elixir's
+`hf_hub` and need no Python. Kokoro also needs `espeak-ng`, which mise does not
+provide.
 
 ```sh
 mise install
@@ -54,6 +56,19 @@ Measured on an Apple M5 with 24 GB of memory, after the first turn:
 
 The first turn after a model switch compiles the new model. It took up to 6 s
 to the first audio.
+
+## Model cache
+
+Reply model checkpoints use the `hf_hub` cache, by default
+`~/.cache/huggingface/hub/models--OWNER--REPO/snapshots/REVISION`. The example
+pins each revision in `Chat.Catalog`. To use another cache directory, set
+`config :hf_hub, :cache_dir, "/absolute/path"`. Downloads from older versions,
+under `audioflow_chat` in the user cache, are not reused.
+
+Each selection checks the repository file list, so it needs access to the
+Hugging Face Hub even when the files are cached. Complete files are reused, and
+a failed download can be retried. After a crash, stale lock files can remain in
+the cache's `locks/` directory. Remove them only when no download is running.
 
 ## Audio
 

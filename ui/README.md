@@ -70,7 +70,8 @@ claude mcp add --transport http audioflow http://localhost:4100/mcp \
 ## Node types
 
 The default catalog has the input nodes, `audio.resample`, the demo STT,
-LLM, and TTS nodes, and `llm.chat_http` for a chat-completions endpoint.
+LLM, and TTS nodes, `llm.req_llm` for ReqLLM models and endpoints, and the
+deprecated `llm.chat_http` chat-completions node.
 
 To add the native model nodes, build with `AUDIOFLOW_ML=1`:
 
@@ -170,7 +171,7 @@ retrieval profile. The user needs extension/table permissions. First inference
 downloads/compiles weights. The local script does not configure remote database
 TLS; use a trusted Postgrex SSL connection for remote deployments. Document and
 query embeddings must use the same model/dimensions. Replace demo.llm with
-llm.chat_http for generated answers; until then replies echo retrieved JSON.
+llm.req_llm for generated answers; until then replies echo retrieved JSON.
 No database or native inference verification is implied by synthetic tests.
 
 ### Recording
