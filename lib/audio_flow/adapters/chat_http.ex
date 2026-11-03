@@ -17,6 +17,17 @@ defmodule AudioFlow.Adapters.ChatHTTP do
 
     parameters = Map.drop(parameters, ["stream", "n"])
 
+    unsupported =
+      Map.keys(Map.drop(parameters, ["max_tokens", "max_completion_tokens", "temperature"]))
+
+    if unsupported != [],
+      do:
+        raise(
+          ArgumentError,
+          "unsupported legacy parameters #{Enum.join(Enum.sort(unsupported), ", ")}; " <>
+            "use AudioFlow.Adapters.ReqLLM generation options directly"
+        )
+
     key =
       case options[:api_key] do
         fun when is_function(fun, 0) -> fun.()

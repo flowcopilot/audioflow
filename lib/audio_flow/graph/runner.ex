@@ -123,6 +123,18 @@ defmodule AudioFlow.Graph.Runner do
 
     adapter =
       case step.adapter do
+        {AudioFlow.Adapters.ReqLLM, options} ->
+          execution = Keyword.get(options, :audio_flow, [])
+
+          context =
+            Map.merge(
+              Keyword.get(execution, :tool_context, %{}),
+              Map.get(run.callbacks, :telemetry, %{})
+            )
+
+          execution = Keyword.put(execution, :tool_context, context)
+          {AudioFlow.Adapters.ReqLLM, Keyword.put(options, :audio_flow, execution)}
+
         {AudioFlow.Adapters.ChatHTTP, options} ->
           context =
             Map.merge(
