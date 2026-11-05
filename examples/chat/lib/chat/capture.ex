@@ -1,6 +1,7 @@
 defmodule Chat.Capture do
   @moduledoc "Per-tab opt-in text-only recordings. All text is redacted; PCM is never stored."
-  alias AudioFlow.{Recording, Recording.Store}
+  alias AudioFlow.Recording
+  alias AudioFlow.Recording.Store
 
   def open(session) do
     root =

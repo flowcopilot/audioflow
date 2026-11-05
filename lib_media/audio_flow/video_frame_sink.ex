@@ -68,26 +68,25 @@ defmodule AudioFlow.VideoFrameSink do
         else: buffer.pts
 
     cond do
-      not is_integer(pts) ->
-        fail(state, :missing_frame_timestamp)
+      not is_integer(pts) -> fail(state, :missing_frame_timestamp)
+      state.next_pts != nil and pts < state.next_pts -> {[demand: {:input, 1}], state}
+      true -> emit_frame(buffer.payload, pts, state)
+    end
+  end
 
-      state.next_pts != nil and pts < state.next_pts ->
-        {[demand: {:input, 1}], state}
+  defp emit_frame(payload, pts, state) do
+    image = %AudioFlow.Image{
+      data: payload,
+      width: state.format.width,
+      height: state.format.height,
+      pts: pts
+    }
 
-      true ->
-        image = %AudioFlow.Image{
-          data: buffer.payload,
-          width: state.format.width,
-          height: state.format.height,
-          pts: pts
-        }
-
-        if AudioFlow.Image.valid?(image) do
-          {[notify_parent: {:frame, image}],
-           %{state | waiting?: false, next_pts: pts + state.options.interval_ns}}
-        else
-          fail(state, :invalid_rgb_frame)
-        end
+    if AudioFlow.Image.valid?(image) do
+      {[notify_parent: {:frame, image}],
+       %{state | waiting?: false, next_pts: pts + state.options.interval_ns}}
+    else
+      fail(state, :invalid_rgb_frame)
     end
   end
 

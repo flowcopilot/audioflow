@@ -1,5 +1,7 @@
 if System.get_env("AUDIOFLOW_MEDIA") == "1" do
   defmodule AudioFlow.Test.VideoSource do
+    @moduledoc false
+
     use Membrane.Source
 
     def_options(

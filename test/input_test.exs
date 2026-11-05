@@ -1,6 +1,8 @@
 if System.get_env("AUDIOFLOW_MEDIA") == "1" do
   defmodule AudioFlow.InputTest do
     use ExUnit.Case, async: true
+
+    alias AudioFlow.Adapters.Demo
     @moduletag capture_log: true
     @tag :tmp_dir
     test "stereo 48 kHz audio reaches a session as mono 16 kHz without changing pitch", %{
@@ -10,7 +12,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
 
       options =
         Keyword.put(
-          AudioFlow.Adapters.Demo.options(),
+          Demo.options(),
           :stt,
           {AudioFlow.Adapters.Function,
            run: fn audio, emit ->
@@ -24,7 +26,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
 
       stereo =
         for index <- 0..4799, into: <<>> do
-          sample = round(12_000 * :math.sin(2 * :math.pi() * 1000 * index / 48000))
+          sample = round(12_000 * :math.sin(2 * :math.pi() * 1000 * index / 48_000))
           <<sample::little-signed-16, sample::little-signed-16>>
         end
 
@@ -35,7 +37,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
         location: location,
         chunk_bytes: 4000,
         stream_format: %Membrane.RawAudio{
-          sample_rate: 48000,
+          sample_rate: 48_000,
           channels: 2,
           sample_format: :s16le
         }
@@ -50,7 +52,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
         )
 
       assert_receive {AudioFlow.InputPipeline, ^pipeline, :end_of_stream}, 2000
-      assert_receive {:resampled, %AudioFlow.Audio{sample_rate: 16000, data: pcm}}, 2000
+      assert_receive {:resampled, %AudioFlow.Audio{sample_rate: 16_000, data: pcm}}, 2000
       # 1600 real samples, padded to four 512-sample detector frames at EOS.
       assert byte_size(pcm) == 4096
       samples = for <<value::little-signed-16 <- pcm>>, do: value

@@ -1,6 +1,7 @@
 defmodule AudioFlow.RAGTest do
   use ExUnit.Case, async: false
-  alias AudioFlow.RAG.{Retrieve, Pgvector}
+  alias AudioFlow.RAG.Pgvector
+  alias AudioFlow.RAG.Retrieve
 
   defmodule Backend do
     @behaviour AudioFlow.RAG.Backend

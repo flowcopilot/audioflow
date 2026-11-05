@@ -48,8 +48,23 @@ export default defineConfig({
           ],
         },
         {
+          label: 'Features',
+          items: [
+            'docs/features/providers',
+            'docs/features/transports',
+            'docs/features/webrtc-avatars',
+            'docs/features/input-processing',
+            'docs/features/interruption',
+            'docs/features/conversation-and-retrieval',
+            'docs/features/conversation-evaluations',
+            'docs/features/model-languages',
+            'docs/features/recording-and-privacy',
+          ],
+        },
+        {
           label: 'Validation',
           items: [
+            'docs/validation/features',
             'docs/validation/model-checks',
             'docs/validation/benchmarks',
             'docs/validation/pipecat-comparison',

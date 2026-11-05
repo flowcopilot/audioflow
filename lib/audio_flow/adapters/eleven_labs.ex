@@ -1,7 +1,8 @@
 defmodule AudioFlow.Adapters.ElevenLabs do
   @moduledoc "ElevenLabs streaming HTTP TTS (raw s16le PCM). See docs/providers.md."
   @behaviour AudioFlow.Adapter
-  alias AudioFlow.Adapters.Providers.{PCMHTTP, Socket}
+  alias AudioFlow.Adapters.Providers.PCMHTTP
+  alias AudioFlow.Adapters.Providers.Socket
 
   @impl true
   def run(text, options, emit) when is_binary(text) do

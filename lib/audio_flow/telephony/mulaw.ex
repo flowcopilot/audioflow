@@ -14,7 +14,7 @@ defmodule AudioFlow.Telephony.MuLaw do
   def encode(data) when rem(byte_size(data), 2) == 0 do
     for <<sample::little-signed-16 <- data>>, into: <<>> do
       mask = if sample < 0, do: 127, else: 255
-      value = min(abs(sample), 32635) + 132
+      value = min(abs(sample), 32_635) + 132
       exponent = Enum.find(7..0//-1, 0, fn e -> value >= 128 <<< e end)
       mantissa = value >>> (exponent + 3) &&& 15
       <<bxor(exponent <<< 4 ||| mantissa, mask)>>

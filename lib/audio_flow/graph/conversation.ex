@@ -16,29 +16,31 @@ defmodule AudioFlow.Graph.Conversation do
     unless is_map(states) and map_size(states) > 0 and Map.has_key?(states, initial),
       do: raise(ArgumentError, "initial state must name a graph")
 
-    plans =
-      Map.new(states, fn {name, graph} ->
-        case AudioFlow.Graph.session_options(graph, catalog) do
-          {:ok, options} ->
-            unless Keyword.get(options, :history, false),
-              do: raise(ArgumentError, "conversation graphs require history")
+    plans = Map.new(states, fn {name, graph} -> {name, state_plan(name, graph, catalog)} end)
 
-            {name, Keyword.fetch!(options, :graph)}
-
-          {:error, errors} ->
-            raise ArgumentError, "state #{inspect(name)}: #{Enum.join(errors, "; ")}"
-        end
-      end)
-
-    unless is_map(transitions) and
-             Enum.all?(transitions, fn
-               {{from, _event}, to} -> Map.has_key?(states, from) and Map.has_key?(states, to)
-               _ -> false
-             end),
-           do: raise(ArgumentError, "transitions must map {state, event} to an existing state")
+    unless is_map(transitions) and Enum.all?(transitions, &valid_transition?(&1, states)),
+      do: raise(ArgumentError, "transitions must map {state, event} to an existing state")
 
     %__MODULE__{states: plans, current: initial, transitions: transitions}
   end
+
+  defp state_plan(name, graph, catalog) do
+    case AudioFlow.Graph.session_options(graph, catalog) do
+      {:ok, options} ->
+        unless Keyword.get(options, :history, false),
+          do: raise(ArgumentError, "conversation graphs require history")
+
+        Keyword.fetch!(options, :graph)
+
+      {:error, errors} ->
+        raise ArgumentError, "state #{inspect(name)}: #{Enum.join(errors, "; ")}"
+    end
+  end
+
+  defp valid_transition?({{from, _event}, to}, states),
+    do: Map.has_key?(states, from) and Map.has_key?(states, to)
+
+  defp valid_transition?(_, _states), do: false
 
   def plan(%__MODULE__{} = flow), do: Map.fetch!(flow.states, flow.current)
 

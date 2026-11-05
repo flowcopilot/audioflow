@@ -1,39 +1,24 @@
 defmodule Chat.HF do
   @moduledoc """
-  Downloads a pinned Hugging Face repository snapshot to a local directory.
+  Downloads a pinned Hugging Face repository snapshot for the EMLXAxon loader.
 
-  The EMLXAxon Qwen3 loader reads a checkpoint directory. This uses the
-  `hf` CLI through `uvx`, so the only requirement is `uv`.
+  Uses hf_hub's configured cache (`config :hf_hub, :cache_dir, path`), returning
+  its snapshot directory directly. Always checks the full repository listing:
+  `config.json` alone does not prove a complete snapshot. Completed files are
+  reused and interrupted file downloads are retried.
   """
 
+  @spec snapshot!(String.t(), String.t()) :: Path.t()
   def snapshot!(repo, revision) do
-    dir = Path.join([:filename.basedir(:user_cache, "audioflow_chat"), repo, revision])
-
-    if not File.exists?(Path.join(dir, "config.json")) do
-      uvx =
-        System.find_executable("uvx") ||
-          raise "Model downloads need uv: https://docs.astral.sh/uv/"
-
-      {output, status} =
-        System.cmd(
-          uvx,
-          [
-            "--from",
-            "huggingface_hub",
-            "hf",
-            "download",
-            repo,
-            "--revision",
-            revision,
-            "--local-dir",
-            dir
-          ],
-          stderr_to_stdout: true
-        )
-
-      if status != 0, do: raise("Downloading #{repo} failed: #{output}")
+    # In hf_hub 0.3.1 the documented per-call cache_dir is ignored; use the
+    # application's cache configuration rather than changing global state here.
+    case HfHub.Download.snapshot_download(
+           repo_id: repo,
+           revision: revision,
+           cache_dir: HfHub.FS.cache_dir()
+         ) do
+      {:ok, dir} -> dir
+      {:error, reason} -> raise "Downloading #{repo} at #{revision} failed: #{inspect(reason)}"
     end
-
-    dir
   end
 end

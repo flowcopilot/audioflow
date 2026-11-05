@@ -8,26 +8,33 @@ Run with `uv run scripts/compare_pipecat.py --help`. Models stay in one Elixir
 process. Pipecat uses a private pipe for each inference stage. There is no
 network listener or sound device. All raw attempt rows are saved as JSON.
 """
+
 import argparse
 import asyncio
 import base64
-from datetime import datetime, timezone
-from dataclasses import dataclass
 import hashlib
 import importlib.metadata
 import json
 import os
-from pathlib import Path
 import platform
 import sys
 import time
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
 
 from loguru import logger
+
 logger.remove()
 logger.add(sys.stderr, level="WARNING")
 from pipecat.frames.frames import (
-    DataFrame, EndFrame, InterruptionFrame, OutputAudioRawFrame, StartFrame,
-    TextFrame, TranscriptionFrame,
+    DataFrame,
+    EndFrame,
+    InterruptionFrame,
+    OutputAudioRawFrame,
+    StartFrame,
+    TextFrame,
+    TranscriptionFrame,
 )
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
@@ -54,13 +61,13 @@ class Bridge:
                     self.log.write(line)
                     self.log.flush()
                     continue
-                message = json.loads(line[len(PREFIX):])
+                message = json.loads(line[len(PREFIX) :])
                 if message.get("ready"):
                     self.ready.set_result(message)
                 elif queue := self.pending.get(message["id"]):
                     await queue.put(message)
             raise RuntimeError(f"Model bridge stopped: {await self.process.wait()}")
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - forward any bridge failure to waiters
             if not self.ready.done():
                 self.ready.set_exception(error)
             for queue in list(self.pending.values()):
@@ -134,6 +141,7 @@ def now_us():
 
 class Processor(FrameProcessor):
     """Acknowledge each data frame to bound queues between benchmark stages."""
+
     async def push_ack(self, frame, direction):
         frame.bench_ack = asyncio.get_running_loop().create_future()
         await self.push_frame(frame, direction)
@@ -160,7 +168,9 @@ class Ingress(Processor):
     async def process(self, frame, direction):
         if isinstance(frame, FileFrame):
             result = await self.bridge.call(op="ingress", path=frame.path)
-            self.state.update(utterance_sha256=result["sha256"], utterance_bytes=result["bytes"])
+            self.state.update(
+                utterance_sha256=result["sha256"], utterance_bytes=result["bytes"]
+            )
             await self.push_ack(UtteranceFrame(result["audio"]), direction)
             await self.push_frame(TurnDoneFrame(), direction)
         else:
@@ -173,7 +183,9 @@ class Stage(Processor):
         self.bridge, self.stage, self.state = bridge, stage, state
 
     async def process(self, frame, direction):
-        kind = {"stt": UtteranceFrame, "llm": TranscriptionFrame, "tts": TextFrame}[self.stage]
+        kind = {"stt": UtteranceFrame, "llm": TranscriptionFrame, "tts": TextFrame}[
+            self.stage
+        ]
         if not isinstance(frame, kind):
             await self.push_frame(frame, direction)
             return
@@ -181,16 +193,22 @@ class Stage(Processor):
         async for item in self.bridge.stream(op="stage", stage=self.stage, input=value):
             elapsed = now_us() - self.state["started"]
             if self.stage == "stt":
-                self.state["first_transcript_us"] = self.state["first_transcript_us"] or elapsed
+                self.state["first_transcript_us"] = (
+                    self.state["first_transcript_us"] or elapsed
+                )
                 self.state["transcript"] += item["text"]
-                output = TranscriptionFrame(item["text"], "recording", "", finalized=True)
+                output = TranscriptionFrame(
+                    item["text"], "recording", "", finalized=True
+                )
             elif self.stage == "llm":
                 self.state["first_text_us"] = self.state["first_text_us"] or elapsed
                 self.state["reply"] += item["text"]
                 output = TextFrame(item["text"])
             else:
                 self.state["first_audio_us"] = self.state["first_audio_us"] or elapsed
-                output = OutputAudioRawFrame(base64.b64decode(item["audio"]), item["sample_rate"], 1)
+                output = OutputAudioRawFrame(
+                    base64.b64decode(item["audio"]), item["sample_rate"], 1
+                )
             await self.push_ack(output, direction)
 
 
@@ -209,7 +227,9 @@ class Sink(Processor):
         if isinstance(frame, StartFrame):
             self.started.set()
         elif isinstance(frame, OutputAudioRawFrame):
-            self.state["first_output_us"] = self.state["first_output_us"] or now_us() - self.state["started"]
+            self.state["first_output_us"] = (
+                self.state["first_output_us"] or now_us() - self.state["started"]
+            )
             self.state["output_bytes"] += len(frame.audio)
             self.hasher.update(frame.audio)
             self.first.set()
@@ -223,14 +243,36 @@ class Sink(Processor):
 
 
 async def pipecat_turn(bridge, path, interrupt):
-    state = dict(started=0, first_transcript_us=None, first_text_us=None,
-                 first_audio_us=None, first_output_us=None, duration_us=None,
-                 interrupt_us=None, transcript="", reply="", output_bytes=0, status="ok")
+    state = {
+        "started": 0,
+        "first_transcript_us": None,
+        "first_text_us": None,
+        "first_audio_us": None,
+        "first_output_us": None,
+        "duration_us": None,
+        "interrupt_us": None,
+        "transcript": "",
+        "reply": "",
+        "output_bytes": 0,
+        "status": "ok",
+    }
     sink = Sink(state, interrupt)
-    pipeline = Pipeline([Ingress(bridge, state), Stage(bridge, "stt", state),
-                         Stage(bridge, "llm", state), Stage(bridge, "tts", state), sink])
-    worker = PipelineWorker(pipeline, params=PipelineParams(), enable_rtvi=False,
-                            enable_turn_tracking=False, idle_timeout_secs=None)
+    pipeline = Pipeline(
+        [
+            Ingress(bridge, state),
+            Stage(bridge, "stt", state),
+            Stage(bridge, "llm", state),
+            Stage(bridge, "tts", state),
+            sink,
+        ]
+    )
+    worker = PipelineWorker(
+        pipeline,
+        params=PipelineParams(),
+        enable_rtvi=False,
+        enable_turn_tracking=False,
+        idle_timeout_secs=None,
+    )
     runner = WorkerRunner(handle_sigint=False, handle_sigterm=False, force_gc=False)
     await runner.add_workers(worker)
     running = asyncio.create_task(runner.run())
@@ -271,25 +313,56 @@ async def main(args):
             raise ValueError(f"Missing input: {path}")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     log = args.output.with_suffix(".log").open("wb")
-    environment = dict(os.environ, AUDIOFLOW_ML="1", AUDIOFLOW_MEDIA="1",
-                       AUDIOFLOW_LLM="Qwen/Qwen3-0.6B", AUDIOFLOW_LLM_ENGINE="nx",
-                       AUDIOFLOW_LLM_REVISION="c1899de289a04d12100db370d81485cdf75e47ca",
-                       AUDIOFLOW_HISTORY="0", AUDIOFLOW_TTS="kokoro", AUDIOFLOW_VOICE="af_heart")
+    environment = dict(
+        os.environ,
+        AUDIOFLOW_ML="1",
+        AUDIOFLOW_MEDIA="1",
+        AUDIOFLOW_LLM="Qwen/Qwen3-0.6B",
+        AUDIOFLOW_LLM_ENGINE="nx",
+        AUDIOFLOW_LLM_REVISION="c1899de289a04d12100db370d81485cdf75e47ca",
+        AUDIOFLOW_HISTORY="0",
+        AUDIOFLOW_TTS="kokoro",
+        AUDIOFLOW_VOICE="af_heart",
+    )
     environment.pop("AUDIOFLOW_TTS_CONFIG", None)
     process = await asyncio.create_subprocess_exec(
-        "elixir", "-S", "mix", "run", "scripts/compare_bridge.exs", cwd=ROOT,
-        env=environment, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-        stderr=log, limit=2_000_000)
+        "elixir",
+        "-S",
+        "mix",
+        "run",
+        "scripts/compare_bridge.exs",
+        cwd=ROOT,
+        env=environment,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=log,
+        limit=2_000_000,
+    )
     bridge = Bridge(process, log)
     rows = []
-    metadata = dict(schema_version=1, python=sys.version, platform=platform.platform(),
-                    started_utc=datetime.now(timezone.utc).isoformat(),
-                    pipecat=importlib.metadata.version("pipecat-ai"), arguments=vars(args).copy(),
-                    runner_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-                    capacity_rule=dict(max_error_rate=0, p95_first_output_us=args.max_first_output_ms * 1000,
-                                       percentile="nearest_rank", workload="closed_fixed_groups"),
-                    inputs=[dict(path=str(p), bytes=p.stat().st_size,
-                                 sha256=hashlib.sha256(p.read_bytes()).hexdigest()) for p in paths])
+    metadata = {
+        "schema_version": 1,
+        "python": sys.version,
+        "platform": platform.platform(),
+        "started_utc": datetime.now(UTC).isoformat(),
+        "pipecat": importlib.metadata.version("pipecat-ai"),
+        "arguments": vars(args).copy(),
+        "runner_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        "capacity_rule": {
+            "max_error_rate": 0,
+            "p95_first_output_us": args.max_first_output_ms * 1000,
+            "percentile": "nearest_rank",
+            "workload": "closed_fixed_groups",
+        },
+        "inputs": [
+            {
+                "path": str(p),
+                "bytes": p.stat().st_size,
+                "sha256": hashlib.sha256(p.read_bytes()).hexdigest(),
+            }
+            for p in paths
+        ],
+    }
     metadata["arguments"]["output"] = str(args.output)
     setup_at = now_us()
 
@@ -298,51 +371,105 @@ async def main(args):
         try:
             async with asyncio.timeout(200):
                 if framework == "audioflow":
-                    result = await bridge.call(op="native", path=str(path), interrupt=interrupt)
+                    result = await bridge.call(
+                        op="native", path=str(path), interrupt=interrupt
+                    )
                 else:
                     result = await pipecat_turn(bridge, path, interrupt)
-        except Exception as error:
-            result = dict(status="error", error=str(error), duration_us=now_us() - started)
-        row = dict(framework=framework, input=path.name, input_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
-                   phase=phase, concurrency=concurrency, run=index, interrupt=interrupt, **result)
+        except Exception as error:  # noqa: BLE001 - record the failed turn and keep benchmarking
+            result = {
+                "status": "error",
+                "error": str(error),
+                "duration_us": now_us() - started,
+            }
+        row = dict(
+            framework=framework,
+            input=path.name,
+            input_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+            phase=phase,
+            concurrency=concurrency,
+            run=index,
+            interrupt=interrupt,
+            **result,
+        )
         rows.append(row)
-        args.output.write_text(json.dumps(dict(metadata=metadata, rows=rows), indent=2) + "\n")
-        print(f"{framework} c={concurrency} {phase} {index}: {result['status']}", flush=True)
+        args.output.write_text(
+            json.dumps({"metadata": metadata, "rows": rows}, indent=2) + "\n"
+        )
+        print(
+            f"{framework} c={concurrency} {phase} {index}: {result['status']}",
+            flush=True,
+        )
 
     try:
         metadata["bridge"] = await asyncio.wait_for(bridge.ready, 600)
         metadata["setup_us"] = now_us() - setup_at
         for level, concurrency in enumerate(args.concurrency):
-            frameworks = args.frameworks if level % 2 == 0 else list(reversed(args.frameworks))
+            frameworks = (
+                args.frameworks if level % 2 == 0 else list(reversed(args.frameworks))
+            )
             for framework in frameworks:
                 for phase, count in (("warmup", args.warmup), ("measured", args.runs)):
                     # Fixed groups reach the requested concurrency. This is a closed workload.
                     for start in range(0, count, concurrency):
-                        await asyncio.gather(*(attempt(framework, paths[i % len(paths)], False,
-                                                     phase, concurrency, i + 1)
-                                               for i in range(start, min(start + concurrency, count))))
+                        await asyncio.gather(
+                            *(
+                                attempt(
+                                    framework,
+                                    paths[i % len(paths)],
+                                    False,
+                                    phase,
+                                    concurrency,
+                                    i + 1,
+                                )
+                                for i in range(start, min(start + concurrency, count))
+                            )
+                        )
                 for index in range(args.interrupt_runs):
-                    await attempt(framework, paths[index % len(paths)], True, "interruption", concurrency, index + 1)
+                    await attempt(
+                        framework,
+                        paths[index % len(paths)],
+                        True,
+                        "interruption",
+                        concurrency,
+                        index + 1,
+                    )
     finally:
-        metadata["finished_utc"] = datetime.now(timezone.utc).isoformat()
-        args.output.write_text(json.dumps(dict(metadata=metadata, rows=rows), indent=2) + "\n")
+        metadata["finished_utc"] = datetime.now(UTC).isoformat()
+        args.output.write_text(
+            json.dumps({"metadata": metadata, "rows": rows}, indent=2) + "\n"
+        )
         await bridge.close()
         log.close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("inputs", nargs="+", help="Mono s16le PCM files at 16 kHz; one utterance each")
+    parser.add_argument(
+        "inputs", nargs="+", help="Mono s16le PCM files at 16 kHz; one utterance each"
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--concurrency", nargs="+", type=int, default=[1, 2, 4])
-    parser.add_argument("--frameworks", nargs="+", choices=["audioflow", "pipecat"], default=["audioflow", "pipecat"])
+    parser.add_argument(
+        "--frameworks",
+        nargs="+",
+        choices=["audioflow", "pipecat"],
+        default=["audioflow", "pipecat"],
+    )
     parser.add_argument("--runs", type=int, default=8)
     parser.add_argument("--warmup", type=int, default=4)
     parser.add_argument("--interrupt-runs", type=int, default=2)
     parser.add_argument("--max-first-output-ms", type=int, default=10_000)
     args = parser.parse_args()
-    if args.runs < 1 or args.warmup < 0 or args.interrupt_runs < 0 or any(c < 1 for c in args.concurrency):
-        parser.error("runs and concurrency must be positive; warmup and interrupt-runs must be non-negative")
+    if (
+        args.runs < 1
+        or args.warmup < 0
+        or args.interrupt_runs < 0
+        or any(c < 1 for c in args.concurrency)
+    ):
+        parser.error(
+            "runs and concurrency must be positive; warmup and interrupt-runs must be non-negative"
+        )
     if args.runs < max(args.concurrency):
         parser.error("runs must be at least the highest requested concurrency")
     if args.max_first_output_ms <= 0:

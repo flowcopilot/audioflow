@@ -8,8 +8,8 @@ defmodule AudioFlow.Test.FrameDetector do
     probability =
       case first do
         0 -> 0.1
-        16000 -> 0.4
-        32000 -> 0.9
+        16_000 -> 0.4
+        32_000 -> 0.9
       end
 
     {probability, state}

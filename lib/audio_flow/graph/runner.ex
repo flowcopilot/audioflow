@@ -30,7 +30,8 @@ defmodule AudioFlow.Graph.Runner do
   An optional `:telemetry` map is added to the metadata of each
   `[:audio_flow, :stage, ...]` span. See `AudioFlow.Telemetry`.
   """
-  alias AudioFlow.{Adapter, Audio}
+  alias AudioFlow.Adapter
+  alias AudioFlow.Audio
   alias AudioFlow.Graph.Plan
 
   def run(%Plan{} = plan, input, callbacks) do
@@ -65,6 +66,7 @@ defmodule AudioFlow.Graph.Runner do
   defp input_value(input), do: input
 
   defp reach(plan, ids), do: reach(plan, ids, MapSet.new())
+
   defp reach(_plan, [], seen), do: seen
 
   defp reach(plan, [id | rest], seen) do
@@ -93,26 +95,29 @@ defmodule AudioFlow.Graph.Runner do
         &Map.update!(&1, target, fn sources -> MapSet.delete(sources, id) end)
       )
 
-      if MapSet.size(state(run).pending[target]) == 0 do
-        step = run.plan.steps[target]
+      if MapSet.size(state(run).pending[target]) == 0, do: ready(run, target)
+    end
+  end
 
-        if step.input_mode == :join do
-          {groups, buffers} =
-            Enum.map_reduce(step.sources, state(run).buffers, fn source, buffers ->
-              {values, buffers} = Map.pop(buffers, {target, source}, [])
-              {Enum.reverse(values), buffers}
-            end)
+  # All sources of `target` finished: run a joined step, then continue past it.
+  defp ready(run, target) do
+    step = run.plan.steps[target]
+    if step.input_mode == :join, do: run_join(run, target, step)
+    finish(run, target)
+  end
 
-          update(run, :buffers, fn _ -> buffers end)
+  defp run_join(run, target, step) do
+    {groups, buffers} =
+      Enum.map_reduce(step.sources, state(run).buffers, fn source, buffers ->
+        {values, buffers} = Map.pop(buffers, {target, source}, [])
+        {Enum.reverse(values), buffers}
+      end)
 
-          case join(Enum.reject(groups, &(&1 == []))) do
-            nil -> :ok
-            value -> run_step(run, step, value)
-          end
-        end
+    update(run, :buffers, fn _ -> buffers end)
 
-        finish(run, target)
-      end
+    case join(Enum.reject(groups, &(&1 == []))) do
+      nil -> :ok
+      value -> run_step(run, step, value)
     end
   end
 
@@ -120,21 +125,7 @@ defmodule AudioFlow.Graph.Runner do
     value = if step.history, do: run.callbacks.context.(value), else: value
 
     {module, _} = step.adapter
-
-    adapter =
-      case step.adapter do
-        {AudioFlow.Adapters.ChatHTTP, options} ->
-          context =
-            Map.merge(
-              Keyword.get(options, :tool_context, %{}),
-              Map.get(run.callbacks, :telemetry, %{})
-            )
-
-          {AudioFlow.Adapters.ChatHTTP, Keyword.put(options, :tool_context, context)}
-
-        other ->
-          other
-      end
+    adapter = with_tool_context(step.adapter, Map.get(run.callbacks, :telemetry, %{}))
 
     metadata =
       run.callbacks
@@ -142,57 +133,69 @@ defmodule AudioFlow.Graph.Runner do
       |> Map.merge(%{stage: step.type, node: step.id, adapter: module})
 
     AudioFlow.Telemetry.stage(metadata, fn ->
-      Adapter.run(adapter, value, fn output ->
-        :ok = run.callbacks.emit.(step, output)
-        Enum.each(step.targets, &deliver(run, step.id, &1, output))
-
-        if step.id == run.aligned and String.trim(output) != "" do
-          Map.get(run.callbacks, :checkpoint, fn -> :ok end).()
-        end
-
-        :ok
-      end)
+      Adapter.run(adapter, value, &emit_output(run, step, &1))
     end)
+  end
+
+  defp with_tool_context({AudioFlow.Adapters.ReqLLM, options}, telemetry) do
+    execution = Keyword.get(options, :audio_flow, [])
+    context = Map.merge(Keyword.get(execution, :tool_context, %{}), telemetry)
+    execution = Keyword.put(execution, :tool_context, context)
+    {AudioFlow.Adapters.ReqLLM, Keyword.put(options, :audio_flow, execution)}
+  end
+
+  defp with_tool_context({AudioFlow.Adapters.ChatHTTP, options}, telemetry) do
+    context = Map.merge(Keyword.get(options, :tool_context, %{}), telemetry)
+    {AudioFlow.Adapters.ChatHTTP, Keyword.put(options, :tool_context, context)}
+  end
+
+  defp with_tool_context(adapter, _telemetry), do: adapter
+
+  defp emit_output(run, step, output) do
+    :ok = run.callbacks.emit.(step, output)
+    Enum.each(step.targets, &deliver(run, step.id, &1, output))
+
+    if step.id == run.aligned and String.trim(output) != "" do
+      Map.get(run.callbacks, :checkpoint, fn -> :ok end).()
+    end
+
+    :ok
   end
 
   # Only one active path, with history text directly synthesized to terminal
   # audio, provides whole-chunk alignment. Joins and branches cannot prove it.
   defp aligned_history(plan, active) do
-    linear? =
-      Enum.all?(active, fn id ->
-        step = plan.steps[id]
-
-        length(step.targets) <= 1 and
-          Enum.count(step.sources, &MapSet.member?(active, &1)) <= 1
-      end)
+    linear? = Enum.all?(active, &linear_step?(plan.steps[&1], active))
 
     roots =
       Enum.count(active, fn id ->
         Enum.all?(plan.steps[id].sources, &(not MapSet.member?(active, &1)))
       end)
 
-    if linear? and roots == 1 do
-      Enum.find_value(active, fn id ->
-        case plan.steps[id] do
-          %{history: true, event: :text, targets: [target]} ->
-            case plan.steps[target] do
-              %{input_mode: :stream, event: :audio, targets: [], sources: [^id]} ->
-                audio_nodes =
-                  Enum.filter(active, fn node ->
-                    plan.steps[node].adapter != nil and plan.steps[node].event == :audio
-                  end)
+    if linear? and roots == 1, do: Enum.find_value(active, &aligned_node(plan, active, &1))
+  end
 
-                if audio_nodes == [target], do: id
+  defp linear_step?(step, active) do
+    Enum.count_until(step.targets, 2) <= 1 and
+      Enum.count(step.sources, &MapSet.member?(active, &1)) <= 1
+  end
 
-              _ ->
-                nil
-            end
-
-          _ ->
-            nil
-        end
-      end)
+  # A history text node whose only target is the one terminal streaming audio node.
+  defp aligned_node(plan, active, id) do
+    with %{history: true, event: :text, targets: [target]} <- plan.steps[id],
+         %{input_mode: :stream, event: :audio, targets: [], sources: [^id]} <-
+           plan.steps[target],
+         [^target] <- audio_nodes(plan, active) do
+      id
+    else
+      _ -> nil
     end
+  end
+
+  defp audio_nodes(plan, active) do
+    Enum.filter(active, fn node ->
+      plan.steps[node].adapter != nil and plan.steps[node].event == :audio
+    end)
   end
 
   # `groups` has the values of each source, in edge order.
@@ -201,7 +204,7 @@ defmodule AudioFlow.Graph.Runner do
   defp join([[value | _] | _] = groups) when is_binary(value) do
     text =
       groups
-      |> Enum.map(&(&1 |> Enum.join("") |> String.trim()))
+      |> Enum.map(&(&1 |> Enum.join() |> String.trim()))
       |> Enum.reject(&(&1 == ""))
       |> Enum.join("\n")
 

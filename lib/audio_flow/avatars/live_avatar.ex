@@ -46,51 +46,43 @@ defmodule AudioFlow.Avatars.LiveAvatar do
            mode: "LITE",
            avatar_id: Keyword.fetch!(s.opts, :avatar_id)
          }) do
-      {:ok, %{"session_token" => token}} ->
-        s = %{s | token: token}
+      {:ok, %{"session_token" => token}} -> start_session(%{s | token: token})
+      _ -> fail(:token_failed, s)
+    end
+  end
 
-        case request(s.opts, "/v1/sessions/start", auth(token), %{}) do
-          {:ok, %{"ws_url" => ws, "livekit_url" => url, "livekit_client_token" => client_token}} ->
-            parent = self()
-            id = uuid()
-
-            worker =
-              Task.Supervisor.async_nolink(AudioFlow.Tasks, fn ->
-                Socket.run(
-                  ws,
-                  [],
-                  [],
-                  :waiting,
-                  fn event, state ->
-                    event(event, state, s.audio.data, id, fn ->
-                      send(
-                        s.owner,
-                        {__MODULE__, parent, {:published, %{url: url, token: client_token}}}
-                      )
-
-                      if Keyword.get(s.opts, :wait_for_viewer, false) do
-                        receive do
-                          :viewer_ready -> :ok
-                        after
-                          15_000 -> throw({:provider_socket, :viewer_timeout})
-                        end
-                      end
-                    end)
-                  end,
-                  timeout_ms: 60_000,
-                  max_response_bytes: 2_000_000
-                )
-              end)
-
-            {:noreply,
-             %{s | worker: worker, timer: Process.send_after(self(), :deadline, 60_000)}}
-
-          _ ->
-            fail(:start_failed, s)
-        end
+  defp start_session(s) do
+    case request(s.opts, "/v1/sessions/start", auth(s.token), %{}) do
+      {:ok, %{"ws_url" => ws, "livekit_url" => url, "livekit_client_token" => client_token}} ->
+        worker = start_worker(s, ws, %{url: url, token: client_token})
+        {:noreply, %{s | worker: worker, timer: Process.send_after(self(), :deadline, 60_000)}}
 
       _ ->
-        fail(:token_failed, s)
+        fail(:start_failed, s)
+    end
+  end
+
+  defp start_worker(s, ws, published) do
+    parent = self()
+    id = uuid()
+    on_published = fn -> publish(s, parent, published) end
+    handle = fn event, state -> event(event, state, s.audio.data, id, on_published) end
+
+    Task.Supervisor.async_nolink(AudioFlow.Tasks, fn ->
+      Socket.run(ws, [], [], :waiting, handle, timeout_ms: 60_000, max_response_bytes: 2_000_000)
+    end)
+  end
+
+  defp publish(s, parent, published) do
+    send(s.owner, {__MODULE__, parent, {:published, published}})
+    if Keyword.get(s.opts, :wait_for_viewer, false), do: await_viewer()
+  end
+
+  defp await_viewer do
+    receive do
+      :viewer_ready -> :ok
+    after
+      15_000 -> throw({:provider_socket, :viewer_timeout})
     end
   end
 

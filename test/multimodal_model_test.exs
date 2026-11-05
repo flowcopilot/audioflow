@@ -3,7 +3,11 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
     use ExUnit.Case, async: false
     @moduletag :model
     @moduletag timeout: 600_000
-    alias AudioFlow.{Image, Models, NxAdapter, Worker}
+    alias AudioFlow.Adapters.Demo
+    alias AudioFlow.Image
+    alias AudioFlow.Models
+    alias AudioFlow.NxAdapter
+    alias AudioFlow.Worker
 
     setup_all do
       reference =
@@ -51,6 +55,8 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
 
       for {expected, index} <- Enum.with_index(model["vectors"]) do
         assert_receive {:embedding, ^index, actual}
+        # Exact size check.
+        # credo:disable-for-next-line ExSlop.Check.Refactor.LengthComparison
         assert length(actual) == 384
         assert_in_delta norm(actual), 1.0, 1.0e-5
         assert cosine(actual, expected) > 0.99999
@@ -86,6 +92,8 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
                )
 
       assert_receive {:embedding, actual}
+      # Exact size check.
+      # credo:disable-for-next-line ExSlop.Check.Refactor.LengthComparison
       assert length(actual) == 512
       assert_in_delta norm(actual), 1.0, 1.0e-5
       assert cosine(actual, model["vector"]) > 0.99
@@ -111,7 +119,7 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
       owner = self()
 
       options =
-        AudioFlow.Adapters.Demo.options()
+        Demo.options()
         |> Keyword.delete(:stt)
         |> Keyword.put(
           :vision,

@@ -37,74 +37,32 @@ defmodule AudioFlow.VoiceInput do
     speaking?: false
   ]
 
+  @options_schema [
+    min_speech_ms: [type: :pos_integer, default: 96],
+    min_silence_ms: [type: :pos_integer, default: 320],
+    pre_roll_ms: [type: :non_neg_integer, default: 64],
+    max_utterance_ms: [type: :pos_integer, default: 30_000],
+    turn_retry_ms: [type: :pos_integer, default: 320],
+    max_semantic_silence_ms: [type: :pos_integer, default: 2000],
+    threshold: [type: {:or, [:integer, :float]}, default: 0.5],
+    silence_threshold: [type: {:or, [:integer, :float]}, default: 0.35],
+    turn_threshold: [type: {:or, [:integer, :float]}, default: 0.5],
+    turn_timeout_ms: [type: {:in, 1..5000}, default: 600]
+  ]
+
+  @doc "Endpoint options:\n\n" <> NimbleOptions.docs(@options_schema)
   def new({detector, detector_options}, options \\ []) do
     {samples, rate, state} = detector.init(detector_options)
 
     unless is_integer(samples) and samples > 0 and is_integer(rate) and rate > 0,
       do: raise(ArgumentError, "detector frame size and sample rate must be positive integers")
 
-    threshold = Keyword.get(options, :threshold, 0.5)
-    silence_threshold = Keyword.get(options, :silence_threshold, 0.35)
-
-    unless is_number(threshold) and threshold > 0 and threshold <= 1 and
-             is_number(silence_threshold) and silence_threshold >= 0 and
-             silence_threshold < threshold,
-           do:
-             raise(
-               ArgumentError,
-               "probability thresholds must satisfy 0 <= silence < speech <= 1"
-             )
-
-    frames = fn key, default, zero? ->
-      ms = Keyword.get(options, key, default)
-
-      unless is_integer(ms) and (ms > 0 or (zero? and ms == 0)),
-        do: raise(ArgumentError, "#{key} has an invalid duration")
-
-      if key == :max_utterance_ms,
-        do: div(ms * rate, samples * 1000),
-        else: div(ms * rate + samples * 1000 - 1, samples * 1000)
-    end
-
-    limits = %{
-      threshold: threshold,
-      silence_threshold: silence_threshold,
-      speech: frames.(:min_speech_ms, 96, false),
-      silence: frames.(:min_silence_ms, 320, false),
-      pre_roll: frames.(:pre_roll_ms, 64, true),
-      utterance: frames.(:max_utterance_ms, 30_000, false)
-    }
-
-    if limits.utterance < limits.speech + limits.pre_roll,
-      do:
-        raise(ArgumentError, "maximum utterance is shorter than speech confirmation and pre-roll")
-
-    preprocessor =
-      case Keyword.get(options, :preprocessor) do
-        nil -> nil
-        {module, opts} -> {module, module.init(opts, rate, samples)}
-      end
-
-    turn_detector =
-      case Keyword.get(options, :turn_detector) do
-        nil -> nil
-        {module, opts} -> {module, module.init(opts)}
-      end
-
-    semantic = %{
-      threshold: Keyword.get(options, :turn_threshold, 0.5),
-      timeout: Keyword.get(options, :turn_timeout_ms, 600),
-      retry: frames.(:turn_retry_ms, 320, false),
-      max_silence: frames.(:max_semantic_silence_ms, 2000, false)
-    }
-
-    unless is_number(semantic.threshold) and semantic.threshold > 0 and semantic.threshold <= 1 and
-             is_integer(semantic.timeout) and semantic.timeout in 1..5000 and
-             (is_nil(turn_detector) or semantic.max_silence >= limits.silence),
-           do: raise(ArgumentError, "invalid semantic endpoint limits")
-
-    if turn_detector && rate != 16_000,
-      do: raise(ArgumentError, "semantic turn detection requires 16 kHz PCM")
+    limits_options = limits_options!(options)
+    frames = &frames(limits_options, &1, rate, samples)
+    limits = limits!(limits_options, frames)
+    preprocessor = init_preprocessor(Keyword.get(options, :preprocessor), rate, samples)
+    turn_detector = init_turn_detector(Keyword.get(options, :turn_detector))
+    semantic = semantic!(limits_options, frames, turn_detector, limits, rate)
 
     %__MODULE__{
       preprocessor: preprocessor,
@@ -116,6 +74,92 @@ defmodule AudioFlow.VoiceInput do
       frame_bytes: samples * 2,
       limits: limits
     }
+  end
+
+  defp limits_options!(options) do
+    AudioFlow.RuntimeOptions.known!(options, @options_schema,
+      min_speech_ms: "min_speech_ms has an invalid duration",
+      min_silence_ms: "min_silence_ms has an invalid duration",
+      pre_roll_ms: "pre_roll_ms has an invalid duration",
+      max_utterance_ms: "max_utterance_ms has an invalid duration",
+      turn_retry_ms: "turn_retry_ms has an invalid duration",
+      max_semantic_silence_ms: "max_semantic_silence_ms has an invalid duration",
+      threshold: "probability thresholds must satisfy 0 <= silence < speech <= 1",
+      silence_threshold: "probability thresholds must satisfy 0 <= silence < speech <= 1",
+      turn_threshold: "invalid semantic endpoint limits",
+      turn_timeout_ms: "invalid semantic endpoint limits"
+    )
+  end
+
+  defp frames(limits_options, key, rate, samples) do
+    ms = Keyword.fetch!(limits_options, key)
+
+    if key == :max_utterance_ms,
+      do: div(ms * rate, samples * 1000),
+      else: div(ms * rate + samples * 1000 - 1, samples * 1000)
+  end
+
+  defp limits!(limits_options, frames) do
+    threshold = limits_options[:threshold]
+    silence_threshold = limits_options[:silence_threshold]
+
+    unless valid_thresholds?(threshold, silence_threshold),
+      do:
+        raise(
+          ArgumentError,
+          "probability thresholds must satisfy 0 <= silence < speech <= 1"
+        )
+
+    limits = %{
+      threshold: threshold,
+      silence_threshold: silence_threshold,
+      speech: frames.(:min_speech_ms),
+      silence: frames.(:min_silence_ms),
+      pre_roll: frames.(:pre_roll_ms),
+      utterance: frames.(:max_utterance_ms)
+    }
+
+    if limits.utterance < limits.speech + limits.pre_roll,
+      do:
+        raise(ArgumentError, "maximum utterance is shorter than speech confirmation and pre-roll")
+
+    limits
+  end
+
+  defp valid_thresholds?(threshold, silence_threshold) do
+    is_number(threshold) and threshold > 0 and threshold <= 1 and
+      is_number(silence_threshold) and silence_threshold >= 0 and
+      silence_threshold < threshold
+  end
+
+  defp init_preprocessor(nil, _rate, _samples), do: nil
+
+  defp init_preprocessor({module, opts}, rate, samples),
+    do: {module, module.init(opts, rate, samples)}
+
+  defp init_turn_detector(nil), do: nil
+  defp init_turn_detector({module, opts}), do: {module, module.init(opts)}
+
+  defp semantic!(limits_options, frames, turn_detector, limits, rate) do
+    semantic = %{
+      threshold: limits_options[:turn_threshold],
+      timeout: limits_options[:turn_timeout_ms],
+      retry: frames.(:turn_retry_ms),
+      max_silence: frames.(:max_semantic_silence_ms)
+    }
+
+    unless valid_semantic?(semantic, turn_detector, limits),
+      do: raise(ArgumentError, "invalid semantic endpoint limits")
+
+    if turn_detector && rate != 16_000,
+      do: raise(ArgumentError, "semantic turn detection requires 16 kHz PCM")
+
+    semantic
+  end
+
+  defp valid_semantic?(semantic, turn_detector, limits) do
+    is_number(semantic.threshold) and semantic.threshold > 0 and semantic.threshold <= 1 and
+      (is_nil(turn_detector) or semantic.max_silence >= limits.silence)
   end
 
   def push(%__MODULE__{} = state, %Audio{} = audio) do
@@ -229,24 +273,7 @@ defmodule AudioFlow.VoiceInput do
           frame_count: state.frame_count + 1
       }
 
-      if state.speech_count >= state.limits.speech do
-        state = %{
-          state
-          | speaking?: true,
-            frames: state.frames ++ state.pre_roll,
-            frame_count: state.frame_count + length(state.pre_roll),
-            pre_roll: []
-        }
-
-        if state.frame_count >= state.limits.utterance do
-          {event, state} = finish(state, :limit)
-          {[:speech_started, event], state}
-        else
-          {[:speech_started], state}
-        end
-      else
-        {[], state}
-      end
+      if state.speech_count >= state.limits.speech, do: start_speech(state), else: {[], state}
     else
       history = Enum.take([frame | state.frames ++ state.pre_roll], state.limits.pre_roll)
       {[], %{state | frames: [], frame_count: 0, speech_count: 0, pre_roll: history}}
@@ -282,6 +309,23 @@ defmodule AudioFlow.VoiceInput do
     end
   end
 
+  defp start_speech(state) do
+    state = %{
+      state
+      | speaking?: true,
+        frames: state.frames ++ state.pre_roll,
+        frame_count: state.frame_count + length(state.pre_roll),
+        pre_roll: []
+    }
+
+    if state.frame_count >= state.limits.utterance do
+      {event, state} = finish(state, :limit)
+      {[:speech_started, event], state}
+    else
+      {[:speech_started], state}
+    end
+  end
+
   defp semantic_endpoint(%{turn_detector: nil} = state), do: {:silence, state}
 
   defp semantic_endpoint(state) do
@@ -294,57 +338,59 @@ defmodule AudioFlow.VoiceInput do
         {nil, state}
 
       true ->
-        {module, model_state} = state.turn_detector
-        # Isolate exceptions and kill slow inference. No linked task can crash the caller.
-        owner = self()
-        token = make_ref()
-
-        audio = %Audio{
-          data: state.frames |> Enum.reverse() |> IO.iodata_to_binary(),
-          sample_rate: state.rate
-        }
-
-        {pid, monitor} =
-          spawn_monitor(fn ->
-            result =
-              try do
-                module.predict(audio, model_state)
-              rescue
-                _ -> :error
-              catch
-                _, _ -> :error
-              end
-
-            send(owner, {token, result})
-          end)
-
-        result =
-          receive do
-            {^token, probability} -> probability
-            {:DOWN, ^monitor, :process, ^pid, _} -> :error
-          after
-            state.semantic.timeout -> :timeout
-          end
-
-        Process.exit(pid, :kill)
-        Process.demonitor(monitor, [:flush])
-
-        receive do
-          {^token, _} -> :ok
-        after
-          0 -> :ok
-        end
-
-        reason =
-          cond do
-            is_number(result) and result >= 0 and result <= 1 ->
-              if result >= state.semantic.threshold, do: :semantic, else: nil
-
-            true ->
-              :semantic_fallback
-          end
-
+        result = predict_turn(state)
+        reason = semantic_reason(result, state.semantic.threshold)
         {reason, %{state | semantic_checked_at: state.frame_count}}
+    end
+  end
+
+  # Isolate exceptions and kill slow inference. No linked task can crash the caller.
+  defp predict_turn(state) do
+    {module, model_state} = state.turn_detector
+    owner = self()
+    token = make_ref()
+
+    audio = %Audio{
+      data: state.frames |> Enum.reverse() |> IO.iodata_to_binary(),
+      sample_rate: state.rate
+    }
+
+    {pid, monitor} =
+      spawn_monitor(fn -> send(owner, {token, safe_predict(module, audio, model_state)}) end)
+
+    result =
+      receive do
+        {^token, probability} -> probability
+        {:DOWN, ^monitor, :process, ^pid, _} -> :error
+      after
+        state.semantic.timeout -> :timeout
+      end
+
+    Process.exit(pid, :kill)
+    Process.demonitor(monitor, [:flush])
+
+    receive do
+      {^token, _} -> :ok
+    after
+      0 -> :ok
+    end
+
+    result
+  end
+
+  defp safe_predict(module, audio, model_state) do
+    module.predict(audio, model_state)
+  rescue
+    _ -> :error
+  catch
+    _, _ -> :error
+  end
+
+  defp semantic_reason(result, threshold) do
+    cond do
+      not (is_number(result) and result >= 0 and result <= 1) -> :semantic_fallback
+      result >= threshold -> :semantic
+      true -> nil
     end
   end
 

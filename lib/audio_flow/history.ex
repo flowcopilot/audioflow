@@ -1,17 +1,21 @@
 defmodule AudioFlow.History do
   @moduledoc false
 
+  @options_schema [
+    max_turns: [type: :pos_integer, default: 8],
+    max_bytes: [type: :pos_integer, default: 16_384]
+  ]
+
   def new(false), do: nil
   def new(nil), do: nil
   def new(true), do: new([])
 
   def new(options) when is_list(options) do
-    options = Keyword.validate!(options, max_turns: 8, max_bytes: 16_384)
-
-    Enum.each(options, fn {key, value} ->
-      if not (is_integer(value) and value > 0),
-        do: raise(ArgumentError, "history #{key} must be positive")
-    end)
+    options =
+      AudioFlow.RuntimeOptions.validate!(options, @options_schema,
+        max_turns: "history max_turns must be positive",
+        max_bytes: "history max_bytes must be positive"
+      )
 
     %{turns: [], max_turns: options[:max_turns], max_bytes: options[:max_bytes]}
   end

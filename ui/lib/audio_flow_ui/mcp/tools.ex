@@ -1,6 +1,8 @@
 # Tools of AudioFlowUI.MCP. They are in their own file because the server compiles their specs.
 
 defmodule AudioFlowUI.MCP.ListNodeTypes do
+  @moduledoc false
+
   use Sake.Tool,
     name: "list_node_types",
     description:
@@ -13,6 +15,8 @@ defmodule AudioFlowUI.MCP.ListNodeTypes do
 end
 
 defmodule AudioFlowUI.MCP.ListGraphs do
+  @moduledoc false
+
   use Sake.Tool,
     name: "list_graphs",
     description: "Lists the saved agent graphs with their validation errors.",
@@ -30,6 +34,8 @@ defmodule AudioFlowUI.MCP.ListGraphs do
 end
 
 defmodule AudioFlowUI.MCP.GetGraph do
+  @moduledoc false
+
   use Sake.Tool,
     name: "get_graph",
     description: "Returns one saved graph and its validation errors.",
@@ -44,6 +50,8 @@ defmodule AudioFlowUI.MCP.GetGraph do
 end
 
 defmodule AudioFlowUI.MCP.SaveGraph do
+  @moduledoc false
+
   use Sake.Tool,
     name: "save_graph",
     description: """
@@ -71,6 +79,8 @@ defmodule AudioFlowUI.MCP.SaveGraph do
 end
 
 defmodule AudioFlowUI.MCP.ValidateGraph do
+  @moduledoc false
+
   use Sake.Tool,
     name: "validate_graph",
     description:
@@ -84,6 +94,8 @@ defmodule AudioFlowUI.MCP.ValidateGraph do
 end
 
 defmodule AudioFlowUI.MCP.DeleteGraph do
+  @moduledoc false
+
   use Sake.Tool,
     name: "delete_graph",
     description: "Deletes a saved graph.",
@@ -101,6 +113,8 @@ defmodule AudioFlowUI.MCP.DeleteGraph do
 end
 
 defmodule AudioFlowUI.MCP.RunGraph do
+  @moduledoc false
+
   use Sake.Tool,
     name: "run_graph",
     description: """
@@ -125,6 +139,8 @@ defmodule AudioFlowUI.MCP.RunGraph do
 end
 
 defmodule AudioFlowUI.MCP.EvaluateConversation do
+  @moduledoc false
+
   use Sake.Tool,
     name: "evaluate_conversation",
     description:

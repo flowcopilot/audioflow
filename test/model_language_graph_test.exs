@@ -1,8 +1,9 @@
 if System.get_env("AUDIOFLOW_ML") == "1" do
   defmodule AudioFlow.ModelLanguageGraphTest do
     use ExUnit.Case, async: true
-    alias AudioFlow.{Graph, ModelLanguages}
+    alias AudioFlow.Graph
     alias AudioFlow.Graph.Nodes.Models
+    alias AudioFlow.ModelLanguages
 
     defp graph(type, options, input) do
       %{

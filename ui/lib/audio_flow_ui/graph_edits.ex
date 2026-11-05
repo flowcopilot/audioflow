@@ -7,6 +7,8 @@ defmodule AudioFlowUI.GraphEdits do
   of different kinds.
   """
 
+  alias AudioFlow.Graph.OptionSchema
+
   @doc "Sets the `\"position\"` of a node."
   def move_node(graph, id, x, y) when is_number(x) and is_number(y) do
     update_node(graph, id, &Map.put(&1, "position", %{"x" => round(x), "y" => round(y)}))
@@ -66,13 +68,12 @@ defmodule AudioFlowUI.GraphEdits do
     with {:ok, node} <- fetch_node(graph, id),
          {:ok, spec} <- fetch_type(types, node["type"]),
          {:ok, options} <- cast_options(node["options"] || %{}, spec["options"], params) do
-      update_node(graph, id, fn node ->
-        if options == %{},
-          do: Map.delete(node, "options"),
-          else: Map.put(node, "options", options)
-      end)
+      update_node(graph, id, &put_options(&1, options))
     end
   end
+
+  defp put_options(node, options) when options == %{}, do: Map.delete(node, "options")
+  defp put_options(node, options), do: Map.put(node, "options", options)
 
   @doc "Sets the graph name."
   def rename(graph, name) when is_binary(name) do
@@ -167,7 +168,7 @@ defmodule AudioFlowUI.GraphEdits do
     Enum.reduce_while(schema, {:ok, options}, fn option, {:ok, options} ->
       name = option["name"]
 
-      case cast(option, Map.get(params, name)) do
+      case OptionSchema.cast(option, Map.get(params, name)) do
         :skip -> {:cont, {:ok, options}}
         :empty -> {:cont, {:ok, Map.delete(options, name)}}
         {:ok, value} -> {:cont, {:ok, Map.put(options, name, value)}}
@@ -175,32 +176,4 @@ defmodule AudioFlowUI.GraphEdits do
       end
     end)
   end
-
-  # A field that the form did not send is not changed.
-  defp cast(_option, nil), do: :skip
-  defp cast(%{"type" => "boolean"}, value), do: {:ok, value in ["true", "on", true]}
-
-  defp cast(option, value) when is_binary(value) do
-    if String.trim(value) == "", do: :empty, else: cast_value(option, value)
-  end
-
-  defp cast(_option, _value), do: {:error, "has an incorrect value"}
-
-  defp cast_value(%{"type" => "string"}, value), do: {:ok, value}
-
-  defp cast_value(%{"type" => "integer"}, value) do
-    case Integer.parse(String.trim(value)) do
-      {integer, ""} -> {:ok, integer}
-      _ -> {:error, "must be an integer"}
-    end
-  end
-
-  defp cast_value(%{"type" => "enum", "values" => values}, value) do
-    case Enum.find(values, &(to_string(&1) == value)) do
-      nil -> {:error, "must be one of #{Enum.map_join(values, ", ", &to_string/1)}"}
-      found -> {:ok, found}
-    end
-  end
-
-  defp cast_value(_option, value), do: {:ok, value}
 end

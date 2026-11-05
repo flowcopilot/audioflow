@@ -18,8 +18,11 @@ defmodule AudioFlow.WebRTC.Session do
   endpoints; speech start cancels output. Owner/peer/session exit closes all work.
   """
   use GenServer
-  alias AudioFlow.{Audio, VoiceInput, WebRTC}
-  alias AudioFlow.Telephony.{MuLaw, RateConverter}
+  alias AudioFlow.Audio
+  alias AudioFlow.Telephony.MuLaw
+  alias AudioFlow.Telephony.RateConverter
+  alias AudioFlow.VoiceInput
+  alias AudioFlow.WebRTC
   alias AudioFlow.WebRTC.Transport
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
@@ -188,51 +191,56 @@ defmodule AudioFlow.WebRTC.Session do
   defp drain(s) do
     case Map.pop(s.reorder, s.expected) do
       {nil, _} ->
-        s =
-          cond do
-            map_size(s.reorder) == 0 ->
-              if s.gap, do: Process.cancel_timer(elem(s.gap, 0))
-              %{s | gap: nil}
-
-            s.gap == nil ->
-              token = make_ref()
-              %{s | gap: {Process.send_after(self(), {:gap, token}, s.timeout), token}}
-
-            true ->
-              s
-          end
-
-        {:noreply, s}
+        {:noreply, schedule_gap(s)}
 
       {packet, rest} ->
-        if s.timestamp != nil and packet.timestamp != rem(s.timestamp + 160, 4_294_967_296) do
-          fail(:rtp_timestamp_gap, s)
-        else
-          {data, up} = RateConverter.up(MuLaw.decode(packet.payload), s.up)
-          {events, voice} = VoiceInput.push(s.voice, %Audio{data: data, sample_rate: 16_000})
+        play_packet(s, packet, rest)
+    end
+  end
 
-          Enum.each(events, fn
-            :speech_started ->
-              AudioFlow.cancel(s.session)
+  defp play_packet(%{timestamp: last} = s, %{timestamp: timestamp}, _rest)
+       when last != nil and timestamp != rem(last + 160, 4_294_967_296),
+       do: fail(:rtp_timestamp_gap, s)
 
-            {:utterance, audio, reason} ->
-              notify(s, {:utterance, reason})
+  defp play_packet(s, packet, rest) do
+    {data, up} = RateConverter.up(MuLaw.decode(packet.payload), s.up)
+    {events, voice} = VoiceInput.push(s.voice, %Audio{data: data, sample_rate: 16_000})
+    Enum.each(events, &handle_voice_event(s, &1))
 
-              case AudioFlow.submit(s.session, audio) do
-                {:ok, _} -> :ok
-                {:error, reason} -> notify(s, {:error, {:submit, reason}})
-              end
-          end)
+    drain(%{
+      s
+      | reorder: rest,
+        expected: rem(s.expected + 1, 65_536),
+        timestamp: packet.timestamp,
+        up: up,
+        voice: voice
+    })
+  end
 
-          drain(%{
-            s
-            | reorder: rest,
-              expected: rem(s.expected + 1, 65_536),
-              timestamp: packet.timestamp,
-              up: up,
-              voice: voice
-          })
-        end
+  # Waits for a missing packet while later packets are buffered.
+  defp schedule_gap(s) do
+    cond do
+      map_size(s.reorder) == 0 ->
+        if s.gap, do: Process.cancel_timer(elem(s.gap, 0))
+        %{s | gap: nil}
+
+      s.gap == nil ->
+        token = make_ref()
+        %{s | gap: {Process.send_after(self(), {:gap, token}, s.timeout), token}}
+
+      true ->
+        s
+    end
+  end
+
+  defp handle_voice_event(s, :speech_started), do: AudioFlow.cancel(s.session)
+
+  defp handle_voice_event(s, {:utterance, audio, reason}) do
+    notify(s, {:utterance, reason})
+
+    case AudioFlow.submit(s.session, audio) do
+      {:ok, _} -> :ok
+      {:error, reason} -> notify(s, {:error, {:submit, reason}})
     end
   end
 

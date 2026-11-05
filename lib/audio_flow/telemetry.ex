@@ -43,7 +43,7 @@ defmodule AudioFlow.Telemetry do
   error `{:session_stop, reason}`.
   """
 
-  @doc false
+  @doc "Emits `[:audio_flow, :session, :start]`."
   def session_start(metadata) do
     :telemetry.execute(
       [:audio_flow, :session, :start],
@@ -54,7 +54,7 @@ defmodule AudioFlow.Telemetry do
     System.monotonic_time()
   end
 
-  @doc false
+  @doc "Emits `[:audio_flow, :session, :stop]` with the duration since `started`."
   def session_stop(started, turns, metadata) do
     stop = System.monotonic_time()
 
@@ -65,7 +65,7 @@ defmodule AudioFlow.Telemetry do
     )
   end
 
-  @doc false
+  @doc "Emits `[:audio_flow, :turn, :start]`."
   def turn_start(metadata) do
     :telemetry.execute(
       [:audio_flow, :turn, :start],
@@ -76,7 +76,7 @@ defmodule AudioFlow.Telemetry do
     System.monotonic_time()
   end
 
-  @doc false
+  @doc "Emits `[:audio_flow, :turn, :stop]` with the duration since `started`."
   def turn_stop(started, events, metadata) do
     stop = System.monotonic_time()
 
@@ -87,7 +87,7 @@ defmodule AudioFlow.Telemetry do
     )
   end
 
-  @doc false
+  @doc "Runs `fun` inside an `[:audio_flow, :stage]` span and returns its result."
   def stage(metadata, fun) do
     :telemetry.span([:audio_flow, :stage], metadata, fn -> {fun.(), metadata} end)
   end

@@ -17,7 +17,7 @@ cd ../..
 mix run --no-halt examples/avatar/run.exs
 ```
 
-Open **http://127.0.0.1:4100/**. Default startup makes **no paid provider calls**.
+Open **<http://127.0.0.1:4100/>**. Default startup makes **no paid provider calls**.
 Connect controls, select a `.pcm` file, then Start. Without live configuration,
 Start reports a configuration error and does not provision anything. File format
 is a caller assertion: this example validates size/sample alignment, not whether

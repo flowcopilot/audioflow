@@ -14,7 +14,10 @@ defmodule AudioFlow.Graph.Nodes.Models do
   British English phonemes.
   """
   @behaviour AudioFlow.Graph.Node
-  alias AudioFlow.{Kokoro, ModelLanguages, Models, NxAdapter}
+  alias AudioFlow.Kokoro
+  alias AudioFlow.ModelLanguages
+  alias AudioFlow.Models
+  alias AudioFlow.NxAdapter
 
   @whisper %{
     "openai/whisper-tiny" => "169d4a4341b33bc18d8881c4b69c2e104e1cc0af",

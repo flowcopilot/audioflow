@@ -18,7 +18,8 @@ defmodule AudioFlow.Evaluation.Conversation do
   The default timeout is 5 seconds per turn (not per event). A timeout cancels
   the active turn. The caller owns session startup and cleanup.
   """
-  alias AudioFlow.{Text, Tool}
+  alias AudioFlow.Text
+  alias AudioFlow.Tool
 
   @doc "Wrap tool definitions, returning `{tools, observer_reference}` for this process."
   def observe_tools(definitions) do
@@ -49,33 +50,45 @@ defmodule AudioFlow.Evaluation.Conversation do
     unless is_integer(timeout) and timeout > 0,
       do: raise(ArgumentError, "timeout_ms must be positive")
 
-    for {step, index} <- Enum.with_index(steps, 1) do
-      input = Map.fetch!(step, :input)
-      unless is_binary(input), do: raise(ArgumentError, "step input must be a string")
+    for {step, index} <- Enum.with_index(steps, 1),
+        do: run_step!(session, step, index, timeout, options)
+  end
 
-      if Map.has_key?(step, :tools) and not is_reference(options[:observer]),
-        do: raise(ArgumentError, "tool assertions require observe_tools/1 and observer: ref")
+  defp run_step!(session, step, index, timeout, options) do
+    input = validate_step!(step, options)
+    turn = submit!(session, input, index)
+    deadline = System.monotonic_time(:millisecond) + timeout
+    {events, metrics} = collect(session, turn, deadline, [], index)
+    reply = Enum.map_join(events, &text(&1, options[:node]))
+    calls = tool_calls(options[:observer], [])
+    result = %{turn: turn, reply: reply, tools: calls, events: events, metrics: metrics}
+    assert_step!(step, index, reply, calls)
+    result
+  end
 
-      turn =
-        case AudioFlow.submit(session, %Text{data: input}) do
-          {:ok, turn} -> turn
-          error -> fail!(index, "submission failed: #{inspect(error)}")
-        end
+  defp validate_step!(step, options) do
+    input = Map.fetch!(step, :input)
+    unless is_binary(input), do: raise(ArgumentError, "step input must be a string")
 
-      deadline = System.monotonic_time(:millisecond) + timeout
-      {events, metrics} = collect(session, turn, deadline, [], index)
-      reply = Enum.map_join(events, &text(&1, options[:node]))
-      calls = tool_calls(options[:observer], [])
-      result = %{turn: turn, reply: reply, tools: calls, events: events, metrics: metrics}
+    if Map.has_key?(step, :tools) and not is_reference(options[:observer]),
+      do: raise(ArgumentError, "tool assertions require observe_tools/1 and observer: ref")
 
-      if Map.has_key?(step, :reply) and not matches?(reply, step.reply),
-        do: fail!(index, "reply #{inspect(reply)} did not match #{inspect(step.reply)}")
+    input
+  end
 
-      if Map.has_key?(step, :tools) and calls != step.tools,
-        do: fail!(index, "tool calls #{inspect(calls)} did not equal #{inspect(step.tools)}")
-
-      result
+  defp submit!(session, input, index) do
+    case AudioFlow.submit(session, %Text{data: input}) do
+      {:ok, turn} -> turn
+      error -> fail!(index, "submission failed: #{inspect(error)}")
     end
+  end
+
+  defp assert_step!(step, index, reply, calls) do
+    if Map.has_key?(step, :reply) and not matches?(reply, step.reply),
+      do: fail!(index, "reply #{inspect(reply)} did not match #{inspect(step.reply)}")
+
+    if Map.has_key?(step, :tools) and calls != step.tools,
+      do: fail!(index, "tool calls #{inspect(calls)} did not equal #{inspect(step.tools)}")
   end
 
   defp collect(session, turn, deadline, events, index) do

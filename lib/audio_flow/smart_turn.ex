@@ -7,7 +7,8 @@ defmodule AudioFlow.SmartTurn do
   at 16 kHz and returns the model's completion probability. See the pinned
   model and dependency installation instructions in `docs/input-processing.md`.
   """
-  alias AudioFlow.{Audio, PacketWorker}
+  alias AudioFlow.Audio
+  alias AudioFlow.PacketWorker
   def start_link(options), do: PacketWorker.start_link(options)
   def init(options), do: Keyword.fetch!(options, :worker)
 

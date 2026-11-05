@@ -53,25 +53,35 @@ defmodule AudioFlow.RAG.Retrieve do
     max_bytes = Keyword.get(options, :max_bytes, 32_768)
 
     cond do
-      not (is_list(vector) and length(vector) == dimensions and
-             Enum.all?(vector, &is_number/1) and Enum.any?(vector, &(&1 != 0))) ->
+      not valid_embedding?(vector, dimensions) ->
         {:error, :invalid_embedding}
 
-      not (is_integer(limit) and limit in 1..100 and is_number(distance) and
-             distance >= 0 and distance <= 2 and is_integer(max_bytes) and max_bytes > 0) ->
+      not valid_limits?(limit, distance, max_bytes) ->
         {:error, :invalid_retrieval_limits}
 
       true ->
         {backend, backend_options} = Keyword.fetch!(options, :backend)
+        options = Keyword.merge(backend_options, limit: limit, max_distance: distance)
 
-        with {:ok, documents} <-
-               backend.retrieve(
-                 vector,
-                 Keyword.merge(backend_options, limit: limit, max_distance: distance)
-               ) do
-          text = JSON.encode!(documents)
-          if byte_size(text) <= max_bytes, do: emit.(text), else: {:error, :retrieval_too_large}
-        end
+        with {:ok, documents} <- backend.retrieve(vector, options),
+             do: emit_documents(documents, max_bytes, emit)
     end
+  end
+
+  defp valid_embedding?(vector, dimensions) do
+    is_list(vector) and length(vector) == dimensions and
+      Enum.all?(vector, &is_number/1) and Enum.any?(vector, &(&1 != 0))
+  end
+
+  defp valid_limits?(limit, distance, max_bytes) do
+    is_integer(limit) and limit in 1..100 and valid_distance?(distance) and
+      is_integer(max_bytes) and max_bytes > 0
+  end
+
+  defp valid_distance?(distance), do: is_number(distance) and distance >= 0 and distance <= 2
+
+  defp emit_documents(documents, max_bytes, emit) do
+    text = JSON.encode!(documents)
+    if byte_size(text) <= max_bytes, do: emit.(text), else: {:error, :retrieval_too_large}
   end
 end

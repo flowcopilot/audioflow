@@ -11,10 +11,21 @@ defmodule ChatWeb.ChatLive do
   """
   use Phoenix.LiveView
 
-  alias AudioFlow.{Audio, Text}
-  alias Chat.{Catalog, Wav}
-  alias ChatWeb.Components.UI.{Badge, Button, NativeSelect, Spinner}
-  alias LiveAiElements.Components.{AudioPlayer, Conversation, Message, PromptInput, Shimmer}
+  alias AudioFlow.Audio
+  alias AudioFlow.Recording.Store
+  alias AudioFlow.Text
+  alias Chat.Catalog
+  alias Chat.Setup
+  alias Chat.Wav
+  alias ChatWeb.Components.UI.Badge
+  alias ChatWeb.Components.UI.Button
+  alias ChatWeb.Components.UI.NativeSelect
+  alias ChatWeb.Components.UI.Spinner
+  alias LiveAiElements.Components.AudioPlayer
+  alias LiveAiElements.Components.Conversation
+  alias LiveAiElements.Components.Message
+  alias LiveAiElements.Components.PromptInput
+  alias LiveAiElements.Components.Shimmer
 
   # Start a partial transcription after this much new audio (0.5 s).
   @partial_bytes 16_000
@@ -28,7 +39,7 @@ defmodule ChatWeb.ChatLive do
 
         {:ok, session} =
           AudioFlow.start_session(
-            elem(Chat.Setup.options(Chat.Setup.defaults()), 1) ++ [output: {Chat.Output, self()}]
+            elem(Setup.options(Setup.defaults()), 1) ++ [output: {Chat.Output, self()}]
           )
 
         session
@@ -37,7 +48,7 @@ defmodule ChatWeb.ChatLive do
     {:ok,
      assign(socket,
        session: session,
-       settings: Chat.Setup.defaults(),
+       settings: Setup.defaults(),
        setup_error: nil,
        capture: nil,
        artifacts: [],
@@ -61,7 +72,7 @@ defmodule ChatWeb.ChatLive do
 
   @impl true
   def handle_event("send", %{"text" => text}, socket) do
-    case if(Chat.Setup.speech?(socket.assigns.settings), do: "", else: String.trim(text)) do
+    case if(Setup.speech?(socket.assigns.settings), do: "", else: String.trim(text)) do
       "" ->
         {:reply, %{ok: false}, socket}
 
@@ -95,7 +106,7 @@ defmodule ChatWeb.ChatLive do
 
       submit(socket, %Audio{
         data: IO.iodata_to_binary(pcm),
-        sample_rate: Chat.Setup.rate(socket.assigns.settings)
+        sample_rate: Setup.rate(socket.assigns.settings)
       })
     end
   end
@@ -126,29 +137,8 @@ defmodule ChatWeb.ChatLive do
 
   def handle_event("output_ack", params, socket) do
     case socket.assigns.control do
-      {turn, id, action} ->
-        if params["token"] == Chat.Output.token(turn) and params["id"] == Chat.Output.token(id) and
-             params["action"] == Atom.to_string(action) do
-          result =
-            AudioFlow.Output.control_ack(socket.assigns.session, turn, id, action, params["ns"])
-
-          if result == :ok do
-            {:noreply,
-             assign(socket,
-               control: nil,
-               paused: action == :pause,
-               candidate: if(action == :pause, do: id),
-               played_ms: div(params["ns"], 1_000_000)
-             )}
-          else
-            {:noreply, socket}
-          end
-        else
-          {:noreply, socket}
-        end
-
-      _ ->
-        {:noreply, socket}
+      {turn, id, action} -> {:noreply, ack_output(socket, params, turn, id, action)}
+      _ -> {:noreply, socket}
     end
   end
 
@@ -184,7 +174,7 @@ defmodule ChatWeb.ChatLive do
     settings =
       Map.merge(socket.assigns.settings, Map.take(params, ["mode", "language", "voice", "tts"]))
 
-    case Chat.Setup.options(settings) do
+    case Setup.options(settings) do
       {:error, message} ->
         {:noreply, assign(socket, setup_error: message)}
 
@@ -226,18 +216,19 @@ defmodule ChatWeb.ChatLive do
   end
 
   def handle_event("capture", _, socket) do
-    if socket.assigns.turn do
-      {:noreply, assign(socket, setup_error: "Change recording consent between turns.")}
-    else
-      if socket.assigns.capture do
+    cond do
+      socket.assigns.turn ->
+        {:noreply, assign(socket, setup_error: "Change recording consent between turns.")}
+
+      socket.assigns.capture ->
         Chat.Capture.close(socket.assigns.capture)
         {:noreply, assign(socket, capture: nil, artifacts: [])}
-      else
+
+      true ->
         case Chat.Capture.open(socket.assigns.session) do
           {:ok, capture} -> {:noreply, assign(socket, capture: capture)}
           _ -> {:noreply, assign(socket, setup_error: "Cannot open recording store")}
         end
-      end
     end
   end
 
@@ -245,21 +236,40 @@ defmodule ChatWeb.ChatLive do
     capture = socket.assigns.capture
 
     socket =
-      if capture && id in Chat.Capture.list(capture) do
-        if action == "delete" do
-          AudioFlow.Recording.Store.delete(capture.store, id)
-          assign(socket, artifacts: Chat.Capture.list(capture))
-        else
-          case AudioFlow.Recording.Store.read(capture.store, id) do
-            {:ok, data} -> push_event(socket, "download", %{name: id, data: Jason.encode!(data)})
-            _ -> assign(socket, setup_error: "Recording expired")
-          end
-        end
-      else
-        assign(socket, setup_error: "Recording unavailable")
-      end
+      if capture && id in Chat.Capture.list(capture),
+        do: recording_action(socket, action, capture, id),
+        else: assign(socket, setup_error: "Recording unavailable")
 
     {:noreply, socket}
+  end
+
+  defp ack_output(socket, params, turn, id, action) do
+    with true <-
+           params["token"] == Chat.Output.token(turn) and params["id"] == Chat.Output.token(id) and
+             params["action"] == Atom.to_string(action),
+         :ok <-
+           AudioFlow.Output.control_ack(socket.assigns.session, turn, id, action, params["ns"]) do
+      assign(socket,
+        control: nil,
+        paused: action == :pause,
+        candidate: if(action == :pause, do: id),
+        played_ms: div(params["ns"], 1_000_000)
+      )
+    else
+      _ -> socket
+    end
+  end
+
+  defp recording_action(socket, "delete", capture, id) do
+    Store.delete(capture.store, id)
+    assign(socket, artifacts: Chat.Capture.list(capture))
+  end
+
+  defp recording_action(socket, "download", capture, id) do
+    case Store.read(capture.store, id) do
+      {:ok, data} -> push_event(socket, "download", %{name: id, data: Jason.encode!(data)})
+      _ -> assign(socket, setup_error: "Recording expired")
+    end
   end
 
   @impl true
@@ -450,7 +460,7 @@ defmodule ChatWeb.ChatLive do
         r = socket.assigns.recording
 
         if rem(byte_size(data), 2) == 0 and
-             r.bytes + byte_size(data) <= Chat.Setup.rate(socket.assigns.settings) * 60,
+             r.bytes + byte_size(data) <= Setup.rate(socket.assigns.settings) * 60,
            do:
              assign(socket,
                recording: %{r | pcm: [r.pcm, data], bytes: r.bytes + byte_size(data)}

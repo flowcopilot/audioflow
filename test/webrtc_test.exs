@@ -1,6 +1,7 @@
 if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
   defmodule AudioFlow.WebRTCTest do
     use ExUnit.Case, async: true
+    alias AudioFlow.VideoOutput.IVF
     alias AudioFlow.WebRTC
 
     test "real offer/answer, trickled ICE, DTLS and audio/video RTP with clocks and stale-turn rejection" do
@@ -20,7 +21,7 @@ if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
       assert packet.timestamp == 160
 
       {:ok, %{frames: [%{data: frame} | _]}} =
-        AudioFlow.VideoOutput.IVF.read("examples/network/assets/test-pattern.ivf")
+        IVF.read("examples/network/assets/test-pattern.ivf")
 
       fragment_count = div(byte_size(frame) + 1198, 1199)
       assert :ok = WebRTC.publish(a, key, :video, frame, 20_000)

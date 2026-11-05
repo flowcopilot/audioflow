@@ -20,7 +20,7 @@ existing adapters continue to receive one transcript string.
 With history enabled, the language model receives a list of
 `%{role: :user | :assistant, content: text}` maps. Saved user and assistant
 pairs precede the current user message. `Prompt.qwen3/2` and
-`Adapters.ChatHTTP` accept this format. Custom adapters and routing functions
+`Adapters.ReqLLM` accept this format. Custom adapters and routing functions
 must accept the message list when history is enabled. System instructions stay
 in the model adapter or prompt formatter.
 

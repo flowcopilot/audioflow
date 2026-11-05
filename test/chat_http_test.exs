@@ -1,7 +1,22 @@
 defmodule AudioFlow.ChatHTTPTest do
   use ExUnit.Case, async: true
   alias AudioFlow.Adapters.ChatHTTP
+  alias AudioFlow.Adapters.Demo
   alias AudioFlow.Test.HTTPFixture, as: HTTP
+
+  test "unsupported legacy parameters require explicit migration rather than being ignored" do
+    assert_raise ArgumentError, ~r/unsupported legacy parameters top_p.*ReqLLM/, fn ->
+      ChatHTTP.run(
+        "Hi",
+        [
+          endpoint: "http://127.0.0.1:1/v1/chat/completions",
+          model: "fixture",
+          parameters: %{top_p: 0.8}
+        ],
+        fn _ -> :ok end
+      )
+    end
+  end
 
   defp server(handler) do
     {child, listener, endpoint} = HTTP.start(self(), handler)
@@ -165,7 +180,7 @@ defmodule AudioFlow.ChatHTTPTest do
         end
       end)
 
-    session_options = Keyword.put(AudioFlow.Adapters.Demo.options(), :llm, {ChatHTTP, options})
+    session_options = Keyword.put(Demo.options(), :llm, {ChatHTTP, options})
     {:ok, session} = AudioFlow.start_session(session_options)
     on_exit(fn -> if Process.alive?(session), do: AudioFlow.stop_session(session) end)
     audio = %AudioFlow.Audio{data: <<0, 0>>, sample_rate: 16_000}

@@ -35,23 +35,29 @@ defmodule AudioFlow.Graph do
   `session_options/2` compiles a valid graph for `AudioFlow.Graph.Runner`.
   """
   alias AudioFlow.Graph.Nodes
+  alias AudioFlow.Graph.OptionSchema
 
   @default_nodes [Nodes.Input, Nodes.Audio, Nodes.Demo, Nodes.ChatHTTP, Nodes.RAG]
   @kinds [:audio, :image, :text, :vector]
   @events [:transcript, :description, :text, :audio, :image, :vector]
-  @settings %{"history" => :boolean, "timeout_ms" => :positive, "max_events" => :positive}
+  @settings %{
+    "history" => %{name: :history, type: :boolean},
+    "timeout_ms" => %{name: :timeout_ms, type: :positive},
+    "max_events" => %{name: :max_events, type: :positive}
+  }
 
   @doc "Builds a catalog from node modules. The default has input, audio, demo, and HTTP LLM nodes."
   def catalog(modules \\ @default_nodes) do
     Enum.reduce(modules, %{}, fn module, catalog ->
-      Enum.reduce(module.nodes(), catalog, fn spec, catalog ->
-        if Map.has_key?(catalog, spec.type),
-          do: raise(ArgumentError, "duplicate node type #{inspect(spec.type)}")
-
-        Map.put(catalog, spec.type, {module, complete_spec(spec)})
-      end)
+      Enum.reduce(module.nodes(), catalog, &add_type(&2, module, &1))
     end)
   end
+
+  defp add_type(catalog, _module, spec) when is_map_key(catalog, spec.type),
+    do: raise(ArgumentError, "duplicate node type #{inspect(spec.type)}")
+
+  defp add_type(catalog, module, spec),
+    do: Map.put(catalog, spec.type, {module, complete_spec(spec)})
 
   # Defaults for the optional spec keys. See `AudioFlow.Graph.Node`.
   defp complete_spec(spec) do
@@ -61,24 +67,41 @@ defmodule AudioFlow.Graph do
         spec
       )
 
-    cond do
-      spec.input not in [nil | @kinds] or spec.output not in [nil | @kinds] ->
-        raise ArgumentError,
-              "node type #{spec.type}: ports must be nil or one of #{inspect(@kinds)}"
-
-      spec.output != nil and spec.event not in @events ->
-        raise ArgumentError, "node type #{spec.type}: event must be one of #{inspect(@events)}"
-
-      spec.input_mode not in [:join, :stream] ->
-        raise ArgumentError, "node type #{spec.type}: input_mode must be :join or :stream"
-
-      spec.history and not (spec.input == :text and spec.input_mode == :join) ->
-        raise ArgumentError, "node type #{spec.type}: a history node needs a joined text input"
-
-      true ->
-        spec
+    case spec_error(spec) do
+      nil -> spec
+      message -> raise ArgumentError, "node type #{spec.type}: #{message}"
     end
   end
+
+  defp spec_error(spec), do: port_error(spec) || mode_error(spec)
+
+  defp port_error(spec) do
+    cond do
+      not (valid_port?(spec.input) and valid_port?(spec.output)) ->
+        "ports must be nil or one of #{inspect(@kinds)}"
+
+      spec.output != nil and spec.event not in @events ->
+        "event must be one of #{inspect(@events)}"
+
+      true ->
+        nil
+    end
+  end
+
+  defp mode_error(spec) do
+    cond do
+      spec.input_mode not in [:join, :stream] ->
+        "input_mode must be :join or :stream"
+
+      spec.history and not (spec.input == :text and spec.input_mode == :join) ->
+        "a history node needs a joined text input"
+
+      true ->
+        nil
+    end
+  end
+
+  defp valid_port?(port), do: port in [nil | @kinds]
 
   @doc "The node type specs of a catalog, sorted by type."
   def node_types(catalog),
@@ -143,18 +166,18 @@ defmodule AudioFlow.Graph do
       {edges, edge_errors} = resolve_edges(edges, nodes, declared)
       {settings, setting_errors} = resolve_settings(settings)
 
-      case node_errors ++ edge_errors ++ setting_errors do
-        [] ->
-          with :ok <- topology(nodes, edges, settings),
-               do: {:ok, %{nodes: nodes, edges: edges, settings: settings}}
-
-        errors ->
-          {:error, errors}
-      end
+      checked(nodes, edges, settings, node_errors ++ edge_errors ++ setting_errors)
     end
   end
 
   defp check(_, _), do: {:error, ["graph must be a map"]}
+
+  defp checked(nodes, edges, settings, []) do
+    with :ok <- topology(nodes, edges, settings),
+         do: {:ok, %{nodes: nodes, edges: edges, settings: settings}}
+  end
+
+  defp checked(_nodes, _edges, _settings, errors), do: {:error, errors}
 
   defp shape(graph) do
     nodes = Map.get(graph, "nodes")
@@ -213,53 +236,29 @@ defmodule AudioFlow.Graph do
     do: {:error, ["node #{inspect(id)}: options must be a map"]}
 
   defp resolve_options(id, specs, given) do
-    names = Enum.map(specs, &Atom.to_string(&1.name))
+    {options, errors} = OptionSchema.resolve(specs, given)
 
-    unknown =
-      for key <- Map.keys(given),
-          key not in names,
-          do: "node #{inspect(id)}: unknown option #{inspect(key)}"
+    errors =
+      Enum.map(errors, fn
+        {:unknown, key} ->
+          "node #{inspect(id)}: unknown option #{inspect(key)}"
 
-    {options, errors} =
-      Enum.reduce(specs, {%{}, unknown}, fn spec, {options, errors} ->
-        case Map.get(given, Atom.to_string(spec.name)) do
-          nil when is_map_key(spec, :default) ->
-            {Map.put(options, spec.name, spec.default), errors}
+        {name, :required} ->
+          "node #{inspect(id)}: option #{name} is required"
 
-          nil ->
-            if spec[:required],
-              do: {options, errors ++ ["node #{inspect(id)}: option #{spec.name} is required"]},
-              else: {options, errors}
-
-          value ->
-            if type?(spec.type, value),
-              do: {Map.put(options, spec.name, value), errors},
-              else:
-                {options,
-                 errors ++
-                   ["node #{inspect(id)}: option #{spec.name} must be #{type_name(spec.type)}"]}
-        end
+        {name, {:invalid, type}} ->
+          "node #{inspect(id)}: option #{name} must be #{OptionSchema.type_name(type)}"
       end)
 
     if errors == [], do: {:ok, options}, else: {:error, errors}
   end
-
-  defp type?(:string, value), do: is_binary(value)
-  defp type?(:integer, value), do: is_integer(value)
-  defp type?(:boolean, value), do: is_boolean(value)
-  defp type?({:enum, values}, value), do: value in values
-
-  defp type_name({:enum, values}), do: "one of #{Enum.map_join(values, ", ", &inspect/1)}"
-  defp type_name(type), do: "a #{type}"
 
   defp resolve_edges(edges, nodes, declared) do
     {resolved, errors} =
       Enum.reduce(edges, {[], []}, fn edge, {resolved, errors} ->
         case resolve_edge(edge, nodes, declared) do
           {:ok, pair} ->
-            if pair in resolved,
-              do: {resolved, ["duplicate edge #{edge_name(pair)}" | errors]},
-              else: {[pair | resolved], errors}
+            add_edge(pair, resolved, errors)
 
           :skip ->
             {resolved, errors}
@@ -270,6 +269,12 @@ defmodule AudioFlow.Graph do
       end)
 
     {Enum.reverse(resolved), Enum.reverse(errors)}
+  end
+
+  defp add_edge(pair, resolved, errors) do
+    if pair in resolved,
+      do: {resolved, ["duplicate edge #{edge_name(pair)}" | errors]},
+      else: {[pair | resolved], errors}
   end
 
   defp resolve_edge(%{"from" => from, "to" => to}, nodes, declared)
@@ -309,34 +314,25 @@ defmodule AudioFlow.Graph do
 
   defp resolve_settings(settings) do
     Enum.reduce(settings, {[], []}, fn {key, value}, {resolved, errors} ->
-      case {Map.fetch(@settings, key), value} do
-        {:error, _} ->
-          {resolved, errors ++ ["unknown setting #{inspect(key)}"]}
-
-        {{:ok, _}, nil} ->
-          {resolved, errors}
-
-        {{:ok, :boolean}, value} when is_boolean(value) ->
-          {resolved ++ [setting(key, value)], errors}
-
-        {{:ok, :positive}, value} when is_integer(value) and value > 0 ->
-          {resolved ++ [setting(key, value)], errors}
-
-        {{:ok, :boolean}, _} ->
-          {resolved, errors ++ ["setting #{key} must be a boolean"]}
-
-        {{:ok, :positive}, _} ->
-          {resolved, errors ++ ["setting #{key} must be a positive integer"]}
+      case resolve_setting(key, value) do
+        {:ok, options} -> {resolved ++ options, errors}
+        {:error, error} -> {resolved, errors ++ [error]}
       end
     end)
   end
 
-  @setting_names %{
-    "history" => :history,
-    "timeout_ms" => :timeout_ms,
-    "max_events" => :max_events
-  }
-  defp setting(key, value), do: {Map.fetch!(@setting_names, key), value}
+  defp resolve_setting(key, value) do
+    case Map.fetch(@settings, key) do
+      :error ->
+        {:error, "unknown setting #{inspect(key)}"}
+
+      {:ok, spec} ->
+        case OptionSchema.resolve([spec], %{key => value}) do
+          {options, []} -> {:ok, Map.to_list(options)}
+          {_, _} -> {:error, "setting #{key} must be #{OptionSchema.type_name(spec.type)}"}
+        end
+    end
+  end
 
   defp topology(nodes, edges, settings) do
     inputs = for {id, %{spec: %{input: nil}}} <- nodes, do: id

@@ -46,8 +46,8 @@ defmodule AudioFlow.NxAdapter do
     pcm =
       samples
       |> Nx.flatten()
-      |> Nx.clip(-1.0, 32767 / 32768)
-      |> Nx.multiply(32768)
+      |> Nx.clip(-1.0, 32_767 / 32_768)
+      |> Nx.multiply(32_768)
       |> Nx.round()
       |> Nx.as_type(:s16)
       |> Nx.backend_transfer(Nx.BinaryBackend)

@@ -1,9 +1,17 @@
 defmodule AudioFlow.CrossFeatureAcceptanceTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Adapters.Function, Audio, Graph, Output, Privacy, Recording, Text, VoiceInput}
+  alias AudioFlow.Adapters.Demo
+  alias AudioFlow.Adapters.Function
+  alias AudioFlow.Audio
+  alias AudioFlow.Graph
   alias AudioFlow.Graph.Conversation
+  alias AudioFlow.Output
+  alias AudioFlow.Privacy
+  alias AudioFlow.Recording
   alias AudioFlow.Recording.Store
   alias AudioFlow.Test.HTTPFixture, as: HTTP
+  alias AudioFlow.Text
+  alias AudioFlow.VoiceInput
 
   setup do
     root =
@@ -83,7 +91,7 @@ defmodule AudioFlow.CrossFeatureAcceptanceTest do
     }
 
     options =
-      AudioFlow.Adapters.Demo.options()
+      Demo.options()
       |> Keyword.put(:history, true)
       |> Keyword.put(
         :llm,
@@ -124,7 +132,7 @@ defmodule AudioFlow.CrossFeatureAcceptanceTest do
     end
 
     assert {:ok, ids} = Store.list(ctx.store)
-    assert length(ids) == 2
+    assert [_, _] = ids
   end
 
   test "recording retains generated text while cancellation retains only heard history and rolls back handoff",
@@ -220,9 +228,9 @@ defmodule AudioFlow.CrossFeatureAcceptanceTest do
   test "aligned DSP fixture feeds semantic ingress and the processed utterance reaches recorded Session STT",
        ctx do
     frame = fn x -> :binary.copy(<<x::little-signed-16>>, 512) end
-    pcm = frame.(32000) <> frame.(32000) <> frame.(0)
-    reference = frame.(32000) <> frame.(0) <> frame.(0)
-    audio = fn bytes -> %Audio{data: bytes, sample_rate: 16000} end
+    pcm = frame.(32_000) <> frame.(32_000) <> frame.(0)
+    reference = frame.(32_000) <> frame.(0) <> frame.(0)
+    audio = fn bytes -> %Audio{data: bytes, sample_rate: 16_000} end
 
     input =
       VoiceInput.new({AudioFlow.Test.FrameDetector, []},
@@ -240,12 +248,12 @@ defmodule AudioFlow.CrossFeatureAcceptanceTest do
     assert {[:speech_started, {:utterance, utterance, :semantic}], _} =
              VoiceInput.push(input, audio.(tail), audio.(ref_tail))
 
-    assert utterance.data == frame.(32000) <> frame.(0)
+    assert utterance.data == frame.(32_000) <> frame.(0)
     assert_receive {:semantic_input, ^utterance}
     owner = self()
 
     options =
-      AudioFlow.Adapters.Demo.options()
+      Demo.options()
       |> Keyword.put(
         :stt,
         {Function,

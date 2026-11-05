@@ -1,6 +1,8 @@
 defmodule AudioFlow.RecordingTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.{Audio, Privacy, Recording}
+  alias AudioFlow.Audio
+  alias AudioFlow.Privacy
+  alias AudioFlow.Recording
   alias AudioFlow.Recording.Store
 
   setup do
@@ -49,7 +51,7 @@ defmodule AudioFlow.RecordingTest do
 
       {:ok, _, id} = emit(recorder, turn, terminal)
       {:ok, record} = Store.read(ctx.store, id)
-      assert length(record["events"]) == 1
+      assert [_] = record["events"]
       assert record["status"] in ["cancelled", "error"]
       refute File.read!(Path.join(ctx.root, id)) =~ "secret"
     end
@@ -140,7 +142,7 @@ defmodule AudioFlow.RecordingTest do
     File.write!(Path.join(ctx.root, "keep.txt"), "unrelated")
     for i <- 1..3, do: assert({:ok, _} = Store.write(store, %{i: i}))
     assert {:ok, ids} = Store.list(store)
-    assert length(ids) == 2
+    assert [_, _] = ids
     refute expired in ids
     assert File.exists?(Path.join(ctx.root, "keep.txt"))
     assert :ok = Store.delete(store, hd(ids))

@@ -9,7 +9,8 @@ defmodule AudioFlowUIWeb.GraphLive do
   """
   use Phoenix.LiveView
   alias AudioFlowUI.GraphEdits
-  alias AudioFlowUIWeb.Components.{Canvas, GraphPanels}
+  alias AudioFlowUIWeb.Components.Canvas
+  alias AudioFlowUIWeb.Components.GraphPanels
   alias LiveAiElements.Components.Node
 
   @node_width 240
@@ -215,16 +216,16 @@ defmodule AudioFlowUIWeb.GraphLive do
       column
       |> Enum.with_index()
       |> Enum.map(fn {node, row} ->
-        {x, y} =
-          case node["position"] do
-            %{"x" => x, "y" => y} when is_number(x) and is_number(y) -> {x, y}
-            _ -> {depth * @column, row * @row}
-          end
-
+        {x, y} = position(node["position"], depth, row)
         %{id: node["id"], type: node["type"], options: options(node["options"]), x: x, y: y}
       end)
     end)
   end
+
+  defp position(%{"x" => x, "y" => y}, _depth, _row) when is_number(x) and is_number(y),
+    do: {x, y}
+
+  defp position(_position, depth, row), do: {depth * @column, row * @row}
 
   defp options(%{} = options), do: Enum.sort(options)
   defp options(_), do: []

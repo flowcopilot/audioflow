@@ -20,26 +20,13 @@ defmodule Chat.Setup do
 
   def options(s, env \\ &System.get_env/1) do
     mode = s["mode"]
-
-    required =
-      requirements(mode) ++
-        if(mode == "remote",
-          do:
-            if(s["tts"] == "cartesia",
-              do: ["CARTESIA_API_KEY", "CARTESIA_VOICE_ID"],
-              else: ["ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"]
-            ),
-          else: []
-        )
-
-    missing = Enum.filter(required, &(env.(&1) in [nil, ""]))
+    missing = Enum.filter(required(s), &(env.(&1) in [nil, ""]))
 
     cond do
       mode not in ["local", "demo", "remote", "openai", "gemini"] ->
         {:error, "Unknown mode"}
 
-      s["language"] not in ["en", "es", "fr", "de", "ro"] or s["voice"] not in ["marin", "cedar"] or
-          s["tts"] not in ["elevenlabs", "cartesia"] ->
+      not supported?(s) ->
         {:error, "Unsupported language, voice or TTS"}
 
       mode == "local" and not Chat.Engine.native?() ->
@@ -52,6 +39,19 @@ defmodule Chat.Setup do
         {:ok,
          build(s, env) ++ [timeout_ms: 120_000, max_events: 4096, max_input_bytes: 1_440_000]}
     end
+  end
+
+  defp required(%{"mode" => "remote", "tts" => "cartesia"}),
+    do: requirements("remote") ++ ["CARTESIA_API_KEY", "CARTESIA_VOICE_ID"]
+
+  defp required(%{"mode" => "remote"}),
+    do: requirements("remote") ++ ["ELEVENLABS_API_KEY", "ELEVENLABS_VOICE_ID"]
+
+  defp required(s), do: requirements(s["mode"])
+
+  defp supported?(s) do
+    s["language"] in ["en", "es", "fr", "de", "ro"] and s["voice"] in ["marin", "cedar"] and
+      s["tts"] in ["elevenlabs", "cartesia"]
   end
 
   defp key(env, name), do: fn -> env.(name) end
