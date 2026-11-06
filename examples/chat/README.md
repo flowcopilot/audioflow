@@ -4,8 +4,16 @@ A local LiveView chat over one AudioFlow session per browser tab. Type a
 message, or record one with the microphone. While you record, the user message
 shows a live transcript. The reply text streams into the conversation, the
 reply audio plays as it arrives, and each reply keeps an audio player for
-replay. The UI uses [live_shadcn](https://live-shadcn-storybook.fly.dev/) and
-its AI Elements components.
+replay. Two always-on modes keep the microphone open from **Start
+conversation** to **Stop**: **OpenAI live conversation** (OpenAI Realtime) and
+**Local Moshi full duplex**. The UI uses
+[live_shadcn](https://live-shadcn-storybook.fly.dev/) and its AI Elements
+components.
+
+The page shows only the provider, its voice, the conversation controls, a short
+status and the conversation. Setup, limits and privacy details are in this
+README. Turn-based modes keep transcript saving and playback diagnostics in
+collapsed **Settings** and **Diagnostics** sections.
 
 The native profile runs models on Apple Silicon through MLX (macOS 26.2+).
 Linux defaults to a credential-free synthetic demo. Remote providers work in
@@ -26,6 +34,128 @@ mix test
 Demo STT returns a fixed “Hello”, replies echo the input and output PCM is silent.
 It tests session wiring, not recognition or synthesis. No EMLX, EXLA, Bumblebee
 or model downloads are needed. Use the same profile for all Mix commands.
+
+## Always-on OpenAI live conversation
+
+This mode uses `AudioFlow.Duplex` with `AudioFlow.Duplex.OpenAIRealtime` over
+one server-side WebSocket to OpenAI Realtime. It needs no media build and no
+model download.
+
+```sh
+cd examples/chat
+export CHAT_PROFILE=demo CHAT_MODE=openai
+export OPENAI_API_KEY=... OPENAI_REALTIME_MODEL=gpt-realtime
+mix setup
+mix phx.server
+```
+
+Open <http://localhost:4000>, select the voice, click **Start conversation**
+once and allow the microphone. Talk normally. The microphone stays open until
+you click **Stop**:
+
+- The browser streams 80 ms chunks of 24 kHz PCM all the time, also silence and
+  also while the reply plays.
+- OpenAI server VAD detects each utterance and starts the spoken reply. The
+  client never commits input or requests a reply.
+- When you start to speak during a reply, OpenAI cancels the reply, and the
+  browser stops the queued reply audio at once. The microphone stays open.
+  The browser reports how much of the reply it played (audio clock minus the
+  output latency), and the server truncates the reply in the OpenAI history to
+  that part (`conversation.item.truncate`), capped to the audio it received.
+- All utterances of one call share one OpenAI conversation. A new call starts
+  a new conversation. **Clear text** clears the page only.
+- Your speech shows as a transcript message (`gpt-4o-mini-transcribe`), and
+  each reply as one assistant message.
+
+The key stays on the server: the adapter reads it only to connect, and the
+browser never sends or receives it. `OPENAI_REALTIME_ENDPOINT` (optional,
+`ws://` or `wss://` without user information) replaces the OpenAI endpoint,
+for example for a proxy.
+
+Limits (in addition to the shared limits below): the browser queues at most
+60 s of reply audio; if a reply is longer, the rest of that reply is dropped.
+Provider errors stop the call and show the provider error code only. Tool
+calls are not supported and stop the call. The truncation uses browser
+playback time, not acoustic delivery: it does not prove that you heard the
+audio, and the transcript text of a truncated reply on the page is not cut.
+Use headphones; the browser requests echo cancellation, and without it the
+model can hear its own voice.
+
+## Full duplex conversation with local Moshi
+
+This mode has no turns. The microphone stays open, and Moshi audio plays at
+the same time. You can speak while Moshi speaks; your speech does not stop the
+playback. It uses `AudioFlow.Duplex` with `AudioFlow.Duplex.Moshi`. It needs
+`AUDIOFLOW_MEDIA=1` (Ogg Opus through Membrane) and no Whisper, Qwen or Kokoro
+download. The demo profile starts no native model.
+
+1. Start the Moshi server in a separate terminal. The model
+   `kyutai/moshika-mlx-q4` loads from the Hugging Face cache
+   (`~/.cache/huggingface/hub/models--kyutai--moshika-mlx-q4`). If the cache is
+   empty, the first start downloads approximately 5 GB. `HF_HUB_OFFLINE=1`
+   prevents network access when the model is in the cache.
+
+   ```sh
+   HF_HUB_OFFLINE=1 uvx --python 3.12 --from moshi_mlx python -m moshi_mlx.local_web \
+     -q 4 --hf-repo kyutai/moshika-mlx-q4 --no-browser --port 8998
+   ```
+
+2. Start the chat in full duplex mode:
+
+   ```sh
+   cd examples/chat
+   export CHAT_PROFILE=demo AUDIOFLOW_MEDIA=1 CHAT_MODE=moshi
+   mix setup
+   mix phx.server
+   ```
+
+3. Open <http://localhost:4000>, click **Start conversation** and allow the
+   microphone. Click **Stop** to end the conversation.
+
+Use the same three variables for all Mix commands of this profile. The build
+goes to `_build/demo_media`, so it does not reuse modules from another profile
+(`_build` native, `_build/demo` demo, `_build/native_media` native with media).
+Without `CHAT_MODE=moshi`, select **Local Moshi full duplex** in the Provider
+list and click **Apply**.
+
+The server reads the model endpoint only from `AUDIOFLOW_MOSHI_ENDPOINT`
+(default `ws://127.0.0.1:8998/api/chat`). The value must be a `ws://` or
+`wss://` URL without user information. Browser events never select the
+endpoint.
+
+Status and errors show next to the controls: **Connecting…**, **Live**,
+**Conversation ended** or **Stopped by an error** with the reason (for
+example `connect_failed` when the Moshi server does not run, or the microphone
+error). The text input, the record button, the pause controls and the
+recordings control are not available in this mode. Moshi does not transcribe
+you, so only the model text shows. A pause of 1.5 s in the model text starts a
+new message.
+
+Limits:
+
+| Item | Limit |
+| --- | --- |
+| Input chunk | exactly 3,840 bytes: 80 ms of 24 kHz mono s16le PCM. Other sizes are refused. |
+| Resampling | continuous box filter from the capture rate to 24 kHz. Capture below 24 kHz fails. |
+| Input before the model handshake | dropped |
+| Input that waits for a server acknowledgement | 4 chunks (320 ms) |
+| Input that waits to be sent | 12 chunks (960 ms); the oldest chunk is dropped first |
+| Input lead (`AudioFlow.Duplex` `:max_input_lead_ms`) | 2 s. Moshi: input that the model has not answered. OpenAI: input ahead of the wall clock since the call started, so silence never fills it. More is refused with `overloaded` and dropped. |
+| Queued model audio in the browser | Moshi 1 s, OpenAI 60 s ahead of the playback clock; later chunks are dropped |
+| Time | 15 s to the model handshake; 30 s without accepted input ends the conversation; 30 min in total |
+| Conversation messages | the latest 200, 4,000 bytes each |
+
+**Diagnostics** (collapsed) shows the sent and dropped input chunks, the
+queued playback, the dropped model audio and the interruptions. These limits
+apply to both always-on modes. Each conversation has a generation number; the
+browser and the server ignore events of an earlier generation. Stop, an
+error, a microphone failure or disconnection, a LiveView disconnect and a
+server stop release the microphone, the queued playback and the model
+connection. The Moshi server serves one connection at a time.
+
+Use headphones. The browser requests echo cancellation, but AudioFlow does not
+verify it. Without headphones, Moshi can hear its own voice. Microphone access
+requires `localhost` or HTTPS.
 
 ## Run native models on Apple Silicon
 
@@ -137,7 +267,7 @@ pinned to the commit in live_shadcn's `registry/UPSTREAM.json`.
 
 ## Remote providers and per-tab controls
 
-The pipeline form applies settings by starting a **new chat**; it never silently
+The provider form applies settings by starting a **new chat**; it never silently
 replays or discards history during a turn. Stop recording/generation first.
 Native model selections remain shared across tabs, as before. Remote pipeline
 settings are per tab. Browser events contain selection IDs and PCM, never keys.
@@ -148,15 +278,15 @@ Export credentials in the server shell before `mix phx.server`:
 | Remote chain | `DEEPGRAM_API_KEY`, `CHAT_HTTP_ENDPOINT` (full chat-completions URL), `CHAT_HTTP_MODEL` | `DEEPGRAM_MODEL` (default nova-3), `CHAT_HTTP_API_KEY`; language en/es/fr/de/ro applies to STT and TTS |
 | ElevenLabs TTS in chain | `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` | `ELEVENLABS_MODEL` (default eleven_multilingual_v2) |
 | Cartesia TTS in chain | `CARTESIA_API_KEY`, `CARTESIA_VOICE_ID` | `CARTESIA_MODEL` (default sonic-3.6); API version 2026-08-14 |
-| OpenAI speech-to-speech | `OPENAI_API_KEY`, `OPENAI_REALTIME_MODEL` | Page voice marin/cedar; input/output 24 kHz |
-| Gemini speech-to-speech | `GEMINI_API_KEY`, `GEMINI_LIVE_MODEL` (include models/ prefix) | Provider default voice/language; input 16 kHz, output 24 kHz |
+| OpenAI live conversation (always on) | `OPENAI_API_KEY`, `OPENAI_REALTIME_MODEL` | `OPENAI_REALTIME_ENDPOINT`; page voice marin/cedar; input/output 24 kHz |
+| Gemini speech-to-speech (turn-based) | `GEMINI_API_KEY`, `GEMINI_LIVE_MODEL` (include models/ prefix) | Provider default voice/language; input 16 kHz, output 24 kHz |
 
 Missing variables produce a visible error and keep the existing chat active.
 Provider account/model/voice availability must be checked with your account.
 See [provider contracts](../../docs/providers.md). The chained pipeline supports
-text and microphone messages with text history. Speech-to-speech accepts only
-committed microphone utterances, opens a fresh provider connection each turn,
-and has **no history replay**. The language control applies only to the remote
+text and microphone messages with text history. Gemini speech-to-speech accepts
+only committed microphone utterances, opens a fresh provider connection each
+turn, and has **no history replay**. OpenAI live conversation is described above. The language control applies only to the remote
 chain; the OpenAI voice control only to OpenAI. Local voices use Kokoro's control.
 The browser actually converts microphone samples to the selected rate using a
 box filter; it rejects capture below that rate. This is basic speech conversion,
@@ -172,13 +302,14 @@ and on flush. Suspended contexts do not advance; queued buffers are not counted.
 A token rejects acknowledgements from earlier turns. Stop/new input flushes
 playback even after generation has finished. Cancellation conservatively keeps
 only complete aligned chained speech chunks covered by acknowledgements;
-it can undercount by one reporting interval. Speech-to-speech deltas have no
-proven text/audio alignment; no heard-text history or native provider truncation
-is claimed. Replay players do not modify conversation history. First-text,
+it can undercount by one reporting interval. Gemini speech-to-speech deltas have
+no proven text/audio alignment; no heard-text history or native provider
+truncation is claimed. Replay players do not modify conversation history. First-text,
 first-audio, total generation time and acknowledged playback are separate values;
 they do not measure acoustic latency.
 
-Recording is off by default. Enable between turns to persist bounded JSON event
+Recording is off by default and not available in the always-on modes. In
+**Settings**, click **Save redacted transcripts** between turns to persist bounded JSON event
 metadata with **all text replaced by `[REDACTED]`** and no audio. It deliberately
 does not attempt selective PII detection. Controls list, download and delete the
 current tab's artifacts. Disable deletes that tab's store. Bounds: 1,024 events,
@@ -200,8 +331,7 @@ server command, npm setup and client connection. Use
 [`telephony-loopback.exs`](../telephony-loopback.exs) for the credential-free paced
 telephony/Telnyx reordering exercise (`MIX_ENV=test mix run examples/telephony-loopback.exs`
 from the repository root). These transports are separate runnable examples,
-not modes of this microphone chat. They arrive on the parent integration branch
-via PR #35. Navigation in the chat links to that branch's source/setup.
+not modes of this microphone chat, and the chat page does not link to them.
 
 The [standalone network publisher](../network/README.md) runs actual encoded
 PCMU/VP8 two-peer negotiation with `AUDIOFLOW_WEBRTC=1 mix run
@@ -226,11 +356,16 @@ Chat validation commands:
 ```sh
 cd examples/chat
 CHAT_PROFILE=demo mix test
-node --test assets/test/audio.test.js
+CHAT_PROFILE=demo AUDIOFLOW_MEDIA=1 mix test
+node --test assets/test/
 CHAT_PROFILE=demo mix assets.build
 ```
 
-The JS test uses a simulated AudioContext clock, not a browser speaker.
+The JS tests use a simulated AudioContext clock and microphone, not a browser
+speaker. The OpenAI LiveView tests use a local WebSocket peer with the OpenAI
+Realtime event format, not OpenAI. With `AUDIOFLOW_MEDIA=1`, the Moshi LiveView
+tests use a local WebSocket peer with the Moshi wire format, not the Moshi
+model.
 
 Implementation validation on Linux (synthetic/local fixtures only): 7 chat
 ExUnit tests, 1 simulated AudioContext test, and 51 relevant core tests passed;
@@ -252,9 +387,9 @@ no breaking dependency upgrades were made as part of this feature.
 
 ### Provisional interruption / real browser pause
 
-The chat's **Pause / test interruption (10 s)** control requests a provisional
-interruption. **Resume false interruption** continues the same turn, worker,
-queued speech and speech checkpoints. **Confirm / Stop**, the 10-second candidate
+In the collapsed **Diagnostics** section of the turn-based modes, **Pause
+playback** requests a provisional interruption (10 s). **Resume** continues the
+same turn, worker, queued speech and speech checkpoints. **Confirm stop**, the 10-second candidate
 deadline, the original turn timeout, or an endpoint failure cancels and flushes.
 Resume must be acknowledged before the candidate deadline too. This is an
 explicit manual test control, not an automatic microphone/VAD classifier.

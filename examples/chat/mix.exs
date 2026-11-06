@@ -7,6 +7,16 @@ System.put_env("AUDIOFLOW_ML", if(native?, do: "1", else: "0"))
 defmodule Chat.MixProject do
   use Mix.Project
   @native_profile System.get_env("AUDIOFLOW_ML") == "1"
+  # AUDIOFLOW_MEDIA=1 compiles AudioFlow's media modules (Duplex, Moshi) into the
+  # dependency. Each profile has its own build path, so a profile change never
+  # reuses modules compiled for another profile. Native keeps the default path.
+  @media_profile System.get_env("AUDIOFLOW_MEDIA") == "1"
+  @build_path (case {@native_profile, @media_profile} do
+                 {true, false} -> "_build"
+                 {true, true} -> "_build/native_media"
+                 {false, true} -> "_build/demo_media"
+                 {false, false} -> "_build/demo"
+               end)
 
   # Set LIVE_SHADCN_PATH to a live_shadcn checkout to use local packages.
   @live_shadcn "3ddada48f623d72260360acf115e5d9b5eacd1cf"
@@ -17,6 +27,7 @@ defmodule Chat.MixProject do
       app: :chat,
       version: "0.1.0",
       elixir: "~> 1.18",
+      build_path: @build_path,
       listeners: [Phoenix.CodeReloader],
       elixirc_paths: ["lib"] ++ if(@native_profile, do: ["native"], else: []),
       deps: deps(),

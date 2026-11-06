@@ -6,8 +6,9 @@ defmodule Chat.Setup do
     {"demo", "Synthetic demo"},
     {"local", "Local Apple MLX"},
     {"remote", "Deepgram → Chat HTTP → TTS"},
-    {"openai", "OpenAI speech-to-speech"},
-    {"gemini", "Gemini speech-to-speech"}
+    {"openai", "OpenAI live conversation"},
+    {"gemini", "Gemini speech-to-speech"},
+    {"moshi", "Local Moshi full duplex"}
   ]
   @languages ~w(en es fr de ro)
   @voices ~w(marin cedar)
@@ -18,21 +19,38 @@ defmodule Chat.Setup do
   def voices, do: @voices
   def tts_providers, do: @tts_providers
 
-  def defaults,
-    do: %{
-      "mode" => if(Chat.Engine.native?(), do: "local", else: "demo"),
+  @moshi_endpoint "ws://127.0.0.1:8998/api/chat"
+
+  @doc "Startup settings. `CHAT_MODE` selects the startup mode."
+  def defaults(env \\ &System.get_env/1) do
+    mode = env.("CHAT_MODE")
+
+    %{
+      "mode" =>
+        if(Enum.any?(@modes, &(elem(&1, 0) == mode)),
+          do: mode,
+          else: if(Chat.Engine.native?(), do: "local", else: "demo")
+        ),
       "language" => "en",
       "voice" => "marin",
       "tts" => "elevenlabs"
     }
+  end
 
   def requirements("remote"), do: ["DEEPGRAM_API_KEY", "CHAT_HTTP_ENDPOINT", "CHAT_HTTP_MODEL"]
   def requirements("openai"), do: ["OPENAI_API_KEY", "OPENAI_REALTIME_MODEL"]
   def requirements("gemini"), do: ["GEMINI_API_KEY", "GEMINI_LIVE_MODEL"]
   def requirements(_), do: []
-  def rate(%{"mode" => "openai"}), do: 24_000
+  def rate(%{"mode" => mode}) when mode in ["openai", "moshi"], do: 24_000
   def rate(_), do: 16_000
-  def speech?(settings), do: settings["mode"] in ["openai", "gemini"]
+  @doc "Turn-based speech-to-speech: one recorded utterance per turn."
+  def speech?(settings), do: settings["mode"] == "gemini"
+
+  @doc """
+  Always-on modes use `AudioFlow.Duplex` instead of a turn-based session: the
+  microphone stays open from Start to Stop.
+  """
+  def duplex?(settings), do: settings["mode"] in ["moshi", "openai"]
 
   def options(s, env \\ &System.get_env/1) do
     mode = s["mode"]
@@ -45,11 +63,17 @@ defmodule Chat.Setup do
       not supported?(s) ->
         {:error, "Unsupported language, voice or TTS"}
 
-      mode == "local" and not Chat.Engine.native?() ->
-        {:error, "Restart with CHAT_PROFILE=native on Apple Silicon"}
+      unavailable = unavailable(mode) ->
+        {:error, unavailable}
 
       missing != [] ->
         {:error, "Missing server environment: " <> Enum.join(missing, ", ")}
+
+      mode == "moshi" ->
+        moshi(env.("AUDIOFLOW_MOSHI_ENDPOINT"))
+
+      mode == "openai" ->
+        openai(s, env)
 
       true ->
         {:ok,
@@ -68,6 +92,57 @@ defmodule Chat.Setup do
   defp supported?(s) do
     s["language"] in @languages and s["voice"] in @voices and
       s["tts"] in @tts_providers
+  end
+
+  defp unavailable("local"),
+    do: unless(Chat.Engine.native?(), do: "Restart with CHAT_PROFILE=native on Apple Silicon")
+
+  defp unavailable("moshi"),
+    do:
+      unless(Code.ensure_loaded?(AudioFlow.Duplex.Moshi),
+        do: "Restart with AUDIOFLOW_MEDIA=1 for full duplex Moshi"
+      )
+
+  defp unavailable(_mode), do: nil
+
+  # The endpoint comes only from the server environment, never from the browser.
+  defp moshi(endpoint) when endpoint in [nil, ""], do: moshi(@moshi_endpoint)
+
+  defp moshi(endpoint) do
+    if websocket?(endpoint),
+      do: {:ok, [duplex: {AudioFlow.Duplex.Moshi, [endpoint: endpoint]}]},
+      else:
+        {:error,
+         "AUDIOFLOW_MOSHI_ENDPOINT must be a ws:// or wss:// URL without user information"}
+  end
+
+  # The optional endpoint (a proxy, for example) comes only from the server environment.
+  defp openai(s, env) do
+    options = [
+      model: env.("OPENAI_REALTIME_MODEL"),
+      api_key: key(env, "OPENAI_API_KEY"),
+      voice: s["voice"]
+    ]
+
+    case env.("OPENAI_REALTIME_ENDPOINT") do
+      endpoint when endpoint in [nil, ""] ->
+        {:ok, [duplex: {AudioFlow.Duplex.OpenAIRealtime, options}]}
+
+      endpoint ->
+        if websocket?(endpoint),
+          do: {:ok, [duplex: {AudioFlow.Duplex.OpenAIRealtime, options ++ [endpoint: endpoint]}]},
+          else:
+            {:error,
+             "OPENAI_REALTIME_ENDPOINT must be a ws:// or wss:// URL without user information"}
+    end
+  end
+
+  defp websocket?(endpoint) do
+    match?(
+      %URI{scheme: scheme, host: host, userinfo: nil}
+      when scheme in ["ws", "wss"] and host not in [nil, ""],
+      URI.parse(endpoint)
+    )
   end
 
   defp key(env, name), do: fn -> env.(name) end
@@ -116,17 +191,6 @@ defmodule Chat.Setup do
       history: true
     ]
   end
-
-  defp build(%{"mode" => "openai"} = s, env),
-    do: [
-      speech_to_speech:
-        {Adapters.OpenAIRealtime,
-         [
-           model: env.("OPENAI_REALTIME_MODEL"),
-           api_key: key(env, "OPENAI_API_KEY"),
-           voice: s["voice"]
-         ]}
-    ]
 
   defp build(%{"mode" => "gemini"}, env),
     do: [

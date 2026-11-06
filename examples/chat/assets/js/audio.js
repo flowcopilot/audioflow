@@ -7,7 +7,7 @@
 const INPUT_RATE = 16_000;
 const MAX_SECONDS = 30;
 
-const CAPTURE_WORKLET = `
+export const CAPTURE_WORKLET = `
 registerProcessor("capture", class extends AudioWorkletProcessor {
   process(inputs) {
     const channel = inputs[0]?.[0];
@@ -30,7 +30,7 @@ for (const type of ["pointerdown", "keydown"]) {
   document.addEventListener(type, () => playbackContext(), { capture: true });
 }
 
-const toBase64 = (bytes) => {
+export const toBase64 = (bytes) => {
   let binary = "";
   for (let i = 0; i < bytes.length; i += 0x8000) {
     binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
@@ -38,7 +38,7 @@ const toBase64 = (bytes) => {
   return btoa(binary);
 };
 
-const fromBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+export const fromBase64 = (text) => Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
 
 // Box-filter downsampling is enough for speech recognition input.
 const toPcm16 = (chunks, rate, targetRate = INPUT_RATE) => {

@@ -3,95 +3,9 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
     use ExUnit.Case, async: true
     alias AudioFlow.Adapters.Moshi
     alias AudioFlow.Audio
-    alias Membrane.Ogg.Opus, as: OggOpus
-    alias Membrane.Ogg.Page
-    alias Membrane.Ogg.Parser
-    alias Membrane.Opus.Decoder.Native, as: Decoder
-    alias Membrane.Opus.Encoder.Native, as: Encoder
+    alias AudioFlow.Test.MoshiServer
 
     @frame 1_920
-
-    # Answers each client frame with one 80 ms output page, then the text
-    # scripted for that frame, like moshi_mlx.local_web.
-    defmodule Server do
-      @behaviour WebSock
-
-      def init({owner, script}) do
-        state = %{
-          owner: owner,
-          script: script,
-          buffer: <<>>,
-          continued: nil,
-          decoder: Decoder.create(24_000, 1),
-          encoder: Encoder.create(24_000, 1, 2049, -1000, 3001),
-          frames: 0
-        }
-
-        head =
-          Page.create_first(1)
-          |> Page.append_packet!(OggOpus.create_id_header(1))
-          |> Page.finalize(0)
-
-        {:push, [{:binary, <<0>>}, {:binary, <<1>> <> Page.serialize(head)}], state}
-      end
-
-      def handle_in({<<1, data::binary>>, opcode: :binary}, state) do
-        {packets, continued, rest} = Parser.parse(state.buffer <> data, state.continued)
-
-        pcm =
-          for %Parser.Packet{payload: packet} <- packets,
-              not String.starts_with?(packet, ["OpusHead", "OpusTags"]),
-              into: <<>>,
-              do: Decoder.decode_packet(state.decoder, packet)
-
-        send(state.owner, {:client_pcm, pcm})
-        frames = div(byte_size(pcm), 2 * 1_920)
-
-        replies =
-          Enum.flat_map(state.frames..(state.frames + frames - 1)//1, fn index ->
-            [{:binary, <<1>> <> output(state, index)}] ++
-              for text <- List.wrap(state.script[index]), do: {:binary, <<2>> <> text}
-          end)
-
-        {:push, replies,
-         %{state | buffer: rest, continued: continued, frames: state.frames + frames}}
-      end
-
-      def handle_info(_message, state), do: {:ok, state}
-
-      defp output(state, index) do
-        packets =
-          for _ <- 1..4 do
-            {:ok, packet} = Encoder.encode_packet(state.encoder, :binary.copy(<<0, 0>>, 480), 480)
-            packet
-          end
-
-        page = %Page{bos: false, bitstream_serial_number: 1, page_sequence_number: index + 1}
-
-        packets
-        |> Enum.reduce(page, &Page.append_packet!(&2, &1))
-        |> Page.finalize((index + 1) * 3_840)
-        |> Page.serialize()
-      end
-    end
-
-    defmodule Endpoint do
-      def init(options), do: options
-
-      def call(conn, options),
-        do: conn |> WebSockAdapter.upgrade(Server, options, []) |> Plug.Conn.halt()
-    end
-
-    defp endpoint(script) do
-      server =
-        start_supervised!(
-          {Bandit,
-           plug: {Endpoint, {self(), script}}, port: 0, ip: {127, 0, 0, 1}, startup_log: false}
-        )
-
-      {:ok, {_, port}} = ThousandIsland.listener_info(server)
-      "ws://127.0.0.1:#{port}/api/chat"
-    end
 
     defp run(script, options) do
       owner = self()
@@ -102,7 +16,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
             do: <<round(8000 * :math.sin(i / 10))::little-signed-16>>
 
       input = %Audio{data: tone, sample_rate: 24_000}
-      options = [endpoint: endpoint(script)] ++ options
+      options = [endpoint: MoshiServer.endpoint(owner, script: script)] ++ options
 
       Moshi.run(input, options, fn event ->
         send(owner, {:output, event})

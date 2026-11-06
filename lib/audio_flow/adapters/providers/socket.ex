@@ -7,36 +7,56 @@ defmodule AudioFlow.Adapters.Providers.Socket do
   # `decode` maps each `{:text | :binary, data}` frame to a handler event; the
   # default accepts JSON objects only.
   def run(url, headers, frames, state, handler, options, decode \\ &json_event/1) do
-    uri = URI.parse(url)
-
-    unless (uri.scheme in ["ws", "wss"] and uri.host) && is_nil(uri.userinfo),
-      do: raise(ArgumentError, "expected ws/wss endpoint without user information")
-
+    endpoint!(url)
     timeout = positive!(options, :timeout_ms, 30_000)
     limit = positive!(options, :max_response_bytes, 16_777_216)
     deadline = System.monotonic_time(:millisecond) + timeout
-    {scheme, port, path} = target(uri)
 
-    case Mint.HTTP.connect(scheme, uri.host, port,
-           mode: :passive,
-           protocols: [:http1],
-           transport_opts: [timeout: timeout]
-         ) do
-      {:ok, conn} ->
+    case open(url, headers, deadline, mode: :passive) do
+      {:ok, conn, ws, ref, pending} ->
         socket = %{
           conn: conn,
-          ws: nil,
-          ref: nil,
+          ws: ws,
+          ref: ref,
           deadline: deadline,
           bytes: 0,
           limit: limit,
           decode: decode
         }
 
-        upgrade(socket, scheme, path, headers, {frames, state, handler})
+        stream(socket, frames, pending, state, handler)
 
-      {:error, _} ->
-        {:error, :connect_failed}
+      {:error, _} = error ->
+        error
+    end
+  end
+
+  def endpoint!(url) do
+    uri = URI.parse(url)
+
+    unless (uri.scheme in ["ws", "wss"] and uri.host) && is_nil(uri.userinfo),
+      do: raise(ArgumentError, "expected ws/wss endpoint without user information")
+
+    url
+  end
+
+  # Connects and completes the WebSocket upgrade before `deadline` (monotonic
+  # milliseconds). The caller owns the connection. `pending` holds responses
+  # that arrived with the upgrade. Options: `:mode` for `Mint.WebSocket.new/5`
+  # and extra `:transport_opts`.
+  def open(url, headers, deadline, options) do
+    uri = URI.parse(url)
+    {scheme, port, path} = target(uri)
+    timeout = max(deadline - System.monotonic_time(:millisecond), 1)
+    transport = [timeout: timeout] ++ Keyword.get(options, :transport_opts, [])
+
+    case Mint.HTTP.connect(scheme, uri.host, port,
+           mode: :passive,
+           protocols: [:http1],
+           transport_opts: transport
+         ) do
+      {:ok, conn} -> upgrade(conn, scheme, path, headers, deadline, options[:mode])
+      {:error, _} -> {:error, :connect_failed}
     end
   end
 
@@ -47,14 +67,21 @@ defmodule AudioFlow.Adapters.Providers.Socket do
     {scheme, port, path}
   end
 
-  defp upgrade(%{conn: conn} = socket, scheme, path, headers, {frames, state, handler}) do
+  defp upgrade(conn, scheme, path, headers, deadline, mode) do
     {:ok, conn, ref} =
       check(WS.upgrade(if(scheme == :https, do: :wss, else: :ws), conn, path, headers))
 
-    {conn, status, headers, pending} = handshake(conn, ref, socket.deadline, nil, [])
-    {:ok, conn, ws} = check(WS.new(conn, ref, status, headers, mode: :passive))
+    {conn, status, headers, pending} = handshake(conn, ref, deadline, nil, [])
+    {:ok, conn, ws} = check(WS.new(conn, ref, status, headers, mode: mode))
+    {:ok, conn, ws, ref, pending}
+  catch
+    {:provider_socket, reason} ->
+      Mint.HTTP.close(conn)
+      {:error, reason}
+  end
 
-    socket = send_frames(%{socket | conn: conn, ws: ws, ref: ref}, frames)
+  defp stream(socket, frames, pending, state, handler) do
+    socket = send_frames(socket, frames)
     loop(socket, pending, state, handler)
   catch
     {:provider_socket, reason} -> {:error, reason}
