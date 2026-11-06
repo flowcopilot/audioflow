@@ -7,6 +7,7 @@ defmodule AudioFlow.Graph.Nodes.Providers do
   @behaviour AudioFlow.Graph.Node
   @providers %{
     "deepgram.stt" => {AudioFlow.Adapters.Deepgram, "DEEPGRAM_API_KEY"},
+    "mistral.stt" => {AudioFlow.Adapters.ReqLLMTranscription, "MISTRAL_API_KEY"},
     "elevenlabs.tts" => {AudioFlow.Adapters.ElevenLabs, "ELEVENLABS_API_KEY"},
     "cartesia.tts" => {AudioFlow.Adapters.Cartesia, "CARTESIA_API_KEY"}
   }
@@ -16,7 +17,7 @@ defmodule AudioFlow.Graph.Nodes.Providers do
   @impl true
   def nodes do
     for {type, {_adapter, env}} <- Enum.sort(@providers) do
-      stt? = type == "deepgram.stt"
+      stt? = String.ends_with?(type, ".stt")
 
       %{
         type: type,
@@ -59,6 +60,18 @@ defmodule AudioFlow.Graph.Nodes.Providers do
   end
 
   @impl true
+  # ReqLLM reads MISTRAL_API_KEY at request time. A trusted endpoint is the API base URL.
+  def adapter("mistral.stt", options) do
+    endpoint = Application.get_env(:audio_flow, :speech_provider_endpoints, %{})["mistral.stt"]
+    {timeout, options} = Map.pop(options, :timeout_ms, 30_000)
+    {model, options} = Map.pop!(options, :model)
+
+    {AudioFlow.Adapters.ReqLLMTranscription,
+     Map.to_list(options) ++
+       [model: %{provider: :mistral, id: model}, receive_timeout: timeout] ++
+       if(endpoint, do: [base_url: endpoint], else: [])}
+  end
+
   def adapter(type, options) do
     {module, env} = Map.fetch!(@providers, type)
     endpoint = Application.get_env(:audio_flow, :speech_provider_endpoints, %{})[type]

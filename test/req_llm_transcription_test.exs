@@ -109,6 +109,25 @@ defmodule AudioFlow.ReqLLMTranscriptionTest do
     assert {{:error, {:http_status, 401}}, []} = run(options)
   end
 
+  test "the mistral.stt graph node runs Voxtral with a fixed provider and the server key" do
+    assert Enum.any?(AudioFlow.Graph.Nodes.Providers.nodes(), &(&1.type == "mistral.stt"))
+
+    {STT, node_options} =
+      AudioFlow.Graph.Nodes.Providers.adapter("mistral.stt", %{
+        model: "voxtral-mini-latest",
+        language: "en",
+        timeout_ms: 5000
+      })
+
+    assert node_options[:model] == %{provider: :mistral, id: "voxtral-mini-latest"}
+    assert node_options[:receive_timeout] == 5000
+    refute Keyword.has_key?(node_options, :api_key)
+
+    options = Keyword.merge(node_options, server(%{text: "Bonjour"}))
+    assert {:ok, ["Bonjour"]} = run(options)
+    assert_receive {:request, _, _, %{"model" => "voxtral-mini-latest", "language" => "en"}, _}
+  end
+
   test "a transcription session runs with this adapter" do
     options = server(%{text: "Hello from Voxtral"}) ++ [model: "mistral:voxtral-mini-latest"]
     {:ok, session} = AudioFlow.start_session(stt: {STT, options})

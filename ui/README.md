@@ -126,11 +126,12 @@ returns passed: false. Saved graphs select their last text-output node and
 respect graph history settings. MCP offers evaluate_conversation with id/script.
 These checks do not grade audio or classify intents with a model.
 
-Remote speech nodes are deepgram.stt, elevenlabs.tts and cartesia.tts. Create a
-starter, select its node, and save model, language code and voice options.
-Cartesia also requires an explicit API version; see [contracts](../docs/providers.md).
-Set only the selected provider's DEEPGRAM_API_KEY, ELEVENLABS_API_KEY or
-CARTESIA_API_KEY in the **server environment**, using your secret manager.
+Remote speech nodes are deepgram.stt, mistral.stt (Voxtral), elevenlabs.tts and
+cartesia.tts. Create a starter, select its node, and save model, language code
+and voice options. Cartesia also requires an explicit API version; see
+[contracts](../docs/providers.md). Set only the selected provider's
+DEEPGRAM_API_KEY, MISTRAL_API_KEY, ELEVENLABS_API_KEY or CARTESIA_API_KEY in the
+**server environment**, using your secret manager.
 Never paste credentials into graphs, scripts or browser/MCP payloads. Speech
 nodes accept neither raw keys nor arbitrary environment-variable names or URLs.
 A missing key disables dashboard runs and returns an MCP prerequisite error.

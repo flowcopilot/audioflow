@@ -155,7 +155,7 @@ response. ReqLLM reads the provider key from its environment variable, for
 example `MISTRAL_API_KEY`, or from `:api_key`. Retries are off by default.
 Mistral does not accept `timestamp_granularities` together with `:language`.
 Set `segments: true` only with segment timestamps; ReqLLM puts word timestamps
-in the same list.
+in the same list. The graph editor has a `mistral.stt` node for Voxtral.
 
 For a long recording, use `AudioFlow.transcribe/3`. It cuts the audio into
 sections, runs the STT adapter on each section in a supervised task, and returns
