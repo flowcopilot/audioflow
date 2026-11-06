@@ -258,6 +258,13 @@ defmodule ChatWeb.ChatLive do
   def handle_event("call_failed", %{"message" => message}, socket) when is_binary(message),
     do: {:noreply, call_error(socket, "Microphone error: " <> String.slice(message, 0, 200))}
 
+  # The voice applies at the next call start, so it needs no new chat and no Apply.
+  def handle_event("select_voice", %{"voice" => voice}, socket) do
+    if voice in Setup.voices() and is_nil(socket.assigns.call),
+      do: {:noreply, assign(socket, settings: Map.put(socket.assigns.settings, "voice", voice))},
+      else: {:noreply, socket}
+  end
+
   def handle_event("select_model", %{"_target" => [field]} = params, socket)
       when field in ["stt", "llm", "voice"] do
     result = Chat.Engine.select(String.to_existing_atom(field), params[field])
@@ -978,7 +985,13 @@ defmodule ChatWeb.ChatLive do
         </Field.field>
         <Field.field :if={@settings["mode"] == "openai"} class="w-auto gap-1.5">
           <Field.field_label for="setting-voice">Voice</Field.field_label>
-          <NativeSelect.native_select id="setting-voice" name="voice" size="sm">
+          <NativeSelect.native_select
+            id="setting-voice"
+            name="voice"
+            size="sm"
+            phx-change="select_voice"
+            disabled={@call != nil}
+          >
             <NativeSelect.native_select_option
               :for={voice <- Setup.voices()}
               value={voice}
