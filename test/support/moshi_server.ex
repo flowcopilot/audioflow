@@ -95,6 +95,7 @@ if Code.ensure_loaded?(Membrane.Ogg.Parser) do
     def handle_info(:handshake, state), do: {:push, handshake(), state}
     def handle_info(:reply, state), do: answer(state)
     def handle_info(:close, state), do: {:stop, :normal, state}
+    def handle_info({:push, frames}, state), do: {:push, frames, state}
 
     @impl true
     def terminate(_reason, state) do

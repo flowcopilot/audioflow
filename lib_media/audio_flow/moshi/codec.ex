@@ -17,6 +17,7 @@ defmodule AudioFlow.Moshi.Codec do
   @application 2049
   @bitrate -1000
   @signal 3001
+  @max_pending_bytes 262_144
 
   def rate, do: @rate
   def frame_samples, do: @frame
@@ -74,10 +75,14 @@ defmodule AudioFlow.Moshi.Codec do
         Decoder.decode_packet(codec.decoder, packet)
       end
 
-    {:ok, %{codec | buffer: rest, continued: continued}, pcm}
+    if byte_size(rest) + byte_size(continued || <<>>) > @max_pending_bytes do
+      :error
+    else
+      {:ok, %{codec | buffer: rest, continued: continued}, pcm}
+    end
   rescue
     # Parser.parse/2 raises on a corrupt page.
-    RuntimeError -> :error
+    _error in [RuntimeError, ErlangError] -> :error
   end
 
   defp opus_header?(<<"OpusHead", _::binary>>), do: true

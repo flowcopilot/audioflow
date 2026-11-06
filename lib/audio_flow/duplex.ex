@@ -18,6 +18,11 @@ defmodule AudioFlow.Duplex do
             ],
             max_session_ms: [type: :pos_integer, default: 1_800_000, doc: "Total session time."],
             max_chunk_bytes: [type: :pos_integer, default: 48_000, doc: "Largest push."],
+            max_response_bytes: [
+              type: :pos_integer,
+              default: 67_108_864,
+              doc: "Total incoming WebSocket bytes, including partial frames."
+            ],
             max_input_lead_ms: [
               type: :pos_integer,
               default: 2_000,
@@ -81,7 +86,12 @@ defmodule AudioFlow.Duplex do
   @call_timeout 5_000
 
   @doc "Starts a session. Raises `ArgumentError` for invalid options."
-  def start_link(options) do
+  def start_link(options), do: start_session(options, :linked)
+
+  @doc "Starts an unlinked session. The session still monitors its owner."
+  def start(options), do: start_session(options, :unlinked)
+
+  defp start_session(options, link) do
     options = NimbleOptions.validate!(options, @schema)
     owner = options[:owner]
 
@@ -91,7 +101,11 @@ defmodule AudioFlow.Duplex do
     Code.ensure_loaded!(module)
     config = module.config(adapter_options)
     Socket.endpoint!(config.url)
-    GenServer.start_link(__MODULE__, {options, module, config})
+    args = {options, module, config}
+
+    if link == :linked,
+      do: GenServer.start_link(__MODULE__, args),
+      else: GenServer.start(__MODULE__, args)
   end
 
   @doc """
@@ -147,6 +161,8 @@ defmodule AudioFlow.Duplex do
        ref: nil,
        pushed: 0,
        received: 0,
+       response_bytes: 0,
+       max_response_bytes: options[:max_response_bytes],
        max_lead: lead,
        max_chunk: options[:max_chunk_bytes],
        max_queue: options[:max_owner_queue],
@@ -180,13 +196,18 @@ defmodule AudioFlow.Duplex do
   end
 
   defp check_audio(%Audio{} = audio, state) do
-    samples = div(byte_size(audio.data), 2)
-
     cond do
-      not Audio.valid?(audio) or audio.sample_rate != state.rate -> {:error, :invalid_audio}
-      byte_size(audio.data) > state.max_chunk -> {:error, :too_large}
-      state.pushed + samples - state.received > state.max_lead -> {:error, :overloaded}
-      true -> :ok
+      not Audio.valid?(audio) or audio.sample_rate != state.rate ->
+        {:error, :invalid_audio}
+
+      byte_size(audio.data) > state.max_chunk ->
+        {:error, :too_large}
+
+      state.pushed + div(byte_size(audio.data), 2) - state.received > state.max_lead ->
+        {:error, :overloaded}
+
+      true ->
+        :ok
     end
   end
 
@@ -270,6 +291,19 @@ defmodule AudioFlow.Duplex do
   defp responses(state, []), do: {:noreply, state}
 
   defp responses(%{ref: ref} = state, [{:data, ref, data} | rest]) do
+    bytes = state.response_bytes + byte_size(data)
+
+    if bytes > state.max_response_bytes do
+      failed(state, :response_too_large)
+    else
+      decode_response(%{state | response_bytes: bytes}, data, rest)
+    end
+  end
+
+  defp responses(%{ref: ref} = state, [{:done, ref} | _]), do: failed(state, :connection_closed)
+  defp responses(state, [_ | rest]), do: responses(state, rest)
+
+  defp decode_response(state, data, rest) do
     case WS.decode(state.ws, data) do
       {:ok, ws, frames} ->
         case frames(%{state | ws: ws}, frames) do
@@ -281,9 +315,6 @@ defmodule AudioFlow.Duplex do
         failed(%{state | ws: ws}, :invalid_frame)
     end
   end
-
-  defp responses(%{ref: ref} = state, [{:done, ref} | _]), do: failed(state, :connection_closed)
-  defp responses(state, [_ | rest]), do: responses(state, rest)
 
   defp frames(state, []), do: {:ok, state}
 

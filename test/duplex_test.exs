@@ -4,6 +4,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
     alias AudioFlow.Audio
     alias AudioFlow.Duplex
     alias AudioFlow.Test.MoshiServer
+    alias Membrane.Ogg.Page
 
     # One Moshi step: 80 ms of 24 kHz mono s16le.
     @frame_bytes 3_840
@@ -89,6 +90,9 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
         ready([reply: :manual], max_input_lead_ms: 200, max_chunk_bytes: @frame_bytes)
 
       assert {:error, :invalid_audio} =
+               Duplex.push(duplex, %Audio{data: nil, sample_rate: 24_000})
+
+      assert {:error, :invalid_audio} =
                Duplex.push(duplex, %Audio{data: tone(@frame_bytes), sample_rate: 16_000})
 
       assert {:error, :invalid_audio} =
@@ -121,6 +125,29 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
       refute_received {Duplex, ^duplex, {:error, _}}
       assert {:error, :closed} = Duplex.push(duplex, chunk())
       assert :ok = Duplex.stop(duplex)
+    end
+
+    test "corrupt Opus is reported as an error without crashing the owner" do
+      {duplex, server} = ready()
+      ref = Process.monitor(duplex)
+
+      page =
+        Page.create_first(2)
+        |> Page.append_packet!(<<3>>)
+        |> Page.finalize(0)
+        |> Page.serialize()
+
+      send(server, {:push, [{:binary, <<1>> <> page}]})
+      assert_receive {Duplex, ^duplex, {:error, :invalid_audio}}
+      assert_receive {Duplex, ^duplex, :closed}
+      assert_receive {:DOWN, ^ref, :process, ^duplex, :normal}
+    end
+
+    test "the incoming byte budget closes the connection" do
+      {duplex, _server} = start([], max_response_bytes: 1)
+      assert_receive {Duplex, ^duplex, {:error, :response_too_large}}
+      assert_receive {Duplex, ^duplex, :closed}
+      assert_receive :moshi_server_closed
     end
 
     test "owner exit closes the connection" do

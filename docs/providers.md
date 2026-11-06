@@ -216,6 +216,11 @@ handshake), `{:audio, %AudioFlow.Audio{}}`, `{:text, token}`,
 after the session stops. Keep the endpoint in server configuration; the browser
 does not need it.
 
+`start/1` starts an unlinked session with the same API. Use it when the owner
+must also survive an unexpected adapter crash, as the chat UI does. Monitor
+the returned process to detect these crashes. Both start functions monitor
+the owner and close the connection when it exits.
+
 The adapter sends each complete 80 ms frame (3,840 bytes at 24 kHz) as one Ogg
 page at once. A shorter remainder waits for the next push. Moshi answers each
 input frame with one output frame, so the client must push continuous audio,
@@ -227,6 +232,9 @@ Bounds (defaults):
 - `:idle_timeout_ms` (30,000) without an accepted push.
 - `:max_session_ms` (1,800,000) in total.
 - `:max_chunk_bytes` (48,000) for each push, else `{:error, :too_large}`.
+- `:max_response_bytes` (67,108,864) for all incoming WebSocket bytes in a
+  session, including fragments. The session fails with `:response_too_large`
+  at this bound. Incomplete Ogg packets are limited to 256 KiB.
 - `:max_input_lead_ms` (2,000) of pushed audio that model audio has not
   answered. A push past it returns `{:error, :overloaded}` and is not sent, for
   example while MLX warms up.
