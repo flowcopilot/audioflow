@@ -261,7 +261,8 @@ and stops playback. Microphone access requires `localhost` or HTTPS.
 
 `live_base`, `live_shadcn`, and `live_ai_elements` come from a pinned
 live_shadcn commit. Set `LIVE_SHADCN_PATH` to a local checkout to use it
-instead. `button`, `badge`, `native-select`, and `spinner` were copied with `mix ui.add`; `mix ui.sync`
+instead. `alert`, `badge`, `button`, `card`, `collapsible`, `empty`, `field`, `item`,
+`native-select`, and `spinner` were copied with `mix ui.add`; `mix ui.sync`
 reports upstream changes. The shadcn style sheets in `assets/css/upstream` are
 pinned to the commit in live_shadcn's `registry/UPSTREAM.json`.
 
