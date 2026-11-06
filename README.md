@@ -45,9 +45,7 @@ Changing a feature flag does not remove modules used by another build profile.
 Optional WebRTC audio/video and its PCM Session bridge have
 [runnable network examples](examples/network/README.md). The
 [avatar viewer](examples/avatar/README.md) subscribes to finite provider
-publications when explicitly configured with an account. The
-[validation report](docs/validation/features.md) lists tested paths, app entry
-points and remaining issue requirements.
+publications when explicitly configured with an account.
 
 ## Sessions
 

@@ -65,7 +65,6 @@ export default defineConfig({
         {
           label: 'Validation',
           items: [
-            'docs/validation/features',
             'docs/validation/model-checks',
             'docs/validation/benchmarks',
             'docs/validation/pipecat-comparison',
