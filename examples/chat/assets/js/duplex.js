@@ -89,7 +89,10 @@ export const Duplex = {
     this.handleEvent("call_ready", ({ generation }) => {
       this.readyGeneration = generation;
       const call = this.current(generation);
-      if (call) call.ready = true;
+      if (call) {
+        call.ready = true;
+        clearTimeout(call.startupTimer);
+      }
     });
     this.handleEvent("call_play", ({ generation, pcm, rate }) => {
       const call = this.current(generation);
@@ -134,6 +137,13 @@ export const Duplex = {
     };
     this.call = call;
     this.draw("Requesting microphone…");
+    call.startupTimer = setTimeout(() => {
+      this.fail(call, new Error(
+        call.generation === null
+          ? "Microphone or audio setup did not finish. Allow microphone access and try again."
+          : "The model connection did not become ready. Try again.",
+      ));
+    }, 20_000);
 
     try {
       // Created during the click, so the browser allows playback.
@@ -167,6 +177,7 @@ export const Duplex = {
         track.onended = () => this.fail(call, new Error("Microphone disconnected"));
       }
 
+      this.draw("Connecting to Moshi…");
       this.pushEvent("call_start", {}, (reply) => {
         if (this.call !== call) {
           // Stopped while the server started it.
@@ -176,6 +187,7 @@ export const Duplex = {
         if (!reply?.ok) return this.release(call);
         call.generation = reply.generation;
         call.ready = this.readyGeneration === reply.generation;
+        if (call.ready) clearTimeout(call.startupTimer);
         this.ticker = setInterval(() => this.draw(), 500);
         this.draw();
       });
@@ -248,6 +260,7 @@ export const Duplex = {
 
   release(call) {
     if (!call) return;
+    clearTimeout(call.startupTimer);
     call.released = true;
     if (this.call === call) {
       this.call = null;
@@ -272,6 +285,10 @@ export const Duplex = {
   },
 
   draw(text) {
+    const start = this.controls.querySelector('[data-call="start"]');
+    const stop = this.controls.querySelector('[data-call="stop"]');
+    if (start) start.disabled = Boolean(this.call);
+    if (stop) stop.disabled = !this.call;
     const stats = this.controls.querySelector("#duplex-stats");
     if (!stats) return;
     const call = this.call;

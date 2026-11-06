@@ -83,12 +83,17 @@ function mount() {
   const pushes = [];
   const listeners = {};
   const stats = { textContent: "" };
+  const buttons = {
+    start: { disabled: false, dataset: { call: "start" } },
+    stop: { disabled: true, dataset: { call: "stop" } },
+  };
   const el = {
     addEventListener(type, fn) {
       listeners[type] = fn;
     },
     removeEventListener() {},
-    querySelector: () => stats,
+    querySelector: (selector) => selector.includes('"start"') ? buttons.start :
+      selector.includes('"stop"') ? buttons.stop : stats,
   };
   const hook = {
     ...Duplex,
@@ -103,9 +108,9 @@ function mount() {
   hook.mounted();
   mounted.push(hook);
   const click = (action) =>
-    listeners.click({ target: { closest: () => ({ dataset: { call: action }, disabled: false }) } });
+    listeners.click({ target: { closest: () => buttons[action] } });
   const sent = (name) => pushes.filter((push) => push.name === name);
-  return { hook, handlers, pushes, click, sent, stats };
+  return { hook, handlers, pushes, click, sent, stats, buttons };
 }
 
 // Starts a conversation: click, microphone grant, server reply, model handshake.
@@ -248,8 +253,10 @@ test("server stop, disconnect and a stop during startup all release the call", a
   const early = mount();
   grantMicrophone();
   early.click("start");
+  assert.equal(early.buttons.stop.disabled, false);
   await tick();
   early.click("stop");
+  assert.equal(early.buttons.start.disabled, false);
   assert.ok(microphone.track.stopped);
   early.sent("call_start")[0].reply({ ok: true, generation: 8 });
   assert.deepEqual(early.sent("call_stop").at(-1).payload, { generation: 8 });
@@ -272,4 +279,20 @@ test("microphone denial and device loss report a failure and release capture", a
   microphone.track.onended();
   assert.deepEqual(lost.sent("call_failed").at(-1).payload, { message: "Microphone disconnected" });
   assert.ok(microphone.track.stopped);
+});
+
+test("a microphone request that does not finish times out and releases a late grant", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const view = mount();
+  const mic = grantMicrophone();
+  let grant;
+  mic.grant = () => new Promise((resolve) => { grant = resolve; });
+  view.click("start");
+  t.mock.timers.tick(20_000);
+  assert.equal(view.hook.call, null);
+  assert.match(view.sent("call_failed").at(-1).payload.message, /microphone/i);
+  grant({ getTracks: () => [mic.track] });
+  await tick();
+  assert.ok(mic.track.stopped);
+  assert.equal(view.sent("call_start").length, 0);
 });
