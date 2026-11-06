@@ -190,6 +190,62 @@ AUDIOFLOW_MOSHI_PCM=question.s16le mix test test/moshi_test.exs
 
 `AUDIOFLOW_MOSHI_ENDPOINT` overrides the default endpoint.
 
+### Continuous full-duplex Moshi
+
+`AudioFlow.Duplex` keeps one Moshi connection open. Microphone input and model
+output flow at the same time. There is no committed turn, no end-of-turn
+detection, no silence gate, and no output drop while the user speaks. Use it
+for a live conversation. Use `AudioFlow.Adapters.Moshi` for one committed turn.
+
+```elixir
+{:ok, duplex} =
+  AudioFlow.Duplex.start_link(
+    owner: self(),
+    adapter: {AudioFlow.Duplex.Moshi, endpoint: "ws://127.0.0.1:8998/api/chat"})
+
+# Wait for {AudioFlow.Duplex, ^duplex, :ready}, then push 80 ms chunks:
+:ok = AudioFlow.Duplex.push(duplex, %AudioFlow.Audio{data: pcm_3840_bytes, sample_rate: 24_000})
+:ok = AudioFlow.Duplex.stop(duplex)
+```
+
+`start_link/1` returns before the connection opens. The owner receives
+`{AudioFlow.Duplex, pid, event}`, where `event` is `:ready` (after the Moshi
+handshake), `{:audio, %AudioFlow.Audio{}}`, `{:text, token}`,
+`{:error, reason}` or `:closed`. `:closed` comes last, also after an error.
+`push/2` returns `{:error, :not_ready}` before `:ready` and `{:error, :closed}`
+after the session stops. Keep the endpoint in server configuration; the browser
+does not need it.
+
+The adapter sends each complete 80 ms frame (3,840 bytes at 24 kHz) as one Ogg
+page at once. A shorter remainder waits for the next push. Moshi answers each
+input frame with one output frame, so the client must push continuous audio,
+silence included, to get continuous output.
+
+Bounds (defaults):
+
+- `:connect_timeout_ms` (15,000) from start to the Moshi handshake.
+- `:idle_timeout_ms` (30,000) without an accepted push.
+- `:max_session_ms` (1,800,000) in total.
+- `:max_chunk_bytes` (48,000) for each push, else `{:error, :too_large}`.
+- `:max_input_lead_ms` (2,000) of pushed audio that model audio has not
+  answered. A push past it returns `{:error, :overloaded}` and is not sent, for
+  example while MLX warms up.
+- `:max_owner_queue` (250): when the owner mailbox has this many messages, the
+  session fails with `:owner_overloaded`. Output is not buffered or dropped.
+- `:send_timeout_ms` (5,000) for each TCP write.
+
+The session monitors the owner and closes the connection when the owner exits.
+On failure, timeout and `stop/1` it exits with reason `:normal`, so the link
+from `start_link/1` does not stop the owner. The owner must be a local process.
+The Moshi server limits above also apply: one connection at a time, and model
+state continues across connections.
+
+`mix test test/duplex_test.exs` (with `AUDIOFLOW_MEDIA=1`) checks simultaneous
+input and output, frame sizes, the handshake gate, the input and owner bounds,
+timeouts and connection cleanup against a local fixture. With
+`AUDIOFLOW_HTTP_MODEL_TESTS=1` and `AUDIOFLOW_MOSHI_PCM`, it also streams the
+question and then silence in real time to a running server.
+
 ## Bounds, cancellation and errors
 
 All providers accept `:endpoint` overrides for proxies and local tests. Use

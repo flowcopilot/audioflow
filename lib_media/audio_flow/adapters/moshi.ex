@@ -8,8 +8,10 @@ defmodule AudioFlow.Adapters.Moshi do
   Moshi does not transcribe the user, so there is no `:transcript` event.
   Use directly or in Session `:speech_to_speech`; see docs/providers.md.
 
-  Moshi is full duplex and has no end-of-turn signal. The adapter sends the
-  committed input, then silence, one 80 ms frame for each frame it receives.
+  Moshi is full duplex and has no end-of-turn signal. For continuous microphone
+  input with simultaneous output, use `AudioFlow.Duplex` with
+  `AudioFlow.Duplex.Moshi` instead. This adapter sends the committed input,
+  then silence, one 80 ms frame for each frame it receives.
   Output that belongs to the input period is dropped. The reply ends after
   `:end_silence_ms` of model output without text, or fails with `:no_reply`
   when `:max_reply_ms` passes without text.
