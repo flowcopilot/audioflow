@@ -165,10 +165,9 @@ if Code.ensure_loaded?(AudioFlow.Duplex.Moshi) do
       html = render(view)
       assert html =~ "Start conversation"
       assert html =~ "Not connected"
-      assert html =~ "Active: moshi"
+      assert html =~ "AudioFlow sends your microphone audio to local Moshi"
       refute has_element?(view, "#prompt")
       refute has_element?(view, "#recorder")
-      assert has_element?(view, "button[phx-click=capture][disabled]")
       assert has_element?(view, "button[data-call=stop][disabled]")
       assert :sys.get_state(view.pid).socket.assigns.session == nil
     end
@@ -248,7 +247,7 @@ if Code.ensure_loaded?(AudioFlow.Duplex.Moshi) do
       assert_reply(view, %{ok: false, error: "A conversation is already active."})
       view |> element("#configuration") |> render_submit(%{"mode" => "demo"})
       assert render(view) =~ "Stop the current turn, recording or conversation"
-      assert render(view) =~ "Active: moshi"
+      assert has_element?(view, "select[name=mode] option[value=moshi][selected]")
     end
 
     test "microphone denial and an unreachable model stop the conversation with an error" do

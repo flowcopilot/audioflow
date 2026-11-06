@@ -92,7 +92,7 @@ function mount() {
   };
   const hook = {
     ...Duplex,
-    el,
+    el: { parentElement: el },
     handleEvent(name, fn) {
       handlers[name] = fn;
     },
@@ -170,6 +170,18 @@ test("input waits for acknowledgements and drops the oldest chunks past the queu
   assert.equal(audio().length, MAX_IN_FLIGHT + 2);
   view.hook.draw();
   assert.match(view.stats.textContent, /Sent 1 · dropped 4 input chunks/);
+});
+
+test("capture starts when the model handshake arrives before the start reply", async () => {
+  const view = mount();
+  grantMicrophone();
+  view.click("start");
+  await tick();
+  view.handlers.call_ready({ generation: 9 });
+  view.sent("call_start")[0].reply({ ok: true, generation: 9 });
+  speak(30);
+  assert.equal(view.sent("call_audio").length, 1);
+  assert.equal(view.sent("call_audio")[0].payload.generation, 9);
 });
 
 test("model audio plays while the microphone keeps sending", async () => {

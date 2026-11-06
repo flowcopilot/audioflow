@@ -76,15 +76,18 @@ export class Chunker {
 export const Duplex = {
   mounted() {
     this.call = null;
+    this.readyGeneration = null;
+    this.controls = this.el.parentElement;
     this.onClick = (event) => {
       const button = event.target.closest("[data-call]");
       if (!button || button.disabled) return;
       if (button.dataset.call === "start") this.start();
       else this.stop();
     };
-    this.el.addEventListener("click", this.onClick);
+    this.controls.addEventListener("click", this.onClick);
 
     this.handleEvent("call_ready", ({ generation }) => {
+      this.readyGeneration = generation;
       const call = this.current(generation);
       if (call) call.ready = true;
     });
@@ -99,7 +102,7 @@ export const Duplex = {
   },
 
   destroyed() {
-    this.el.removeEventListener("click", this.onClick);
+    this.controls.removeEventListener("click", this.onClick);
     this.release(this.call);
   },
 
@@ -172,6 +175,7 @@ export const Duplex = {
         }
         if (!reply?.ok) return this.release(call);
         call.generation = reply.generation;
+        call.ready = this.readyGeneration === reply.generation;
         this.ticker = setInterval(() => this.draw(), 500);
         this.draw();
       });
@@ -268,7 +272,7 @@ export const Duplex = {
   },
 
   draw(text) {
-    const stats = this.el.querySelector("#duplex-stats");
+    const stats = this.controls.querySelector("#duplex-stats");
     if (!stats) return;
     const call = this.call;
     if (text !== undefined || !call) {

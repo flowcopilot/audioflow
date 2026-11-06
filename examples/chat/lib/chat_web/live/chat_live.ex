@@ -378,9 +378,9 @@ defmodule ChatWeb.ChatLive do
     end
   end
 
-  # Duplex.start_link/1 raises for options that it cannot use.
+  # A model failure must not stop the LiveView. Duplex monitors this owner.
   defp start_duplex(adapter) do
-    Duplex.start_link(owner: self(), adapter: adapter)
+    Duplex.start(owner: self(), adapter: adapter)
   rescue
     error in ArgumentError -> {:error, Exception.message(error)}
   end
@@ -836,7 +836,9 @@ defmodule ChatWeb.ChatLive do
               else: "Type a message, or record one with the microphone."}
           </p>
         </div>
-        <Button.button variant="outline" size="sm" phx-click="new_chat">New chat</Button.button>
+        <Button.button variant="outline" size="sm" phx-click="new_chat">
+          {if @duplex, do: "Clear text", else: "New chat"}
+        </Button.button>
       </header>
 
       <section class="rounded border p-3 text-sm">
@@ -849,7 +851,7 @@ defmodule ChatWeb.ChatLive do
           >
             {label}
           </option></select></label>
-          <label>Remote chain language
+          <label :if={@settings["mode"] == "remote"}>Remote chain language
           <select name="language"><option
             :for={lang <- Setup.languages()}
             value={lang}
@@ -857,7 +859,7 @@ defmodule ChatWeb.ChatLive do
           >
             {lang}
           </option></select></label>
-          <label>Remote TTS
+          <label :if={@settings["mode"] == "remote"}>Remote TTS
           <select name="tts"><option
             :for={tts <- Setup.tts_providers()}
             value={tts}
@@ -865,7 +867,7 @@ defmodule ChatWeb.ChatLive do
           >
             {tts}
           </option></select></label>
-          <label>OpenAI voice
+          <label :if={@settings["mode"] == "openai"}>OpenAI voice
           <select name="voice"><option
             :for={voice <- Setup.voices()}
             value={voice}
@@ -876,25 +878,25 @@ defmodule ChatWeb.ChatLive do
           <button type="submit" disabled={@call != nil}>Apply (starts new chat)</button>
         </form>
         <p :if={@setup_error} role="alert">{@setup_error}</p>
-        <p>
+        <p :if={not @duplex}>
           Active: {@settings["mode"]} · Input PCM {Chat.Setup.rate(@settings)} Hz mono · Playback acknowledged: {@played_ms} ms
         </p>
         <p :if={@settings["mode"] == "demo"}>
           Synthetic demo: fixed transcript, echoed text, silent PCM. No inference.
         </p>
         <p :if={@duplex}>
-          Full duplex: the microphone stays open and Moshi audio plays at the same time. Input is sent in 80 ms chunks. Moshi speaks English only and does not transcribe you. Use headphones to prevent echo. The server connects to AUDIOFLOW_MOSHI_ENDPOINT.
+          AudioFlow sends your microphone audio to local Moshi and plays its reply at the same time. Moshi speaks English. The text below is its speech, not a transcript of your voice.
         </p>
         <p :if={Chat.Setup.speech?(@settings)}>
           Microphone only; fresh provider connection each turn, no history replay. No text/audio alignment or native history truncation is claimed. Language and Gemini voice use provider defaults.
         </p>
-        <p>
+        <p :if={not @duplex}>
           Remote chain requires DEEPGRAM_API_KEY, CHAT_HTTP_ENDPOINT, CHAT_HTTP_MODEL and ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID or CARTESIA_API_KEY / CARTESIA_VOICE_ID. Optional CHAT_HTTP_API_KEY. Speech-to-speech requires OPENAI_API_KEY / OPENAI_REALTIME_MODEL or GEMINI_API_KEY / GEMINI_LIVE_MODEL. Configure these on the server.
         </p>
-        <button type="button" phx-click="capture" disabled={@duplex}>{if @capture,
+        <button :if={not @duplex} type="button" phx-click="capture">{if @capture,
           do: "Disable and delete recordings",
           else: "Enable redacted recordings"}</button>
-        <p>
+        <p :if={not @duplex}>
           Opt-in text-only JSON: all content replaced with [REDACTED], no PCM. Limit 20 turns, 1 hour, 128 KB buffered per turn. Deleted on disconnect; retention checked every minute and on access.
         </p>
         <div :for={id <- @artifacts}>
@@ -902,7 +904,7 @@ defmodule ChatWeb.ChatLive do
           <button phx-click="delete" phx-value-id={id}>Delete</button>
         </div>
       </section>
-      <nav aria-label="Standalone transports" class="text-sm underline">
+      <nav :if={not @duplex} aria-label="Standalone transports" class="text-sm underline">
         <a href="https://github.com/flowcopilot/audioflow/tree/feat/parallel-issue-integration/examples/rtvi-client">Official Pipecat SDK / RTVI client setup</a>
         ·
         <a href="https://github.com/flowcopilot/audioflow/blob/feat/parallel-issue-integration/examples/telephony-loopback.exs">Paced telephony loopback setup</a>
@@ -960,6 +962,30 @@ defmodule ChatWeb.ChatLive do
         {fit_text(@system_memory_gb)}
       </p>
 
+      <div
+        :if={@duplex}
+        id="duplex"
+        class="flex flex-wrap items-center gap-3 rounded-lg border p-3"
+      >
+        <div id="duplex-io" phx-hook="Duplex" phx-update="ignore"></div>
+        <Button.button type="button" data-call="start" disabled={@call != nil}>
+          <LiveShadcn.Icon.icon name="phone" /> Start conversation
+        </Button.button>
+        <Button.button type="button" variant="destructive" data-call="stop" disabled={@call == nil}>
+          <LiveShadcn.Icon.icon name="phone-off" /> Stop
+        </Button.button>
+        <div id="duplex-status" role="status" class="flex items-center gap-2 text-sm">
+          <Spinner.spinner :if={@call_status == "connecting"} class="size-3" />
+          <Badge.badge variant={call_variant(@call_status)}>{call_label(@call_status)}</Badge.badge>
+          <span id="duplex-stats" phx-update="ignore" class="text-xs text-muted-foreground"></span>
+        </div>
+        <p class="w-full text-xs text-muted-foreground">
+          Use headphones. Clear text does not reset Moshi. Its context stays until the model service restarts.
+        </p>
+        <p :if={@call_error} role="alert" class="w-full text-sm text-destructive">
+          {@call_error}
+        </p>
+      </div>
       <Conversation.conversation id="chat-log" class="rounded-lg border">
         <p :if={@messages == []} class="py-16 text-center text-sm text-muted-foreground">
           No messages yet.
@@ -997,27 +1023,6 @@ defmodule ChatWeb.ChatLive do
         <button phx-click="resume" disabled={not @paused}>Resume false interruption</button>
         <button phx-click="stop">Confirm / Stop</button>
         <span>{if @paused, do: "Web Audio suspended", else: "Playback running or awaiting endpoint"}</span>
-      </div>
-      <div
-        :if={@duplex}
-        id="duplex"
-        phx-hook="Duplex"
-        class="flex flex-wrap items-center gap-3 rounded-lg border p-3"
-      >
-        <Button.button type="button" data-call="start" disabled={@call != nil}>
-          <LiveShadcn.Icon.icon name="phone" /> Start conversation
-        </Button.button>
-        <Button.button type="button" variant="destructive" data-call="stop" disabled={@call == nil}>
-          <LiveShadcn.Icon.icon name="phone-off" /> Stop
-        </Button.button>
-        <div id="duplex-status" role="status" class="flex items-center gap-2 text-sm">
-          <Spinner.spinner :if={@call_status == "connecting"} class="size-3" />
-          <Badge.badge variant={call_variant(@call_status)}>{call_label(@call_status)}</Badge.badge>
-          <span id="duplex-stats" phx-update="ignore" class="text-xs text-muted-foreground"></span>
-        </div>
-        <p :if={@call_error} role="alert" class="w-full text-sm text-destructive">
-          {@call_error}
-        </p>
       </div>
       <PromptInput.prompt_input :if={not @duplex} id="prompt" on_submit="send">
         <PromptInput.prompt_input_textarea
