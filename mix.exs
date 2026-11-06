@@ -86,7 +86,9 @@ defmodule AudioFlow.MixProject do
           {:membrane_h26x_plugin, "~> 0.11.4"},
           {:membrane_h264_ffmpeg_plugin, "~> 0.32.7"},
           {:membrane_ffmpeg_swscale_plugin, "~> 0.16.5"},
-          {:membrane_raw_video_format, "~> 0.4.5"}
+          {:membrane_raw_video_format, "~> 0.4.5"},
+          {:membrane_opus_plugin, "~> 0.21.0"},
+          {:membrane_ogg_plugin, "~> 0.5.2"}
         ],
         else: []
       )

@@ -62,7 +62,9 @@ AudioFlow.cancel(session)
 AudioFlow.stop_session(session)
 ```
 
-For OpenAI Realtime or Gemini Live without chained stages, use the explicit
+For OpenAI Realtime, Gemini Live or a local
+[Moshi](docs/providers.md#local-moshi-speech-to-speech) server without chained
+stages, use the explicit
 [Session speech-to-speech mode](docs/providers.md#session-speech-to-speech-mode).
 It accepts committed PCM and does not replay cross-turn history.
 

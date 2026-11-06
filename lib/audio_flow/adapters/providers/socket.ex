@@ -4,7 +4,9 @@ defmodule AudioFlow.Adapters.Providers.Socket do
 
   # Synchronous, caller-owned socket: terminating the turn closes the connection.
   # The byte budget also bounds fragmented messages before WebSocket decoding.
-  def run(url, headers, frames, state, handler, options) do
+  # `decode` maps each `{:text | :binary, data}` frame to a handler event; the
+  # default accepts JSON objects only.
+  def run(url, headers, frames, state, handler, options, decode \\ &json_event/1) do
     uri = URI.parse(url)
 
     unless (uri.scheme in ["ws", "wss"] and uri.host) && is_nil(uri.userinfo),
@@ -21,7 +23,16 @@ defmodule AudioFlow.Adapters.Providers.Socket do
            transport_opts: [timeout: timeout]
          ) do
       {:ok, conn} ->
-        socket = %{conn: conn, ws: nil, ref: nil, deadline: deadline, bytes: 0, limit: limit}
+        socket = %{
+          conn: conn,
+          ws: nil,
+          ref: nil,
+          deadline: deadline,
+          bytes: 0,
+          limit: limit,
+          decode: decode
+        }
+
         upgrade(socket, scheme, path, headers, {frames, state, handler})
 
       {:error, _} ->
@@ -128,20 +139,27 @@ defmodule AudioFlow.Adapters.Providers.Socket do
   defp frames(_socket, [{:close, _, _} | _], _state, _handler), do: {:error, :incomplete_stream}
 
   defp frames(socket, [{kind, data} | rest], state, handler) when kind in [:text, :binary] do
-    case JSON.decode(data) do
-      {:ok, event} when is_map(event) ->
+    case socket.decode.({kind, data}) do
+      {:ok, event} ->
         case handler.(event, state) do
           {:cont, state, outgoing} -> frames(send_frames(socket, outgoing), rest, state, handler)
           :done -> :ok
           {:error, _} = error -> error
         end
 
-      _ ->
+      :error ->
         {:error, :invalid_event}
     end
   end
 
   defp frames(_, _, _, _), do: {:error, :invalid_frame}
+
+  defp json_event({_kind, data}) do
+    case JSON.decode(data) do
+      {:ok, event} when is_map(event) -> {:ok, event}
+      _ -> :error
+    end
+  end
 
   def json(value), do: {:text, JSON.encode!(value)}
 
