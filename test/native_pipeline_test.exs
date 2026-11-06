@@ -9,6 +9,7 @@ if System.get_env("AUDIOFLOW_ML") == "1" and System.get_env("AUDIOFLOW_MEDIA") =
     alias AudioFlow.Models
     alias AudioFlow.NxAdapter
     alias AudioFlow.Playback
+    alias AudioFlow.STT.Bumblebee
     alias Membrane.Testing.Notification
 
     test "recorded speech crosses the real Membrane, Whisper, Qwen3, and Kokoro path", %{
@@ -41,11 +42,15 @@ if System.get_env("AUDIOFLOW_ML") == "1" and System.get_env("AUDIOFLOW_MEDIA") =
       input_path = Path.join(tmp_dir, "speech.s16le")
       File.write!(input_path, pcm)
 
-      {:ok, whisper} =
-        Models.whisper("openai/whisper-tiny",
-          load_options: [revision: "169d4a4341b33bc18d8881c4b69c2e104e1cc0af"],
-          model_options: [backend: EXLA.Backend]
-        )
+      start_supervised!(AudioFlow.Servings)
+
+      whisper = [
+        model: "openai/whisper-tiny",
+        revision: "169d4a4341b33bc18d8881c4b69c2e104e1cc0af"
+      ]
+
+      {:ok, _} = Bumblebee.preload(whisper)
+      stt = {Bumblebee, whisper}
 
       {:ok, llm} =
         Models.language_model("Qwen/Qwen3-0.6B",
@@ -65,18 +70,13 @@ if System.get_env("AUDIOFLOW_ML") == "1" and System.get_env("AUDIOFLOW_MEDIA") =
           load_options: [revision: "e71cae966052b992a7eca6b17738916ce0eca4ec"]
         )
 
-      start_supervised!(Models.child_spec(AudioFlow.NativeWhisper, whisper))
       start_supervised!(Models.child_spec(AudioFlow.NativeLLM, llm))
       start_supervised!(Models.child_spec(AudioFlow.NativeTTS, kokoro))
       start_supervised!(Models.child_spec(AudioFlow.NativeVAD, silero))
       playback = start_supervised!({Playback, sink: Membrane.Testing.Sink, observer: self()})
 
       options = [
-        stt:
-          {NxAdapter,
-           serving: AudioFlow.NativeWhisper,
-           input: &NxAdapter.whisper_input/1,
-           output: &NxAdapter.transcript/1},
+        stt: stt,
         llm:
           {NxAdapter,
            serving: AudioFlow.NativeLLM,

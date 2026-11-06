@@ -16,6 +16,13 @@ defmodule AudioFlow.Session do
   `AudioFlow.Text` input goes directly to the LLM without an input stage.
   `:max_image_bytes` defaults to 6,291,456. Image-only sessions can omit `:stt`.
   Descriptions form one LLM prompt, then follow the same speech output path.
+  Omit both `:llm` and `:tts` for a transcription session. Its turns end after
+  the input stage, and text input returns `{:error, {:unsupported_input, :llm}}`.
+  An STT adapter can emit strings, `AudioFlow.Transcript.Segment` values, or
+  `{:partial, text}`. These become `{:transcript, text}`, `{:segment, segment}`
+  and `{:partial_transcript, text}` events. Partial text is an unstable hypothesis
+  that follows the final text emitted so far. It is not part of the prompt or the
+  history.
   Set `:history` to `true` or `[max_turns: 8, max_bytes: 16_384]` to retain
   successful user/assistant pairs. The LLM then receives a list of role/content
   message maps. History is disabled by default.
@@ -40,6 +47,7 @@ defmodule AudioFlow.Session do
   alias AudioFlow.Image
   alias AudioFlow.Telemetry
   alias AudioFlow.Text
+  alias AudioFlow.Transcript.Segment
 
   @limits_schema [
     timeout_ms: [type: :pos_integer, default: 30_000],
@@ -103,11 +111,17 @@ defmodule AudioFlow.Session do
   defp init_adapters(%AudioFlow.Graph.Plan{}, nil, _options), do: %{}
 
   defp init_adapters(nil, nil, options) do
-    adapters = Map.new([:llm, :tts], &{&1, Keyword.fetch!(options, &1)})
-    adapters = Map.merge(adapters, Map.new(Keyword.take(options, [:stt, :vision])))
+    adapters = Map.new(Keyword.take(options, [:stt, :vision, :llm, :tts]))
 
     if not (Map.has_key?(adapters, :stt) or Map.has_key?(adapters, :vision)),
       do: raise(ArgumentError, "a session requires an :stt or :vision adapter")
+
+    if Map.has_key?(adapters, :llm) != Map.has_key?(adapters, :tts),
+      do: raise(ArgumentError, "a session requires both :llm and :tts, or neither")
+
+    if not Map.has_key?(adapters, :llm) and
+         Keyword.get(options, :history, false) not in [false, nil],
+       do: raise(ArgumentError, "a transcription session does not support history")
 
     adapters
   end
@@ -413,7 +427,7 @@ defmodule AudioFlow.Session do
   defp submit_error(input, stage, limit, state) do
     cond do
       unsupported_kind?(input, state) -> {:unsupported_input, Plan.input_kind(input)}
-      missing_stage?(stage, state) -> {:unsupported_input, stage}
+      missing_stage?(stage || :llm, state) -> {:unsupported_input, stage || :llm}
       byte_size(input.data) > limit -> :input_too_large
       state.active != nil or state.candidate != nil -> :busy
       true -> nil
@@ -427,7 +441,6 @@ defmodule AudioFlow.Session do
     do: not Map.has_key?(state.graph.inputs, Plan.input_kind(input))
 
   defp missing_stage?(_stage, %{graph: graph}) when graph != nil, do: false
-  defp missing_stage?(nil, _state), do: false
 
   defp missing_stage?(stage, state),
     do:
@@ -568,7 +581,7 @@ defmodule AudioFlow.Session do
         do: %{active | playout: AudioFlow.Playout.audio(active.playout, value)},
         else: active
 
-    first = Map.put_new(active.first, kind, now() - active.started)
+    first = Map.put_new(active.first, first_kind(kind), now() - active.started)
     notify(state, if(node, do: {kind, value, node}, else: {kind, value}))
 
     %{
@@ -581,6 +594,9 @@ defmodule AudioFlow.Session do
         }
     }
   end
+
+  defp first_kind(:segment), do: :transcript
+  defp first_kind(kind), do: kind
 
   defp finish_output(state, :ok) do
     case AudioFlow.Output.call(state.output, :finish, [{self(), state.active.turn}]) do
@@ -654,7 +670,10 @@ defmodule AudioFlow.Session do
 
     try do
       transcript = input_transcript(run, emit, key, input, stage, kind)
-      if transcript != "", do: respond(run, emit, {session, turn, output}, transcript)
+
+      if transcript != "" and Map.has_key?(adapters, :llm),
+        do: respond(run, emit, {session, turn, output}, transcript)
+
       :ok
     rescue
       error -> {:error, {:exception, Exception.message(error)}}
@@ -667,17 +686,51 @@ defmodule AudioFlow.Session do
 
   defp input_transcript(run, emit, key, input, stage, kind) do
     if stage != nil do
-      run.(stage, input, fn text ->
-        emit.(kind, text)
-        Process.put(key, [text | Process.get(key)])
-        :ok
-      end)
+      run.(stage, input, &input_output(&1, emit, key, stage, kind))
     else
       Process.put(key, [input.data])
     end
 
-    transcript = Process.get(key) |> Enum.reverse() |> Enum.join() |> String.trim()
+    transcript = Process.get(key) |> Enum.reverse() |> join_input() |> String.trim()
     input_context(input, transcript)
+  end
+
+  defp input_output(text, emit, key, _stage, kind) when is_binary(text) do
+    emit.(kind, text)
+    Process.put(key, [text | Process.get(key)])
+    :ok
+  end
+
+  defp input_output(%Segment{} = segment, emit, key, :stt, _kind) do
+    emit.(:segment, segment)
+    Process.put(key, [segment | Process.get(key)])
+    :ok
+  end
+
+  defp input_output({:partial, text}, emit, _key, :stt, _kind) when is_binary(text),
+    do: emit.(:partial_transcript, text)
+
+  defp input_output(_, _emit, _key, _stage, _kind), do: throw(:invalid_output)
+
+  # Strings keep their own spacing. Segment text is joined with one space.
+  defp join_input(parts) do
+    parts
+    |> Enum.reduce({[], nil}, fn
+      %Segment{text: text}, {acc, previous} ->
+        text = String.trim(text)
+
+        cond do
+          text == "" -> {acc, previous}
+          previous in [nil, :space] -> {[text | acc], :segment}
+          true -> {[text, " " | acc], :segment}
+        end
+
+      text, {acc, _} ->
+        {[text | acc], if(String.ends_with?(text, [" ", "\n", "\t"]), do: :space, else: :text)}
+    end)
+    |> elem(0)
+    |> Enum.reverse()
+    |> IO.iodata_to_binary()
   end
 
   defp respond(run, emit, {session, turn, _output} = target, transcript) do
@@ -764,6 +817,9 @@ defmodule AudioFlow.Session do
 
   defp record_context(%{history: nil, active: active}, _, _), do: {:ok, active}
 
+  defp record_context(state, :segment, %Segment{text: text}),
+    do: record_context(state, :transcript, text)
+
   defp record_context(state, kind, text) when kind in [:transcript, :description] do
     bytes = state.active.input_bytes + byte_size(text)
 
@@ -800,14 +856,18 @@ defmodule AudioFlow.Session do
   defp flush_output(state),
     do: AudioFlow.Output.call(state.output, :flush, [{self(), state.output_turn}])
 
+  defp output_bytes(%Segment{} = segment), do: Segment.bytes(segment)
   defp output_bytes(%{data: data}) when is_binary(data), do: byte_size(data)
   defp output_bytes(text) when is_binary(text), do: byte_size(text)
   defp output_bytes(vector) when is_list(vector), do: length(vector) * 8
 
   defp valid_output?(:audio, audio), do: Audio.valid?(audio)
 
-  defp valid_output?(kind, text) when kind in [:text, :transcript, :description],
-    do: is_binary(text)
+  defp valid_output?(:segment, segment), do: Segment.valid?(segment)
+
+  defp valid_output?(kind, text)
+       when kind in [:text, :transcript, :partial_transcript, :description],
+       do: is_binary(text)
 
   defp valid_output?(:image, image), do: Image.valid?(image)
   defp valid_output?(:vector, vector), do: is_list(vector) and Enum.all?(vector, &is_number/1)
@@ -854,6 +914,7 @@ defmodule AudioFlow.Session do
   defp metrics(active) do
     %{
       duration_us: now() - active.started,
+      first_partial_transcript_us: active.first[:partial_transcript],
       first_transcript_us: active.first[:transcript],
       first_description_us: active.first[:description],
       first_text_us: active.first[:text],

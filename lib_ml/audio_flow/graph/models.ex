@@ -62,7 +62,7 @@ defmodule AudioFlow.Graph.Nodes.Models do
       %{
         type: "whisper.stt",
         title: "Whisper",
-        description: "Speech recognition. Needs 16 kHz mono PCM.",
+        description: "Speech recognition with local Whisper.",
         input: :audio,
         output: :text,
         event: :transcript,
@@ -163,19 +163,14 @@ defmodule AudioFlow.Graph.Nodes.Models do
   @impl true
   def adapter("whisper.stt", %{model: model} = options) do
     language = Map.get(options, :language, "auto")
-    language_options = ModelLanguages.whisper_options!(model, language)
+    # Validate when the graph is built, not on the first turn.
+    ModelLanguages.whisper_options!(model, language)
 
-    serving(
-      {:whisper, model, language},
-      fn ->
-        Models.whisper(
-          model,
-          [load_options: load(@whisper, model), model_options: exla()] ++ language_options
-        )
-      end,
-      input: &NxAdapter.whisper_input/1,
-      output: &NxAdapter.transcript/1
-    )
+    {AudioFlow.STT.Bumblebee,
+     model: model,
+     language: if(language == "auto", do: nil, else: language),
+     revision: @whisper[model],
+     serving_options: [model_options: exla()]}
   end
 
   def adapter("qwen3.llm", options) do

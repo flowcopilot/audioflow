@@ -94,8 +94,8 @@ AUDIOFLOW_ML=1 mix phx.server
 A model loads on the first turn that uses it, and all sessions share it.
 The first turn can take minutes to download and compile. Set the graph
 setting `timeout_ms` to allow for this. Models run with EXLA on the CPU.
-Kokoro speaks at 24 kHz and Whisper needs 16 kHz, so put an
-`audio.resample` node between them. The graph keeps the
+Kokoro speaks at 24 kHz. The Whisper node converts its input to 16 kHz, so an
+`audio.resample` node between them is optional. The graph keeps the
 name of the API key variable (`api_key_env`), not the key.
 To add node types, write an `AudioFlow.Graph.Node` module and set the list:
 
@@ -126,11 +126,12 @@ returns passed: false. Saved graphs select their last text-output node and
 respect graph history settings. MCP offers evaluate_conversation with id/script.
 These checks do not grade audio or classify intents with a model.
 
-Remote speech nodes are deepgram.stt, elevenlabs.tts and cartesia.tts. Create a
-starter, select its node, and save model, language code and voice options.
-Cartesia also requires an explicit API version; see [contracts](../docs/providers.md).
-Set only the selected provider's DEEPGRAM_API_KEY, ELEVENLABS_API_KEY or
-CARTESIA_API_KEY in the **server environment**, using your secret manager.
+Remote speech nodes are deepgram.stt, mistral.stt (Voxtral), elevenlabs.tts and
+cartesia.tts. Create a starter, select its node, and save model, language code
+and voice options. Cartesia also requires an explicit API version; see
+[contracts](../docs/providers.md). Set only the selected provider's
+DEEPGRAM_API_KEY, MISTRAL_API_KEY, ELEVENLABS_API_KEY or CARTESIA_API_KEY in the
+**server environment**, using your secret manager.
 Never paste credentials into graphs, scripts or browser/MCP payloads. Speech
 nodes accept neither raw keys nor arbitrary environment-variable names or URLs.
 A missing key disables dashboard runs and returns an MCP prerequisite error.
@@ -146,7 +147,8 @@ ffmpeg -i speech.wav -ac 1 -ar 16000 -f s16le speech.pcm
 
 The runner displays transcripts and PCM byte counts, with per-node WAV playback
 after completion (first 8 MB total PCM; no mixing or resampling). Use the [chat app](../examples/chat/README.md) for interactive voice.
-Deepgram receives an already committed utterance, not continuous mic ingress.
+Speech-to-text nodes receive an already committed utterance, not continuous
+mic ingress. Remote STT nodes use ReqLLM, and whisper.stt uses Bumblebee.
 OpenAI Realtime and Gemini Live emit mixed transcript/text/audio and cannot
 occupy single-output graph nodes. Use their dedicated Session examples in
 [providers.md](../docs/providers.md).

@@ -4,6 +4,9 @@ defmodule AudioFlow.Application do
 
   @impl true
   def start(_type, _args) do
+    # ReqLLM has no Deepgram provider; AudioFlow.STT.ReqLLM uses this one.
+    {:ok, :deepgram} = ReqLLM.Providers.register(AudioFlow.STT.DeepgramProvider)
+
     children =
       [
         {Finch,

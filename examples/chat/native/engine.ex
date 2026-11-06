@@ -3,8 +3,9 @@ defmodule Chat.LocalEngine do
   Loads, swaps, and reports the shared models. One model per stage is loaded.
 
   Whisper and Kokoro run through Bumblebee and Transmuter on the EMLX GPU
-  backend. Qwen3 replies run through the native EMLXAxon generator. Qwen3-ASR
-  runs in the `Chat.Qwen3ASR` sidecar. Sessions call `Chat.Stage`, which reads
+  backend. Whisper uses the common local STT adapter, `AudioFlow.STT.Bumblebee`.
+  Qwen3 replies run through the native EMLXAxon generator. Qwen3-ASR runs on a
+  vLLM server through `AudioFlow.STT.ReqLLM`. Sessions call `Chat.Stage`, which reads
   the current adapter for each turn, so a switch applies to the next turn and
   keeps conversation history.
 
@@ -18,8 +19,8 @@ defmodule Chat.LocalEngine do
   alias AudioFlow.Adapters.Function
   alias AudioFlow.Audio
   alias AudioFlow.NxAdapter
+  alias AudioFlow.STT.Bumblebee, as: LocalSTT
   alias Chat.Catalog
-  alias Chat.Qwen3ASR
   alias EMLXAxon.Qwen3.Loader
 
   @gpu {EMLX.Backend, device: :gpu}
@@ -178,31 +179,21 @@ defmodule Chat.LocalEngine do
     model = Catalog.fetch!(:stt, id)
     silence = %Audio{data: :binary.copy(<<0, 0>>, 16_000), sample_rate: 16_000}
 
-    case model.engine do
-      :whisper ->
-        {:ok, serving} =
-          AudioFlow.Models.whisper(model.repo,
-            load_options: [revision: model.revision],
-            model_options: [backend: @gpu],
-            defn_options: @defn
-          )
+    adapter =
+      case model.engine do
+        :whisper ->
+          {LocalSTT,
+           model: model.repo,
+           revision: model.revision,
+           serving_options: [model_options: [backend: @gpu], defn_options: @defn]}
 
-        {name, pid} = start_serving(:"Chat.STT.#{id}", serving)
+        :req_llm ->
+          base_url = System.get_env("CHAT_ASR_BASE_URL", "http://localhost:8000/v1")
+          {AudioFlow.STT.ReqLLM, model: model.model, base_url: base_url, api_key: "local"}
+      end
 
-        adapter =
-          {NxAdapter,
-           serving: name, input: &NxAdapter.whisper_input/1, output: &NxAdapter.transcript/1}
-
-        Nx.Serving.batched_run(name, NxAdapter.whisper_input(silence))
-        {:ok, %{adapter: adapter, serving: name, pid: pid}}
-
-      :qwen3_asr ->
-        with {:ok, _} <- Qwen3ASR.load(model),
-             {:ok, _} <- Qwen3ASR.transcribe(model, silence.data) do
-          run = &transcribe_qwen3(model, &1, &2)
-          {:ok, %{adapter: {Function, run: run}, sidecar: true}}
-        end
-    end
+    # The first request loads the model, or checks the server, and compiles kernels.
+    with :ok <- warm_up(adapter, silence), do: {:ok, %{adapter: adapter}}
   end
 
   defp load(:llm, id) do
@@ -214,11 +205,13 @@ defmodule Chat.LocalEngine do
     {:ok, %{adapter: {Function, run: &generate(tokenizer, weights, &1, &2)}}}
   end
 
-  defp transcribe_qwen3(model, %Audio{data: data}, emit) do
-    case Qwen3ASR.transcribe(model, data) do
-      {:ok, text} -> emit.(text)
-      {:error, reason} -> {:error, reason}
+  defp warm_up({module, options} = adapter, audio) do
+    with {:ok, _} <-
+           if(module == LocalSTT, do: module.preload(options), else: {:ok, nil}) do
+      AudioFlow.Adapter.run(adapter, audio, fn _ -> :ok end)
     end
+  catch
+    {:adapter_error, _module, reason} -> {:error, reason}
   end
 
   # Streams sentence chunks, so speech starts after the first sentence.
@@ -257,11 +250,10 @@ defmodule Chat.LocalEngine do
 
   defp release(_state, %{pid: pid}), do: DynamicSupervisor.terminate_child(Chat.Servings, pid)
 
-  # The sidecar holds one model. Keep it while the STT stage uses it.
-  defp release(state, %{sidecar: true}) do
-    if not Map.get(state.loaded[:stt] || %{}, :sidecar, false) and
-         Catalog.fetch!(:stt, state.selection.stt).engine != :qwen3_asr,
-       do: Qwen3ASR.stop()
+  # Loads of the same model share one serving. Keep it while the STT stage uses it.
+  defp release(state, %{adapter: {LocalSTT, options} = adapter}) do
+    if get_in(state.loaded, [:stt, :adapter]) != adapter,
+      do: LocalSTT.release(options)
 
     :ok
   end

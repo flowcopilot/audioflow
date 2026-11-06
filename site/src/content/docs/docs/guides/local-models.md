@@ -41,8 +41,8 @@ short spoken-reply instruction. Its format is checked against the pinned
 model's original Jinja template. Other language models need their own prompt
 format.
 
-Whisper input requires 16 kHz PCM. Resample before submission. Whisper output
-is read after utterance transcription. Language model output is streamed and
+Use `AudioFlow.STT.Bumblebee` for Whisper. It converts the input to 16 kHz.
+Whisper output is read after utterance transcription. Language model output is streamed and
 grouped into sentences before synthesis.
 
 ## Kokoro

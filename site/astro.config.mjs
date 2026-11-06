@@ -35,6 +35,7 @@ export default defineConfig({
           label: 'Guides',
           items: [
             'docs/guides/sessions',
+            'docs/guides/transcription',
             'docs/guides/history',
             'docs/guides/local-models',
             'docs/guides/http-inference',

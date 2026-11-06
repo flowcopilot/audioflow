@@ -18,16 +18,6 @@ defmodule AudioFlow.NxAdapter do
     :ok
   end
 
-  @doc "Convert mono PCM to a Whisper input tensor, without hidden resampling."
-  def whisper_input(%AudioFlow.Audio{sample_rate: 16_000, data: data}) do
-    samples = for <<sample::little-signed-16 <- data>>, do: sample / 32_768
-    Nx.tensor(samples, type: :f32)
-  end
-
-  def whisper_input(_), do: raise(ArgumentError, "Whisper requires 16000 Hz mono PCM")
-
-  def transcript(%{chunks: chunks}), do: Enum.map(chunks, & &1.text)
-
   @doc "Convert packed RGB bytes to an HWC unsigned 8-bit image tensor."
   def image_input(%AudioFlow.Image{} = image) do
     if not AudioFlow.Image.valid?(image), do: raise(ArgumentError, "invalid RGB image")

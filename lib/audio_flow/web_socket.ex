@@ -50,6 +50,9 @@ defmodule AudioFlow.WebSocket do
     * `flush` when the client must discard queued playback
     * `turn_started`, `transcript`, `description`, `text`, `done`, and
       `cancelled`, each with the connection-local integer `turn`
+    * `partial_transcript` with unstable `text`, when the STT adapter emits
+      partial results. A `transcript` from a timed segment also has `start_ms`,
+      `end_ms` and `words`
     * `history_cleared`
     * `error` with a `reason`, and a `turn` when a turn failed
 
@@ -213,6 +216,9 @@ defmodule AudioFlow.WebSocket do
       {kind, text} when kind in [:transcript, :description, :text] ->
         reply([json(%{type: kind, turn: id, text: text})], state)
 
+      {kind, value} when kind in [:segment, :partial_transcript] ->
+        reply([json(transcript_message(id, kind, value))], state)
+
       {kind, text, node} when kind in [:transcript, :description, :text] and is_binary(text) ->
         reply([json(%{type: kind, turn: id, text: text, node: node})], state)
 
@@ -318,6 +324,20 @@ defmodule AudioFlow.WebSocket do
   defp reason_text(reason), do: inspect(reason)
 
   defp json(message), do: {:text, JSON.encode!(message)}
+
+  defp transcript_message(id, :partial_transcript, text),
+    do: %{type: :partial_transcript, turn: id, text: text}
+
+  defp transcript_message(id, :segment, segment) do
+    %{
+      type: :transcript,
+      turn: id,
+      text: segment.text,
+      start_ms: segment.start_ms,
+      end_ms: segment.end_ms,
+      words: segment.words
+    }
+  end
 
   defp reply({frames, state}), do: reply(frames, state)
   defp reply([], state), do: {:ok, state}

@@ -9,6 +9,9 @@ Each conversation is one session process. The process that starts a session is
 its owner. The owner receives transcript, text, audio, and terminal events. See
 the `AudioFlow` module for the event format.
 
+A session without `:llm` and `:tts` only transcribes. See
+[Transcription](../transcription/).
+
 ```elixir
 {:ok, session} = AudioFlow.start_session(AudioFlow.Adapters.Demo.options())
 audio = %AudioFlow.Audio{data: <<0, 0>>, sample_rate: 16_000}

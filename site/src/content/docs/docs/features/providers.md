@@ -1,6 +1,6 @@
 ---
 title: Remote speech providers
-description: Deepgram, Cartesia, ElevenLabs, OpenAI Realtime, and Gemini Live adapters.
+description: ReqLLM speech-to-text (Deepgram, Voxtral and others), Cartesia, ElevenLabs, OpenAI Realtime, and Gemini Live adapters.
 ---
 
 These adapters make real network requests. The regression suite uses local HTTP
@@ -15,8 +15,8 @@ accepting the same types). Model and voice IDs must be available to your account
 Keys may be strings or zero-argument functions; functions allow runtime rotation.
 
 ```elixir
-stt = {AudioFlow.Adapters.Deepgram,
-  [model: "nova-3", api_key: fn -> System.fetch_env!("DEEPGRAM_API_KEY") end]}
+stt = {AudioFlow.STT.ReqLLM,
+  [model: "deepgram:nova-3", api_key: fn -> System.fetch_env!("DEEPGRAM_API_KEY") end]}
 
 tts = {AudioFlow.Adapters.Cartesia,
   [model: "sonic-3.6", voice_id: System.fetch_env!("CARTESIA_VOICE_ID"),
@@ -29,13 +29,15 @@ tts = {AudioFlow.Adapters.ElevenLabs,
    api_key: fn -> System.fetch_env!("ELEVENLABS_API_KEY") end]}
 ```
 
-Deepgram uses Listen v1 WebSocket with mono `linear16` PCM at the input
-`Audio.sample_rate`, sends bounded binary frames, then `CloseStream`. It emits
-only final transcript segments, separated by spaces; the concluding Metadata
-message completes the run. Interim results are ignored. This is a streaming
-provider response for an already committed utterance, **not** microphone-to-STT
-live ingress or a persistent recognition session. Optional `:language` is sent
-as a query parameter. Empty final transcripts (silence) emit nothing.
+All speech-to-text from external services goes through ReqLLM with
+`AudioFlow.STT.ReqLLM`, for Mistral Voxtral, Deepgram, OpenAI, Groq, ElevenLabs,
+OpenRouter and self-hosted vLLM servers. See the common STT interface in the
+[README](https://github.com/flowcopilot/audioflow#transcription). ReqLLM has no
+Deepgram provider, so AudioFlow registers `AudioFlow.STT.DeepgramProvider`.
+It sends the utterance as one WAV body to the pre-recorded `POST /v1/listen`
+API, with `model`, optional `language` and `:provider_options` as query
+parameters. With `segments: true`, it requests `utterances=true` and emits each
+utterance as a timed segment. Deepgram interim results are not used.
 
 Cartesia uses `/tts/bytes` and ElevenLabs uses `/text-to-speech/:voice_id/stream`.
 Both stream raw signed 16-bit little-endian mono PCM as `AudioFlow.Audio`, default
@@ -161,7 +163,7 @@ Wire shapes were checked against official documentation on 2026-11-03:
 
 - [OpenAI Realtime conversations](https://developers.openai.com/api/docs/guides/realtime-conversations)
 - [Gemini Live WebSocket reference](https://ai.google.dev/api/live)
-- [Deepgram Listen streaming reference](https://developers.deepgram.com/reference/speech-to-text/listen-streaming)
+- [Deepgram pre-recorded utterances](https://developers.deepgram.com/docs/utterances)
 - [Cartesia bytes TTS](https://docs.cartesia.ai/api-reference/tts/bytes)
 - [ElevenLabs streaming TTS](https://elevenlabs.io/docs/api-reference/text-to-speech/stream)
 

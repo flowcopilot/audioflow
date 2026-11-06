@@ -1,7 +1,6 @@
 defmodule AudioFlow.RemoteProvidersTest do
   use ExUnit.Case, async: true
   alias AudioFlow.Adapters.Cartesia
-  alias AudioFlow.Adapters.Deepgram
   alias AudioFlow.Adapters.ElevenLabs
   alias AudioFlow.Adapters.GeminiLive
   alias AudioFlow.Adapters.OpenAIRealtime
@@ -260,30 +259,6 @@ defmodule AudioFlow.RemoteProvidersTest do
     end
   end
 
-  test "Deepgram sends PCM and CloseStream, excludes interim results and retains final segments" do
-    task = start_run(Deepgram, socket_options(), 16_000)
-    assert_receive {:connected, socket}
-    assert_receive {:handshake, _, query, headers}
-    assert URI.decode_query(query)["encoding"] == "linear16"
-    assert {"authorization", "Token test-key"} in headers
-    assert_receive {:client, ^socket, :binary, <<1, 0, 2, 0>>}
-    assert_receive {:client, ^socket, :text, %{"type" => "CloseStream"}}
-
-    for {text, final} <- [{"draft", false}, {"Hello", true}, {"world", true}] do
-      event(socket, %{
-        type: "Results",
-        is_final: final,
-        channel: %{alternatives: [%{transcript: text}]}
-      })
-    end
-
-    event(socket, %{type: "Metadata"})
-    assert :ok = Task.await(task)
-    assert_receive {:output, "Hello"}
-    assert_receive {:output, " world"}
-    refute_receive {:output, "draft"}
-  end
-
   test "remote errors, malformed events, incomplete close, and response budget fail" do
     for {message, extra, expected} <- [
           {{:event, %{error: %{message: "private"}}}, [], :remote_error},
@@ -327,12 +302,7 @@ defmodule AudioFlow.RemoteProvidersTest do
     end
   end
 
-  test "Deepgram errors and Gemini interruptions fail without fabricated output" do
-    task = start_run(Deepgram, socket_options(), 16_000)
-    assert_receive {:connected, socket}
-    event(socket, %{type: "Error", description: "private"})
-    assert {:error, :remote_error} = Task.await(task)
-
+  test "Gemini interruptions fail without fabricated output" do
     task = start_run(GeminiLive, socket_options(), 16_000)
     assert_receive {:connected, socket}
     event(socket, %{serverContent: %{interrupted: true}})

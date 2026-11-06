@@ -82,6 +82,10 @@ defmodule AudioFlow.Recording do
        when kind in [:text, :transcript, :description] and is_binary(value),
        do: %{kind: Atom.to_string(kind), node: node_id(node), text: value}
 
+  # Partial transcripts are superseded by final text, so they are not saved.
+  defp recorded_event(recorder, :segment, %AudioFlow.Transcript.Segment{text: text}, node),
+    do: recorded_event(recorder, :transcript, text, node)
+
   defp recorded_event(recorder, :audio, value, node) do
     if recorder.audio and Audio.valid?(value) do
       %{

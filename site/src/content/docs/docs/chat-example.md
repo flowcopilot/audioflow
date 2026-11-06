@@ -13,9 +13,8 @@ Apple Silicon Mac with macOS 26.2 or later.
 
 ## Run
 
-The repository `mise.toml` pins Erlang, Elixir, Node.js, and uv. uv runs the
-separate Qwen3-ASR Python process. The reply models download through Elixir's
-`hf_hub` and need no Python. Kokoro also needs `espeak-ng`, which mise does not
+The repository `mise.toml` pins Erlang, Elixir, Node.js, and uv. The models
+download through Elixir's `hf_hub` and need no Python. Kokoro also needs `espeak-ng`, which mise does not
 provide.
 
 ```sh
@@ -37,7 +36,7 @@ A switch applies to the next turn and keeps the conversation history.
 | Stage | Models | Runtime |
 | --- | --- | --- |
 | Speech recognition | Whisper tiny, small, large v3 turbo | Bumblebee on the EMLX GPU backend |
-| Speech recognition | Qwen3-ASR 0.6B and 1.7B, 8-bit | mlx-audio in a Python process managed by uv |
+| Speech recognition | Qwen3-ASR 0.6B and 1.7B | a vLLM server at `CHAT_ASR_BASE_URL`, through ReqLLM |
 | Reply | Qwen3 0.6B, 1.7B, 4B, and 8B, 4-bit | Native EMLXAxon Qwen3 generation |
 | Speech | Kokoro 82M, four voices | Transmuter on the EMLX GPU backend |
 
@@ -52,10 +51,13 @@ Measured on an Apple M5 with 24 GB of memory, after the first turn:
 | Models | First text | First audio |
 | --- | ---: | ---: |
 | Whisper small, Qwen3 1.7B | 0.9 s | 1.5 s |
-| Qwen3-ASR 0.6B, Qwen3 0.6B | 0.3 s | 0.8 s |
 
 The first turn after a model switch compiles the new model. It took up to 6 s
 to the first audio.
+
+Bumblebee has no Qwen3-ASR model, so Qwen3-ASR needs a separate vLLM server,
+for example `vllm serve Qwen/Qwen3-ASR-1.7B`. Set `CHAT_ASR_BASE_URL` when it
+does not listen on `http://localhost:8000/v1`.
 
 ## Model cache
 
