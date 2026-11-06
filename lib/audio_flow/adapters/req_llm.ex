@@ -29,6 +29,13 @@ defmodule AudioFlow.Adapters.ReqLLM do
   alias ReqLLM.Streaming.SSE
   alias ReqLLM.ToolCall
 
+  @impl AudioFlow.Adapter
+  def with_context(options, context) do
+    execution = Keyword.get(options, :audio_flow, [])
+    context = Map.merge(Keyword.get(execution, :tool_context, %{}), context)
+    Keyword.put(options, :audio_flow, Keyword.put(execution, :tool_context, context))
+  end
+
   @impl true
   def run(input, options, emit) do
     {execution, opts} = Keyword.pop(options, :audio_flow, [])

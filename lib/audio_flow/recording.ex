@@ -82,7 +82,6 @@ defmodule AudioFlow.Recording do
        when kind in [:text, :transcript, :description] and is_binary(value),
        do: %{kind: Atom.to_string(kind), node: node_id(node), text: value}
 
-  # Partial transcripts are superseded by final text, so they are not saved.
   defp recorded_event(recorder, :segment, %AudioFlow.Transcript.Segment{text: text}, node),
     do: recorded_event(recorder, :transcript, text, node)
 
@@ -123,7 +122,7 @@ defmodule AudioFlow.Recording do
 
   defp finish(recorder, status) do
     events = Enum.reverse(recorder.events)
-    # One complete stream per kind/node; text never enters an artifact as chunks.
+
     grouped =
       Enum.filter(events, &Map.has_key?(&1, :text))
       |> Enum.group_by(&{&1.kind, &1.node}, & &1.text)

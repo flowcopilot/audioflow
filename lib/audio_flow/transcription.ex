@@ -152,7 +152,6 @@ defmodule AudioFlow.Transcription do
     end)
   end
 
-  # Push one detector frame at a time, so an utterance ends at the current offset.
   defp utterances(%Audio{data: data, sample_rate: rate} = audio, vad, endpoint_options) do
     input = VoiceInput.new(vad, endpoint_options)
 

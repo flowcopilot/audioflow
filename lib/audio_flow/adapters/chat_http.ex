@@ -7,6 +7,12 @@ defmodule AudioFlow.Adapters.ChatHTTP do
 
   alias AudioFlow.Adapters.ReqLLM
 
+  @impl AudioFlow.Adapter
+  def with_context(options, context) do
+    context = Map.merge(Keyword.get(options, :tool_context, %{}), context)
+    Keyword.put(options, :tool_context, context)
+  end
+
   @impl true
   def run(input, options, emit) do
     endpoint = Keyword.fetch!(options, :endpoint)

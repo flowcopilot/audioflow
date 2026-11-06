@@ -6,14 +6,8 @@ defmodule AudioFlow.RecordingRuntimeTest do
   alias AudioFlow.Recording
   alias AudioFlow.Recording.Store
 
-  test "owner consumes actual session success, failure and cancellation events" do
-    root =
-      Path.join(
-        System.tmp_dir!(),
-        "audioflow-runtime-recorder-#{System.unique_integer([:positive])}"
-      )
-
-    on_exit(fn -> File.rm_rf!(root) end)
+  @tag :tmp_dir
+  test "owner consumes actual session success, failure and cancellation events", %{tmp_dir: root} do
     {:ok, store} = Store.new(root)
     parent = self()
 

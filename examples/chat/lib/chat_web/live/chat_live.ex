@@ -16,7 +16,6 @@ defmodule ChatWeb.ChatLive do
   alias AudioFlow.Text
   alias Chat.Catalog
   alias Chat.Setup
-  alias Chat.Wav
   alias ChatWeb.Components.UI.Badge
   alias ChatWeb.Components.UI.Button
   alias ChatWeb.Components.UI.NativeSelect
@@ -82,7 +81,6 @@ defmodule ChatWeb.ChatLive do
     end
   end
 
-  # A new recording interrupts the current reply.
   def handle_event("recording", _params, socket) do
     socket = cancel(socket) |> add_message("user", "", pending: true, live: true)
     id = List.last(socket.assigns.messages).id
@@ -336,7 +334,6 @@ defmodule ChatWeb.ChatLive do
   def handle_info({AudioFlow, _, _, _}, socket), do: {:noreply, socket}
   def handle_info({:models, models}, socket), do: {:noreply, assign(socket, models: models)}
 
-  # A partial transcription finished.
   def handle_info({ref, result}, %{assigns: %{recording: %{task: ref} = recording}} = socket) do
     Process.demonitor(ref, [:flush])
 
@@ -355,7 +352,6 @@ defmodule ChatWeb.ChatLive do
       ),
       do: {:noreply, assign(socket, recording: %{r | task: nil})}
 
-  # Results of partial transcriptions for a recording that already ended.
   def handle_info({ref, _}, socket) when is_reference(ref) do
     Process.demonitor(ref, [:flush])
     {:noreply, socket}
@@ -404,7 +400,13 @@ defmodule ChatWeb.ChatLive do
       if socket.assigns.rate,
         do: %{
           media_type: "audio/wav",
-          base64: Base.encode64(Wav.encode(socket.assigns.pcm, socket.assigns.rate))
+          base64:
+            Base.encode64(
+              AudioFlow.Wav.encode(%AudioFlow.Audio{
+                data: IO.iodata_to_binary(socket.assigns.pcm),
+                sample_rate: socket.assigns.rate
+              })
+            )
         }
 
     note =
@@ -479,7 +481,6 @@ defmodule ChatWeb.ChatLive do
     )
   end
 
-  # One partial transcription runs at a time, over the complete recording so far.
   defp maybe_transcribe(%{assigns: %{recording: %{invalid: true}}} = socket), do: socket
 
   defp maybe_transcribe(%{assigns: %{settings: %{"mode" => mode}}} = socket) when mode != "local",
@@ -543,7 +544,6 @@ defmodule ChatWeb.ChatLive do
     assign(socket, messages: messages)
   end
 
-  # The newest user message that is not the live recording.
   defp update_last(socket, role, fun) do
     live = socket.assigns.recording && socket.assigns.recording.id
 
@@ -606,15 +606,7 @@ defmodule ChatWeb.ChatLive do
         <form id="configuration" phx-submit="configure" class="flex flex-wrap gap-2">
           <label>Pipeline
           <select name="mode"><option
-            :for={
-              {id, label} <- [
-                {"demo", "Synthetic demo"},
-                {"local", "Local Apple MLX"},
-                {"remote", "Deepgram → Chat HTTP → TTS"},
-                {"openai", "OpenAI speech-to-speech"},
-                {"gemini", "Gemini speech-to-speech"}
-              ]
-            }
+            :for={{id, label} <- Setup.modes()}
             value={id}
             selected={@settings["mode"] == id}
           >
@@ -622,7 +614,7 @@ defmodule ChatWeb.ChatLive do
           </option></select></label>
           <label>Remote chain language
           <select name="language"><option
-            :for={lang <- ~w(en es fr de ro)}
+            :for={lang <- Setup.languages()}
             value={lang}
             selected={@settings["language"] == lang}
           >
@@ -630,7 +622,7 @@ defmodule ChatWeb.ChatLive do
           </option></select></label>
           <label>Remote TTS
           <select name="tts"><option
-            :for={tts <- ~w(elevenlabs cartesia)}
+            :for={tts <- Setup.tts_providers()}
             value={tts}
             selected={@settings["tts"] == tts}
           >
@@ -638,7 +630,7 @@ defmodule ChatWeb.ChatLive do
           </option></select></label>
           <label>OpenAI voice
           <select name="voice"><option
-            :for={voice <- ~w(marin cedar)}
+            :for={voice <- Setup.voices()}
             value={voice}
             selected={@settings["voice"] == voice}
           >

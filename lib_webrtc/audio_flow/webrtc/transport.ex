@@ -9,8 +9,7 @@ defmodule AudioFlow.WebRTC.Transport do
   use GenServer
   @behaviour AudioFlow.Output
   alias AudioFlow.Audio
-  alias AudioFlow.Telephony.MuLaw
-  alias AudioFlow.Telephony.RateConverter
+  alias AudioFlow.Telephony.Packetizer
   alias AudioFlow.WebRTC
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
@@ -37,9 +36,7 @@ defmodule AudioFlow.WebRTC.Transport do
        limit: limit,
        key: nil,
        queue: :queue.new(),
-       pending: <<>>,
-       rate: nil,
-       converter: %RateConverter{},
+       packetizer: %Packetizer{},
        timer: nil,
        sealed: false,
        pts: 0,
@@ -84,15 +81,9 @@ defmodule AudioFlow.WebRTC.Transport do
   end
 
   def handle_call({:finish, _}, _from, s) do
-    {tail, _} =
-      if s.rate == 16_000,
-        do: RateConverter.down(:binary.copy(<<0>>, 60), s.converter),
-        else: {<<>>, s.converter}
+    {packets, packetizer} = Packetizer.finish(s.packetizer)
 
-    data = s.pending <> MuLaw.encode(tail)
-    padding = rem(160 - rem(byte_size(data), 160), 160)
-
-    case enqueue(data <> :binary.copy(<<255>>, padding), s) do
+    case enqueue(packets, packetizer, s) do
       {:ok, s} ->
         # Session invokes finish inside its server. Keep draining asynchronously
         # so that server can still accept cancellation and deadline messages.
@@ -138,7 +129,7 @@ defmodule AudioFlow.WebRTC.Transport do
       not Audio.valid?(audio) or audio.sample_rate not in [8000, 16_000] ->
         :unsupported_pcm
 
-      s.sealed or (s.rate != nil and s.rate != audio.sample_rate) ->
+      s.sealed or (s.packetizer.rate != nil and s.packetizer.rate != audio.sample_rate) ->
         :output_format_changed
 
       byte_size(audio.data) > s.limit * if(audio.sample_rate == 8000, do: 320, else: 640) ->
@@ -150,36 +141,21 @@ defmodule AudioFlow.WebRTC.Transport do
   end
 
   defp push_audio(audio, s) do
-    {data, converter} =
-      if audio.sample_rate == 16_000,
-        do: RateConverter.down(audio.data, s.converter),
-        else: {audio.data, s.converter}
+    {packets, packetizer} = Packetizer.push(audio, s.packetizer)
 
-    case enqueue(s.pending <> MuLaw.encode(data), %{
-           s
-           | converter: converter,
-             rate: audio.sample_rate
-         }) do
+    case enqueue(packets, packetizer, s) do
       {:ok, s} -> {:reply, :ok, schedule(s)}
       {:error, reason} -> {:reply, {:error, reason}, s}
     end
   end
 
-  defp enqueue(data, s) do
-    count = div(byte_size(data) + 159, 160)
+  defp enqueue(packets, packetizer, s) do
+    count = length(packets) + if(packetizer.pending == <<>>, do: 0, else: 1)
 
     if :queue.len(s.queue) + count > s.limit do
       {:error, :queue_limit}
     else
-      packets = for <<packet::binary-size(160) <- data>>, do: packet
-      rest = rem(byte_size(data), 160)
-
-      {:ok,
-       %{
-         s
-         | queue: Enum.reduce(packets, s.queue, &:queue.in/2),
-           pending: binary_part(data, byte_size(data) - rest, rest)
-       }}
+      {:ok, %{s | queue: Enum.reduce(packets, s.queue, &:queue.in/2), packetizer: packetizer}}
     end
   end
 
@@ -202,11 +178,9 @@ defmodule AudioFlow.WebRTC.Transport do
     %{
       s
       | queue: :queue.new(),
-        pending: <<>>,
-        converter: %RateConverter{},
+        packetizer: %Packetizer{},
         timer: nil,
         sealed: false,
-        rate: nil,
         error: nil
     }
   end

@@ -87,9 +87,11 @@ defmodule AudioFlowUI.ExamplesTest do
     assert {:error, _} = Examples.evaluate(Examples.graph(), String.duplicate("x", 16_385))
   end
 
-  test "recording is opt in, output is email redacted and artifacts are readable and deletable" do
+  @tag :tmp_dir
+  test "recording is opt in, output is email redacted and artifacts are readable and deletable",
+       %{tmp_dir: tmp_dir} do
     original = Application.get_env(:audio_flow_ui, :recordings_dir)
-    dir = Path.join(System.tmp_dir!(), "ui-recording-#{System.unique_integer([:positive])}")
+    dir = Path.join(tmp_dir, "recordings")
 
     on_exit(fn ->
       if original,

@@ -83,7 +83,6 @@ export const Recorder = {
     window.dispatchEvent(new CustomEvent("chat:flush"));
 
     try {
-      // Load the worklet while the browser opens the microphone.
       const context = new AudioContext();
       this.targetRate = Number(this.el.dataset.rate || INPUT_RATE);
       if (context.sampleRate < this.targetRate) { await context.close(); throw new Error("Capture sample rate is below required PCM rate"); }
@@ -111,7 +110,6 @@ export const Recorder = {
     }
   },
 
-  // Conversion is deterministic per sample, so earlier samples do not change.
   send(event) {
     const capture = this.capture;
     if (!capture) return;
@@ -199,7 +197,6 @@ export const Player = {
 
     this.handleEvent("output_control", (command) => {
       const epoch = this.epoch;
-      // Serialize actual Web Audio operations. A resume never overtakes suspend.
       this.commands = this.commands.then(async () => {
         if (epoch !== this.epoch || command.token !== this.token) return;
         try {

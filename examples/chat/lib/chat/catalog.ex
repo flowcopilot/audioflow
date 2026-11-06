@@ -7,6 +7,10 @@ defmodule Chat.Catalog do
   about twice its f16 download. Compiled kernels and caches add to this.
   """
 
+  @defaults %{stt: "whisper-small", llm: "qwen3-1.7b", voice: "af_heart"}
+
+  def defaults, do: @defaults
+
   @stt [
     %{
       id: "whisper-tiny",

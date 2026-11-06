@@ -6,12 +6,12 @@ defmodule AudioFlow.RTVI.WebSocket do
   Pipecat's protobuf WebSocket media framing. See `docs/transports.md`.
   """
   @behaviour WebSock
-  alias AudioFlow.WebSocket, as: PCM
+  alias AudioFlow.Transport.Connection
 
   @impl true
   def init(options) do
-    case PCM.init(options) do
-      {:push, _ready, pcm} -> {:ok, %{pcm: pcm, ready: false, rate: nil, request: nil}}
+    case Connection.init(options) do
+      {:events, _ready, pcm} -> {:ok, %{pcm: pcm, ready: false, rate: nil, request: nil}}
       other -> other
     end
   end
@@ -62,7 +62,7 @@ defmodule AudioFlow.RTVI.WebSocket do
          Map.get(options, "audio_response", true) == true and
          Map.keys(options) -- ["run_immediately", "audio_response"] == [] do
       # RTVI run_immediately interrupts the current response before submitting.
-      case PCM.handle_in({JSON.encode!(%{type: "cancel"}), opcode: :text}, state.pcm)
+      case Connection.command(:cancel, state.pcm)
            |> translate(state) do
         {:ok, state} -> submit(content, id, state, [])
         {:push, frames, state} -> submit(content, id, state, frames)
@@ -77,10 +77,7 @@ defmodule AudioFlow.RTVI.WebSocket do
 
   defp submit(content, id, state, frames) do
     case translate(
-           PCM.handle_in(
-             {JSON.encode!(%{type: "text", text: content}), opcode: :text},
-             state.pcm
-           ),
+           Connection.command({:text, content}, state.pcm),
            %{state | request: id}
          ) do
       {:ok, state} -> reply(frames, state)
@@ -89,16 +86,18 @@ defmodule AudioFlow.RTVI.WebSocket do
   end
 
   @impl true
-  def handle_info(message, state), do: translate(PCM.handle_info(message, state.pcm), state)
+  def handle_info(message, state),
+    do: translate(Connection.handle_info(message, state.pcm), state)
+
   @impl true
-  def terminate(reason, state), do: PCM.terminate(reason, state.pcm)
+  def terminate(reason, state), do: Connection.terminate(reason, state.pcm)
 
   defp translate({:ok, pcm}, state), do: {:ok, %{state | pcm: pcm}}
 
   defp translate({:stop, reason, close, pcm}, state),
     do: {:stop, reason, close, %{state | pcm: pcm}}
 
-  defp translate({:push, frames, pcm}, state) do
+  defp translate({:events, frames, pcm}, state) do
     {frames, state} =
       Enum.reduce(frames, {[], %{state | pcm: pcm}}, fn frame, {frames, state} ->
         {new, state} = outgoing(frame, state)
@@ -109,7 +108,7 @@ defmodule AudioFlow.RTVI.WebSocket do
   end
 
   # Keep custom media events below the SDK transport's 64 KB message bound.
-  defp outgoing({:binary, data}, state) do
+  defp outgoing({:audio, data}, state) do
     frames =
       for chunk <- audio_chunks(data),
           do:
@@ -122,21 +121,21 @@ defmodule AudioFlow.RTVI.WebSocket do
     {frames, state}
   end
 
-  defp outgoing({:text, data}, state) do
-    case JSON.decode!(data) do
-      %{"type" => "output_format", "sample_rate" => rate} ->
+  defp outgoing({:event, message}, state) do
+    case message do
+      %{type: :output_format, sample_rate: rate} ->
         {[], %{state | rate: rate}}
 
-      %{"type" => "text", "text" => text} ->
+      %{type: :text, text: text} ->
         {[json("llm-raw-text", %{text: text})], state}
 
-      %{"type" => "flush"} ->
+      %{type: :flush} ->
         {[json("bot-interrupted", nil)], state}
 
-      %{"type" => "error", "reason" => reason} = message when not is_map_key(message, "turn") ->
+      %{type: :error, reason: reason} = message when not is_map_key(message, :turn) ->
         {[json("error-response", %{error: reason}, state.request || "")], state}
 
-      %{"type" => "error", "reason" => reason} ->
+      %{type: :error, reason: reason} ->
         {[json("error", %{error: reason, fatal: false})], state}
 
       _ ->

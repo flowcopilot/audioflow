@@ -105,7 +105,10 @@ defmodule AudioFlow.TelephonyReorderTest do
     audio = %AudioFlow.Audio{sample_rate: 8000, data: :binary.copy(<<0>>, 960)}
 
     assert {:ok, state} =
-             Handler.handle_info({AudioFlow.WebSocket, :push, key, audio, {self(), tag}}, state)
+             Handler.handle_info(
+               {AudioFlow.Transport.Connection, :push, key, audio, {self(), tag}},
+               state
+             )
 
     assert_receive {^tag, :ok}
     assert :queue.len(state.playout) == 3
@@ -121,11 +124,11 @@ defmodule AudioFlow.TelephonyReorderTest do
     {timer, old_token} = state.playout_timer
 
     assert {:push, [{:text, clear}], state} =
-             Handler.handle_info({AudioFlow.WebSocket, :flush, key}, state)
+             Handler.handle_info({AudioFlow.Transport.Connection, :flush, key}, state)
 
     assert JSON.decode!(clear) == %{"event" => "clear"}
     assert :queue.is_empty(state.playout)
-    assert state.pending == <<>> and state.playout_timer == nil
+    assert state.playout_timer == nil
     assert Process.read_timer(timer) == false
     assert {:ok, ^state} = Handler.handle_info({Handler, :playout, old_token}, state)
   end
@@ -138,7 +141,7 @@ defmodule AudioFlow.TelephonyReorderTest do
 
     assert {:stop, {:protocol_error, :playout_limit}, _, state} =
              Handler.handle_info(
-               {AudioFlow.WebSocket, :push, {state.pcm.session, ref}, audio,
+               {AudioFlow.Transport.Connection, :push, {state.pcm.session, ref}, audio,
                 {self(), make_ref()}},
                state
              )

@@ -1,12 +1,7 @@
 defmodule Chat.Engine do
   @moduledoc "Profile boundary: only native builds start model processes."
   @compile {:no_warn_undefined, Chat.LocalEngine}
-  def native?,
-    do:
-      System.get_env(
-        "CHAT_PROFILE",
-        if(:os.type() == {:unix, :darwin}, do: "native", else: "demo")
-      ) == "native"
+  def native?, do: Application.fetch_env!(:chat, :native_profile)
 
   def child_spec(_) do
     if native?(),
@@ -25,7 +20,7 @@ defmodule Chat.Engine do
     if native?(),
       do: Chat.LocalEngine.status(),
       else: %{
-        selection: %{stt: "whisper-small", llm: "qwen3-1.7b", voice: "af_heart"},
+        selection: Chat.Catalog.defaults(),
         status: %{},
         memory_gb: 0
       }

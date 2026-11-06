@@ -107,7 +107,6 @@ defmodule AudioFlowUI.Runs do
     }
   end
 
-  # Nodes with text events, except those whose text goes on to another text node.
   defp reply_nodes(graph) do
     graph = Graph.normalize(graph)
     types = Map.new(AudioFlowUI.node_types(), &{&1["type"], &1})

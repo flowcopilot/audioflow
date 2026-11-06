@@ -17,6 +17,12 @@ defmodule AudioFlow.Graph.Nodes.Providers do
   def providers, do: @providers
 
   @impl true
+  def prerequisites(type, _options) do
+    {_module, env} = Map.fetch!(@providers, type)
+    if System.get_env(env) in [nil, ""], do: ["set #{env} in the server environment"], else: []
+  end
+
+  @impl true
   def nodes do
     for {type, {_adapter, env}} <- Enum.sort(@providers) do
       stt? = String.ends_with?(type, ".stt")

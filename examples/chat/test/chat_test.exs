@@ -6,6 +6,19 @@ defmodule ChatTest do
   alias AudioFlow.Recording.Store
   @endpoint ChatWeb.Endpoint
 
+  @moduletag :tmp_dir
+
+  setup %{tmp_dir: tmp_dir} do
+    original = System.get_env("TMPDIR")
+    System.put_env("TMPDIR", tmp_dir)
+
+    on_exit(fn ->
+      if original, do: System.put_env("TMPDIR", original), else: System.delete_env("TMPDIR")
+    end)
+
+    :ok
+  end
+
   test "Linux demo has no model process and runs a complete session" do
     refute Chat.Engine.native?()
     refute Code.ensure_loaded?(EMLX)

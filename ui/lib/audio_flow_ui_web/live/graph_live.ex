@@ -190,7 +190,6 @@ defmodule AudioFlowUIWeb.GraphLive do
     )
   end
 
-  # The selection is cleared when its node or edge is no longer in the graph.
   defp selection({:node, id} = selected, nodes, _edges),
     do: if(Enum.any?(nodes, &(&1.id == id)), do: selected)
 
@@ -204,7 +203,6 @@ defmodule AudioFlowUIWeb.GraphLive do
 
   defp selected_node(_assigns), do: nil
 
-  # A node without a position goes in the column of its longest path from an input.
   defp layout(graph) do
     nodes = for %{"id" => id} = node <- graph["nodes"] || [], is_binary(id), do: node
     sources = Enum.group_by(graph["edges"] || [], & &1["to"], & &1["from"])

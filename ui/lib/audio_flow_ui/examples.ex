@@ -61,19 +61,19 @@ defmodule AudioFlowUI.Examples do
     }
   end
 
-  def graph do
+  def graph, do: graph("demo.llm")
+
+  defp graph(reply_type) do
     %{
       "nodes" => [
         %{"id" => "in", "type" => "input.text"},
-        %{"id" => "reply", "type" => "demo.llm"}
+        %{"id" => "reply", "type" => reply_type}
       ],
       "edges" => [%{"from" => "in", "to" => "reply"}],
       "settings" => %{"history" => true}
     }
   end
 
-  # Evaluation uses one real session and its actual event streams. Assertions are
-  # evaluated here so the production dashboard does not depend on ExUnit.
   def evaluate(graph, script, record? \\ false) do
     with [] <- AudioFlowUI.errors(graph) ++ AudioFlowUI.Prerequisites.errors(graph),
          {:ok, steps} <- parse(script),
@@ -158,8 +158,6 @@ defmodule AudioFlowUI.Examples do
   defp persist(nil, _, _), do: {nil, nil}
 
   defp persist(recorder, session, result) do
-    # The evaluator returns original events in mailbox order. Record those
-    # completed streams, then the actual terminal metrics. No input/audio stored.
     messages = result.events ++ [{:done, result.metrics}]
 
     Enum.reduce(messages, {nil, recorder}, fn event, {id, state} ->
@@ -170,22 +168,29 @@ defmodule AudioFlowUI.Examples do
     end)
   end
 
-  def workflow do
-    flow =
-      Conversation.new(
-        %{"triage" => graph(), "billing" => graph()},
-        "triage",
-        %{{"triage", {:intent, "billing"}} => "billing"},
-        AudioFlowUI.catalog()
-      )
+  defmodule WorkflowNode do
+    @moduledoc false
+    @behaviour AudioFlow.Graph.Node
 
-    owner = self()
-    # A deterministic blocking adapter gives the owner a real in-flight turn
-    # to stage a handoff; it performs no model inference.
-    plan = flow.states["triage"]
-    step = plan.steps["reply"]
+    @impl true
+    def nodes do
+      [
+        %{
+          type: "example.handoff",
+          title: "Scripted handoff",
+          description: "Blocks until the example owner selects a turn outcome.",
+          input: :text,
+          output: :text,
+          history: true,
+          options: []
+        }
+      ]
+    end
 
-    adapter =
+    @impl true
+    def adapter("example.handoff", _options) do
+      owner = self()
+
       {AudioFlow.Adapters.Function,
        run: fn _, emit ->
          send(owner, {:workflow_ready, self()})
@@ -197,8 +202,21 @@ defmodule AudioFlowUI.Examples do
            5_000 -> {:error, :timeout}
          end
        end}
+    end
+  end
 
-    flow = put_in(flow.states["triage"].steps["reply"], %{step | adapter: adapter})
+  def workflow do
+    triage = graph("example.handoff")
+    catalog = Map.merge(AudioFlowUI.catalog(), Graph.catalog([WorkflowNode]))
+
+    flow =
+      Conversation.new(
+        %{"triage" => triage, "billing" => graph()},
+        "triage",
+        %{{"triage", {:intent, "billing"}} => "billing"},
+        catalog
+      )
+
     {:ok, session} = Conversation.start_session(flow)
 
     try do

@@ -344,7 +344,6 @@ defmodule AudioFlow.VoiceInput do
     end
   end
 
-  # Isolate exceptions and kill slow inference. No linked task can crash the caller.
   defp predict_turn(state) do
     {module, model_state} = state.turn_detector
     owner = self()
