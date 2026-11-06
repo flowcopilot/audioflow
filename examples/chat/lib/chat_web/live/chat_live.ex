@@ -8,10 +8,16 @@ defmodule ChatWeb.ChatLive do
   message shows that partial text. When recording stops, the complete audio is
   one session turn. Reply audio is pushed to the browser as it arrives, and the
   complete reply is kept as a WAV file for replay.
+
+  The full duplex mode (local Moshi) has no turns. It uses `AudioFlow.Duplex`:
+  the browser sends 80 ms chunks of 24 kHz PCM continuously, and the model
+  audio and text come back at the same time. Each conversation has a
+  generation number; events from an earlier generation are ignored.
   """
   use Phoenix.LiveView
 
   alias AudioFlow.Audio
+  alias AudioFlow.Duplex
   alias AudioFlow.Recording.Store
   alias AudioFlow.Text
   alias Chat.Catalog
@@ -28,27 +34,35 @@ defmodule ChatWeb.ChatLive do
 
   # Start a partial transcription after this much new audio (0.5 s).
   @partial_bytes 16_000
+  # One duplex input chunk: 80 ms of 24 kHz mono s16le PCM.
+  @call_chunk_bytes 3_840
+  # Model text after this much silence starts a new message.
+  @call_segment_ms 1_500
+  @call_max_messages 200
+  @call_max_message_bytes 4_000
 
   @impl true
   def mount(_params, _session, socket) do
-    session =
+    settings = Setup.defaults()
+
+    {session, setup_error} =
       if connected?(socket) do
         Phoenix.PubSub.subscribe(Chat.PubSub, Chat.Engine.topic())
         Process.send_after(self(), :retention, 60_000)
-
-        {:ok, session} =
-          AudioFlow.start_session(
-            elem(Setup.options(Setup.defaults()), 1) ++ [output: {Chat.Output, self()}]
-          )
-
-        session
+        open_session(settings)
+      else
+        {nil, nil}
       end
 
     {:ok,
      assign(socket,
        session: session,
-       settings: Setup.defaults(),
-       setup_error: nil,
+       settings: settings,
+       setup_error: setup_error,
+       call: nil,
+       call_status: "idle",
+       call_error: nil,
+       generation: 0,
        capture: nil,
        artifacts: [],
        playback_turn: nil,
@@ -71,7 +85,9 @@ defmodule ChatWeb.ChatLive do
 
   @impl true
   def handle_event("send", %{"text" => text}, socket) do
-    case if(Setup.speech?(socket.assigns.settings), do: "", else: String.trim(text)) do
+    settings = socket.assigns.settings
+
+    case if(Setup.speech?(settings) or Setup.duplex?(settings), do: "", else: String.trim(text)) do
       "" ->
         {:reply, %{ok: false}, socket}
 
@@ -80,6 +96,10 @@ defmodule ChatWeb.ChatLive do
         submit(socket, %Text{data: text})
     end
   end
+
+  def handle_event(event, _params, %{assigns: %{session: nil}} = socket)
+      when event in ["recording", "pause", "resume", "capture"],
+      do: {:noreply, assign(socket, setup_error: "Not available without a turn-based session.")}
 
   def handle_event("recording", _params, socket) do
     socket = cancel(socket) |> add_message("user", "", pending: true, live: true)
@@ -157,8 +177,55 @@ defmodule ChatWeb.ChatLive do
   def handle_event("new_chat", _params, socket) do
     socket = cancel(socket)
     if socket.assigns.session, do: AudioFlow.clear_history(socket.assigns.session)
-    {:noreply, assign(socket, messages: [])}
+    call = socket.assigns.call && %{socket.assigns.call | reply_id: nil}
+    {:noreply, assign(socket, messages: [], call: call)}
   end
+
+  def handle_event("call_start", _params, socket) do
+    cond do
+      not Setup.duplex?(socket.assigns.settings) ->
+        {:reply, %{ok: false, error: "Select the full duplex pipeline first."}, socket}
+
+      socket.assigns.call ->
+        {:reply, %{ok: false, error: "A conversation is already active."}, socket}
+
+      true ->
+        # The adapter and endpoint come from the server settings, not from params.
+        case Setup.options(socket.assigns.settings) do
+          {:ok, [duplex: adapter]} -> start_call(socket, adapter)
+          {:error, message} -> {:reply, %{ok: false, error: message}, call_error(socket, message)}
+        end
+    end
+  end
+
+  def handle_event(
+        "call_audio",
+        %{"generation" => generation, "pcm" => pcm},
+        %{assigns: %{call: %{generation: generation, ready: true} = call}} = socket
+      )
+      when is_binary(pcm) do
+    with true <- byte_size(pcm) <= div(@call_chunk_bytes * 4, 3) + 4,
+         {:ok, <<_::binary-size(@call_chunk_bytes)>> = data} <- Base.decode64(pcm),
+         :ok <- Duplex.push(call.pid, %Audio{data: data, sample_rate: 24_000}) do
+      {:reply, %{ok: true}, socket}
+    else
+      {:error, reason} -> {:reply, %{ok: false, error: describe(reason)}, socket}
+      _ -> {:reply, %{ok: false, error: "invalid_chunk"}, socket}
+    end
+  end
+
+  def handle_event("call_audio", _params, socket),
+    do: {:reply, %{ok: false, error: "stale"}, socket}
+
+  def handle_event("call_stop", %{"generation" => generation}, socket) do
+    case socket.assigns.call do
+      %{generation: ^generation} -> {:noreply, stop_call(socket, "idle")}
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("call_failed", %{"message" => message}, socket) when is_binary(message),
+    do: {:noreply, call_error(socket, "Microphone error: " <> String.slice(message, 0, 200))}
 
   def handle_event("select_model", %{"_target" => [field]} = params, socket)
       when field in ["stt", "llm", "voice"] do
@@ -176,17 +243,18 @@ defmodule ChatWeb.ChatLive do
       {:error, message} ->
         {:noreply, assign(socket, setup_error: message)}
 
-      {:ok, options} ->
-        if socket.assigns.recording || socket.assigns.turn do
+      {:ok, _options} ->
+        if socket.assigns.recording || socket.assigns.turn || socket.assigns.call do
           {:noreply,
            assign(socket,
-             setup_error: "Stop the current turn/recording before changing settings."
+             setup_error:
+               "Stop the current turn, recording or conversation before changing settings."
            )}
         else
           socket = cancel(socket)
-          AudioFlow.stop_session(socket.assigns.session)
+          if socket.assigns.session, do: AudioFlow.stop_session(socket.assigns.session)
           Chat.Capture.close(socket.assigns.capture)
-          {:ok, session} = AudioFlow.start_session(options ++ [output: {Chat.Output, self()}])
+          {session, setup_error} = open_session(settings)
 
           {:noreply,
            assign(socket,
@@ -195,7 +263,9 @@ defmodule ChatWeb.ChatLive do
              messages: [],
              capture: nil,
              artifacts: [],
-             setup_error: nil
+             setup_error: setup_error,
+             call_status: "idle",
+             call_error: nil
            )}
         end
     end
@@ -270,8 +340,150 @@ defmodule ChatWeb.ChatLive do
     end
   end
 
+  defp open_session(settings) do
+    case Setup.options(settings) do
+      {:ok, [duplex: _]} ->
+        {nil, nil}
+
+      {:ok, options} ->
+        {:ok, session} = AudioFlow.start_session(options ++ [output: {Chat.Output, self()}])
+        {session, nil}
+
+      {:error, message} ->
+        {nil, message}
+    end
+  end
+
+  defp start_call(socket, adapter) do
+    generation = socket.assigns.generation + 1
+    socket = assign(socket, generation: generation)
+
+    case start_duplex(adapter) do
+      {:ok, pid} ->
+        call = %{
+          pid: pid,
+          monitor: Process.monitor(pid),
+          generation: generation,
+          ready: false,
+          reply_id: nil,
+          text_at: nil
+        }
+
+        {:reply, %{ok: true, generation: generation},
+         assign(socket, call: call, call_status: "connecting", call_error: nil)}
+
+      {:error, reason} ->
+        message = "Cannot start the conversation: " <> describe(reason)
+        {:reply, %{ok: false, error: message}, call_error(socket, message)}
+    end
+  end
+
+  # Duplex.start_link/1 raises for options that it cannot use.
+  defp start_duplex(adapter) do
+    Duplex.start_link(owner: self(), adapter: adapter)
+  rescue
+    error in ArgumentError -> {:error, Exception.message(error)}
+  end
+
+  defp call_event(socket, :ready) do
+    %{call: call} = socket.assigns
+    socket = add_message(socket, "assistant", "", pending: true, live: true)
+
+    socket
+    |> assign(
+      call: %{call | ready: true, reply_id: List.last(socket.assigns.messages).id},
+      call_status: "live"
+    )
+    |> push_event("call_ready", %{generation: call.generation})
+  end
+
+  defp call_event(socket, {:audio, %Audio{data: data, sample_rate: rate}}) do
+    push_event(socket, "call_play", %{
+      generation: socket.assigns.call.generation,
+      pcm: Base.encode64(data),
+      rate: rate
+    })
+  end
+
+  defp call_event(socket, {:text, text}), do: call_text(socket, text)
+
+  defp call_event(socket, {:error, reason}),
+    do: call_error(socket, "Conversation error: " <> describe(reason))
+
+  defp call_event(socket, :closed), do: stop_call(socket, "closed")
+  defp call_event(socket, _event), do: socket
+
+  # Moshi does not mark turns. A pause in the model text starts a new message,
+  # and the conversation keeps only the latest messages.
+  defp call_text(socket, text) do
+    %{call: call, messages: messages} = socket.assigns
+    now = System.monotonic_time(:millisecond)
+    current = call.reply_id && Enum.find(messages, &(&1.id == call.reply_id))
+
+    socket =
+      if current == nil or (call.text_at != nil and now - call.text_at >= @call_segment_ms) or
+           byte_size(current.text) >= @call_max_message_bytes do
+        socket = if current, do: settle(socket, current.id), else: socket
+        socket = add_message(socket, "assistant", "")
+        assign(socket, call: %{call | reply_id: List.last(socket.assigns.messages).id})
+      else
+        socket
+      end
+
+    %{call: call} = socket.assigns
+
+    socket
+    |> update_message(call.reply_id, fn message ->
+      text = if message.text == "", do: String.trim_leading(text), else: text
+      %{message | text: message.text <> text, pending: false, live: false}
+    end)
+    |> then(&assign(&1, messages: Enum.take(&1.assigns.messages, -@call_max_messages)))
+    |> assign(call: %{call | text_at: now})
+  end
+
+  # A message without model text is removed; otherwise it stops waiting.
+  defp settle(socket, id) do
+    case Enum.find(socket.assigns.messages, &(&1.id == id)) do
+      %{text: ""} -> remove_message(socket, id)
+      %{} -> update_message(socket, id, &%{&1 | pending: false, live: false})
+      nil -> socket
+    end
+  end
+
+  defp call_error(socket, message), do: stop_call(socket, "error", message)
+
+  # Stops the conversation process and tells the browser to release the
+  # microphone and the queued playback of this generation.
+  defp stop_call(socket, status, error \\ nil) do
+    socket =
+      case socket.assigns.call do
+        nil ->
+          socket
+
+        call ->
+          Process.demonitor(call.monitor, [:flush])
+
+          try do
+            Duplex.stop(call.pid)
+          catch
+            :exit, _ -> :ok
+          end
+
+          socket
+          |> settle(call.reply_id)
+          |> push_event("call_stopped", %{generation: call.generation})
+      end
+
+    assign(socket, call: nil, call_status: status, call_error: error)
+  end
+
+  defp describe(reason) when is_binary(reason), do: reason
+  defp describe(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp describe(reason), do: inspect(reason)
+
   @impl true
   def terminate(_, socket) do
+    stop_call(socket, "closed")
     Chat.Capture.close(socket.assigns.capture)
     if socket.assigns.session, do: AudioFlow.stop_session(socket.assigns.session)
     :ok
@@ -332,6 +544,18 @@ defmodule ChatWeb.ChatLive do
     do: {:noreply, capture_event(socket, event)}
 
   def handle_info({AudioFlow, _, _, _}, socket), do: {:noreply, socket}
+
+  def handle_info({Duplex, pid, event}, %{assigns: %{call: %{pid: pid}}} = socket),
+    do: {:noreply, call_event(socket, event)}
+
+  def handle_info({Duplex, _, _}, socket), do: {:noreply, socket}
+
+  def handle_info(
+        {:DOWN, ref, :process, _, reason},
+        %{assigns: %{call: %{monitor: ref}}} = socket
+      ),
+      do: {:noreply, call_error(socket, "Conversation stopped: " <> describe(reason))}
+
   def handle_info({:models, models}, socket), do: {:noreply, assign(socket, models: models)}
 
   def handle_info({ref, result}, %{assigns: %{recording: %{task: ref} = recording}} = socket) do
@@ -579,6 +803,16 @@ defmodule ChatWeb.ChatLive do
       else: "The largest combinations may not fit in memory."
   end
 
+  defp call_label("connecting"), do: "Connecting to Moshi…"
+  defp call_label("live"), do: "Live: microphone and playback on"
+  defp call_label("closed"), do: "Conversation ended"
+  defp call_label("error"), do: "Stopped by an error"
+  defp call_label(_), do: "Not connected"
+
+  defp call_variant("live"), do: "default"
+  defp call_variant("error"), do: "destructive"
+  defp call_variant(_), do: "secondary"
+
   defp gb(value), do: :erlang.float_to_binary(value * 1.0, decimals: 1)
 
   @impl true
@@ -587,7 +821,8 @@ defmodule ChatWeb.ChatLive do
       assign(assigns,
         stt_models: Catalog.stt(),
         llm_models: Catalog.llm(),
-        voices: Catalog.voices()
+        voices: Catalog.voices(),
+        duplex: Setup.duplex?(assigns.settings)
       )
 
     ~H"""
@@ -596,7 +831,9 @@ defmodule ChatWeb.ChatLive do
         <div>
           <h1 class="text-lg font-semibold">AudioFlow chat</h1>
           <p class="text-sm text-muted-foreground">
-            Type a message, or record one with the microphone.
+            {if @duplex,
+              do: "Start a conversation and talk. You and Moshi can speak at the same time.",
+              else: "Type a message, or record one with the microphone."}
           </p>
         </div>
         <Button.button variant="outline" size="sm" phx-click="new_chat">New chat</Button.button>
@@ -636,7 +873,7 @@ defmodule ChatWeb.ChatLive do
           >
             {voice}
           </option></select></label>
-          <button type="submit">Apply (starts new chat)</button>
+          <button type="submit" disabled={@call != nil}>Apply (starts new chat)</button>
         </form>
         <p :if={@setup_error} role="alert">{@setup_error}</p>
         <p>
@@ -645,13 +882,16 @@ defmodule ChatWeb.ChatLive do
         <p :if={@settings["mode"] == "demo"}>
           Synthetic demo: fixed transcript, echoed text, silent PCM. No inference.
         </p>
+        <p :if={@duplex}>
+          Full duplex: the microphone stays open and Moshi audio plays at the same time. Input is sent in 80 ms chunks. Moshi speaks English only and does not transcribe you. Use headphones to prevent echo. The server connects to AUDIOFLOW_MOSHI_ENDPOINT.
+        </p>
         <p :if={Chat.Setup.speech?(@settings)}>
           Microphone only; fresh provider connection each turn, no history replay. No text/audio alignment or native history truncation is claimed. Language and Gemini voice use provider defaults.
         </p>
         <p>
           Remote chain requires DEEPGRAM_API_KEY, CHAT_HTTP_ENDPOINT, CHAT_HTTP_MODEL and ELEVENLABS_API_KEY / ELEVENLABS_VOICE_ID or CARTESIA_API_KEY / CARTESIA_VOICE_ID. Optional CHAT_HTTP_API_KEY. Speech-to-speech requires OPENAI_API_KEY / OPENAI_REALTIME_MODEL or GEMINI_API_KEY / GEMINI_LIVE_MODEL. Configure these on the server.
         </p>
-        <button type="button" phx-click="capture">{if @capture,
+        <button type="button" phx-click="capture" disabled={@duplex}>{if @capture,
           do: "Disable and delete recordings",
           else: "Enable redacted recordings"}</button>
         <p>
@@ -752,13 +992,34 @@ defmodule ChatWeb.ChatLive do
         </Message.message>
       </Conversation.conversation>
 
-      <div>
+      <div :if={not @duplex}>
         <button phx-click="pause" disabled={@candidate != nil}>Pause / test interruption (10 s)</button>
         <button phx-click="resume" disabled={not @paused}>Resume false interruption</button>
         <button phx-click="stop">Confirm / Stop</button>
         <span>{if @paused, do: "Web Audio suspended", else: "Playback running or awaiting endpoint"}</span>
       </div>
-      <PromptInput.prompt_input id="prompt" on_submit="send">
+      <div
+        :if={@duplex}
+        id="duplex"
+        phx-hook="Duplex"
+        class="flex flex-wrap items-center gap-3 rounded-lg border p-3"
+      >
+        <Button.button type="button" data-call="start" disabled={@call != nil}>
+          <LiveShadcn.Icon.icon name="phone" /> Start conversation
+        </Button.button>
+        <Button.button type="button" variant="destructive" data-call="stop" disabled={@call == nil}>
+          <LiveShadcn.Icon.icon name="phone-off" /> Stop
+        </Button.button>
+        <div id="duplex-status" role="status" class="flex items-center gap-2 text-sm">
+          <Spinner.spinner :if={@call_status == "connecting"} class="size-3" />
+          <Badge.badge variant={call_variant(@call_status)}>{call_label(@call_status)}</Badge.badge>
+          <span id="duplex-stats" phx-update="ignore" class="text-xs text-muted-foreground"></span>
+        </div>
+        <p :if={@call_error} role="alert" class="w-full text-sm text-destructive">
+          {@call_error}
+        </p>
+      </div>
+      <PromptInput.prompt_input :if={not @duplex} id="prompt" on_submit="send">
         <PromptInput.prompt_input_textarea
           id="prompt-text"
           aria-label="Message"

@@ -8,12 +8,13 @@ import "live_ai_elements";
 import { hooks as liveBase } from "phoenix-colocated/live_base";
 import { hooks as liveAiElements } from "phoenix-colocated/live_ai_elements";
 import { Player, Recorder } from "./audio";
+import { Duplex } from "./duplex";
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content");
 
 const liveSocket = new LiveSocket("/live", Socket, {
   params: { _csrf_token: csrfToken },
-  hooks: { ...liveBase, ...liveAiElements, Player, Recorder },
+  hooks: { ...liveBase, ...liveAiElements, Duplex, Player, Recorder },
 });
 
 liveSocket.connect();
