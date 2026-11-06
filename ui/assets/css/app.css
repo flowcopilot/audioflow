@@ -7,8 +7,86 @@
 @source "../../deps/live_shadcn/packages/live_shadcn/priv/registry";
 @source "../../deps/live_ai_elements/packages/live_ai_elements/lib";
 
+/* The docs theme (site/src/styles/docs.css): AudioFlow lavender and Elixir
+   purple, Bricolage Grotesque and IBM Plex Mono. The layout loads the fonts.
+   Keep the same as examples/chat/assets/css/app.css. */
 :root {
-  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, sans-serif;
   --font-heading: var(--font-sans);
-  --font-mono: ui-monospace, monospace;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+
+  --background: #fbfaff;
+  --foreground: #1d1638;
+  --card: #f6f4fc;
+  --card-foreground: #1d1638;
+  --popover: #fbfaff;
+  --popover-foreground: #1d1638;
+  --primary: #5b2e91;
+  --primary-foreground: #ffffff;
+  --secondary: #ebe8f5;
+  --secondary-foreground: #2b2447;
+  --muted: #ebe8f5;
+  --muted-foreground: #6b6585;
+  --accent: #e7defa;
+  --accent-foreground: #2e1452;
+  --border: #d9d4ea;
+  --input: #d9d4ea;
+  --ring: #5b2e91;
+  --sidebar: #f6f4fc;
+  --sidebar-foreground: #1d1638;
+  --sidebar-primary: #5b2e91;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #e7defa;
+  --sidebar-accent-foreground: #2e1452;
+  --sidebar-border: #d9d4ea;
+  --sidebar-ring: #5b2e91;
+  --surface: #f6f4fc;
+  --surface-foreground: #1d1638;
+  --code-highlight: #ebe8f5;
+  --code-number: #6b6585;
+  --selection: #5b2e91;
+  --selection-foreground: #ffffff;
+}
+
+.dark {
+  --background: #19132b;
+  --foreground: #ece9f5;
+  --card: #261f3d;
+  --card-foreground: #ece9f5;
+  --popover: #261f3d;
+  --popover-foreground: #ece9f5;
+  --primary: #9a6fd6;
+  --primary-foreground: #19132b;
+  --secondary: #2b2447;
+  --secondary-foreground: #ece9f5;
+  --muted: #261f3d;
+  --muted-foreground: #9890b3;
+  --accent: #3b3457;
+  --accent-foreground: #ece9f5;
+  --border: #3b3457;
+  --input: #3b3457;
+  --ring: #9a6fd6;
+  --sidebar: #261f3d;
+  --sidebar-foreground: #ece9f5;
+  --sidebar-primary: #9a6fd6;
+  --sidebar-primary-foreground: #19132b;
+  --sidebar-accent: #3b3457;
+  --sidebar-accent-foreground: #ece9f5;
+  --sidebar-border: #3b3457;
+  --sidebar-ring: #9a6fd6;
+  --surface: #261f3d;
+  --surface-foreground: #c9c3dc;
+  --code-highlight: #3b3457;
+  --code-number: #9890b3;
+  --selection: #e3d6f7;
+  --selection-foreground: #2a1a46;
+}
+
+@layer base {
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.02em;
+    font-stretch: 88%;
+  }
 }

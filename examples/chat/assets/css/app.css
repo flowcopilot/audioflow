@@ -8,7 +8,8 @@
 @source "../../deps/live_ai_elements/packages/live_ai_elements/lib";
 
 /* The docs theme (site/src/styles/docs.css): AudioFlow lavender and Elixir
-   purple, Bricolage Grotesque and IBM Plex Mono. The layout loads the fonts. */
+   purple, Bricolage Grotesque and IBM Plex Mono. The layout loads the fonts.
+   Keep the same as ui/assets/css/app.css. */
 :root {
   --font-sans: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, sans-serif;
   --font-heading: var(--font-sans);

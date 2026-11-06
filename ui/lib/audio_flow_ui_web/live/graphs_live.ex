@@ -29,7 +29,9 @@ defmodule AudioFlowUIWeb.GraphsLive do
     <main class="mx-auto flex max-w-3xl flex-col gap-6 p-8">
       <header class="flex flex-col gap-1">
         <div class="flex items-center justify-between gap-4">
-          <h1 class="text-xl font-semibold">Agent graphs</h1>
+          <h1 class="flex items-center gap-2.5 text-xl font-bold">
+            <AudioFlowUIWeb.Layouts.logo /> Agent graphs
+          </h1>
           <.link navigate="/examples">Runnable examples</.link>
           <button
             type="button"

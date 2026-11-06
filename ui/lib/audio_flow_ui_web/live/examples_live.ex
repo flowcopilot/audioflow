@@ -59,7 +59,9 @@ defmodule AudioFlowUIWeb.ExamplesLive do
     ~H"""
     <main class="mx-auto flex max-w-3xl flex-col gap-6 p-8">
       <.link navigate="/">Graphs</.link>
-      <h1 class="text-xl font-semibold">Runnable examples</h1>
+      <h1 class="flex items-center gap-2.5 text-xl font-bold">
+        <AudioFlowUIWeb.Layouts.logo /> Runnable examples
+      </h1>
       <p>
         Synthetic checks use real sessions with deterministic adapters. They do not verify native models, providers or devices.
       </p>
