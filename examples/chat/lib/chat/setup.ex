@@ -2,6 +2,22 @@ defmodule Chat.Setup do
   @moduledoc "Validated per-tab settings. Credentials are resolved only on the server."
   alias AudioFlow.Adapters
 
+  @modes [
+    {"demo", "Synthetic demo"},
+    {"local", "Local Apple MLX"},
+    {"remote", "Deepgram → Chat HTTP → TTS"},
+    {"openai", "OpenAI speech-to-speech"},
+    {"gemini", "Gemini speech-to-speech"}
+  ]
+  @languages ~w(en es fr de ro)
+  @voices ~w(marin cedar)
+  @tts_providers ~w(elevenlabs cartesia)
+
+  def modes, do: @modes
+  def languages, do: @languages
+  def voices, do: @voices
+  def tts_providers, do: @tts_providers
+
   def defaults,
     do: %{
       "mode" => if(Chat.Engine.native?(), do: "local", else: "demo"),
@@ -23,7 +39,7 @@ defmodule Chat.Setup do
     missing = Enum.filter(required(s), &(env.(&1) in [nil, ""]))
 
     cond do
-      mode not in ["local", "demo", "remote", "openai", "gemini"] ->
+      not Enum.any?(@modes, &(elem(&1, 0) == mode)) ->
         {:error, "Unknown mode"}
 
       not supported?(s) ->
@@ -50,8 +66,8 @@ defmodule Chat.Setup do
   defp required(s), do: requirements(s["mode"])
 
   defp supported?(s) do
-    s["language"] in ["en", "es", "fr", "de", "ro"] and s["voice"] in ["marin", "cedar"] and
-      s["tts"] in ["elevenlabs", "cartesia"]
+    s["language"] in @languages and s["voice"] in @voices and
+      s["tts"] in @tts_providers
   end
 
   defp key(env, name), do: fn -> env.(name) end

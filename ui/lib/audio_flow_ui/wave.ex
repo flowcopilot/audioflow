@@ -7,12 +7,7 @@ defmodule AudioFlowUI.Wave do
     |> Enum.sort_by(&elem(&1, 0))
     |> Enum.map(fn {{node, rate}, chunks} ->
       pcm = Enum.map_join(chunks, & &1["_pcm"])
-      size = byte_size(pcm)
-
-      wave =
-        <<"RIFF", size + 36::little-32, "WAVEfmt ", 16::little-32, 1::little-16, 1::little-16,
-          rate::little-32, rate * 2::little-32, 2::little-16, 16::little-16, "data",
-          size::little-32, pcm::binary>>
+      wave = AudioFlow.Wav.encode(%AudioFlow.Audio{data: pcm, sample_rate: rate})
 
       %{"node" => node, "url" => "data:audio/wav;base64," <> Base.encode64(wave)}
     end)

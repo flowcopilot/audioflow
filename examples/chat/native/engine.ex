@@ -67,11 +67,10 @@ defmodule Chat.LocalEngine do
 
   @impl true
   def init(nil) do
-    selection = %{
-      stt: System.get_env("CHAT_STT", "whisper-small"),
-      llm: System.get_env("CHAT_LLM", "qwen3-1.7b"),
-      voice: System.get_env("CHAT_VOICE", "af_heart")
-    }
+    selection =
+      Map.new(Catalog.defaults(), fn {stage, id} ->
+        {stage, System.get_env("CHAT_" <> String.upcase(to_string(stage)), id)}
+      end)
 
     Enum.each(selection, fn {stage, id} -> Catalog.fetch!(stage, id) end)
     state = %{selection: selection, loads: %{}, loaded: %{}, status: %{}}
@@ -106,7 +105,6 @@ defmodule Chat.LocalEngine do
     {{stage, id}, loads} = Map.pop(state.loads, ref)
     state = %{state | loads: loads}
 
-    # A newer selection replaced this load. Release what it loaded.
     if stage != :tts and state.selection[stage] != id do
       with {:ok, loaded} <- result, do: release(state, loaded)
       {:noreply, state}
@@ -149,7 +147,6 @@ defmodule Chat.LocalEngine do
     broadcast(put_in(state.status[stage], {:error, error_text(reason)}))
   end
 
-  # The voice is part of each Kokoro request, so a voice switch needs no reload.
   defp publish_tts(state) do
     serving = state.loaded.tts.serving
     voice = state.selection.voice
@@ -214,7 +211,6 @@ defmodule Chat.LocalEngine do
     {:adapter_error, _module, reason} -> {:error, reason}
   end
 
-  # Streams sentence chunks, so speech starts after the first sentence.
   defp generate(tokenizer, weights, input, emit) do
     key = make_ref()
     Process.put(key, "")

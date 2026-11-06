@@ -108,7 +108,6 @@ defmodule AudioFlowUI.Graphs do
     end
   end
 
-  # A temporary file and a rename keep the saved file complete after a crash.
   defp save(state, graph) do
     path = path(state, graph["id"])
     temporary = path <> ".tmp"

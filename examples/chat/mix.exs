@@ -1,4 +1,3 @@
-# Compile native model code only in the Apple profile; demo also supports remote providers.
 native? =
   System.get_env("CHAT_PROFILE", if(:os.type() == {:unix, :darwin}, do: "native", else: "demo")) ==
     "native"
@@ -7,8 +6,8 @@ System.put_env("AUDIOFLOW_ML", if(native?, do: "1", else: "0"))
 
 defmodule Chat.MixProject do
   use Mix.Project
+  @native_profile System.get_env("AUDIOFLOW_ML") == "1"
 
-  # A local LiveView chat over one AudioFlow session per browser tab.
   # Set LIVE_SHADCN_PATH to a live_shadcn checkout to use local packages.
   @live_shadcn "3ddada48f623d72260360acf115e5d9b5eacd1cf"
   @emlx "5f5cd886fd2550b1e9452ddc3943fec5597b0cd5"
@@ -19,17 +18,20 @@ defmodule Chat.MixProject do
       version: "0.1.0",
       elixir: "~> 1.18",
       listeners: [Phoenix.CodeReloader],
-      elixirc_paths:
-        ["lib"] ++ if(System.get_env("AUDIOFLOW_ML") == "1", do: ["native"], else: []),
+      elixirc_paths: ["lib"] ++ if(@native_profile, do: ["native"], else: []),
       deps: deps(),
       aliases: aliases()
     ]
   end
 
-  def application, do: [mod: {Chat.Application, []}, extra_applications: [:logger]]
+  def application,
+    do: [
+      mod: {Chat.Application, []},
+      extra_applications: [:logger],
+      env: [native_profile: @native_profile]
+    ]
 
   defp deps do
-    # Available in demo tests without compiling EMLX or loading models.
     [
       {:audio_flow, path: "../.."},
       live_shadcn(:live_base),
@@ -44,11 +46,11 @@ defmodule Chat.MixProject do
       # lucide_icons parses its SVG files at runtime.
       {:lazy_html, ">= 0.1.0"}
     ] ++
-      if(System.get_env("AUDIOFLOW_ML") == "1" or Mix.env() == :test,
+      if(@native_profile or Mix.env() == :test,
         do: [{:hf_hub, "~> 0.3.1"}],
         else: []
       ) ++
-      if(System.get_env("AUDIOFLOW_ML") == "1",
+      if(@native_profile,
         do: [
           {:emlx, github: "elixir-nx/emlx", ref: @emlx, sparse: "emlx", override: true},
           {:emlx_axon, github: "elixir-nx/emlx", ref: @emlx, sparse: "emlx_axon"}
