@@ -28,8 +28,12 @@ tts = {AudioFlow.Adapters.ElevenLabs,
 
 Deepgram uses Listen v1 WebSocket with mono `linear16` PCM at the input
 `Audio.sample_rate`, sends bounded binary frames, then `CloseStream`. It emits
-only final transcript segments, separated by spaces; the concluding Metadata
-message completes the run. Interim results are ignored. This is a streaming
+final transcript segments, separated by spaces; the concluding Metadata
+message completes the run. Interim results are ignored by default. With
+`interim_results: true`, each nonempty interim result is emitted as
+`{:partial, text}`. With `segments: true`, final results are emitted as
+`AudioFlow.Transcript.Segment` values with `start_ms`, `end_ms` and word times;
+a final result without valid times fails with `:invalid_event`. This is a streaming
 provider response for an already committed utterance, **not** microphone-to-STT
 live ingress or a persistent recognition session. Optional `:language` is sent
 as a query parameter. Empty final transcripts (silence) emit nothing.

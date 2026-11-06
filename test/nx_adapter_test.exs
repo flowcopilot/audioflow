@@ -2,6 +2,20 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
   defmodule AudioFlow.NxAdapterTest do
     use ExUnit.Case, async: false
 
+    test "Whisper chunks become segments, with or without timestamps" do
+      result = %{
+        chunks: [
+          %{text: " Hello.", start_timestamp_seconds: 0.0, end_timestamp_seconds: 1.52},
+          %{text: " Bye.", start_timestamp_seconds: nil, end_timestamp_seconds: nil}
+        ]
+      }
+
+      assert [
+               %AudioFlow.Transcript.Segment{text: "Hello.", start_ms: 0, end_ms: 1520},
+               %AudioFlow.Transcript.Segment{text: "Bye.", start_ms: nil, end_ms: nil}
+             ] = AudioFlow.NxAdapter.transcript_segments(result)
+    end
+
     test "a shared EXLA serving maps inputs and outputs across callers" do
       serving = Nx.Serving.jit(&Nx.multiply(&1, 2), compiler: EXLA)
       start_supervised!(AudioFlow.Models.child_spec(AudioFlow.TestServing, serving))

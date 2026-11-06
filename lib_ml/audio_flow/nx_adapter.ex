@@ -28,6 +28,24 @@ defmodule AudioFlow.NxAdapter do
 
   def transcript(%{chunks: chunks}), do: Enum.map(chunks, & &1.text)
 
+  @doc """
+  Emit segments from a Whisper result. The times are `nil` unless the serving
+  uses `timestamps: :segments`. That option fails to compile with the pinned
+  Bumblebee 0.8.0 and EXLA 1.0.0.
+  """
+  def transcript_segments(%{chunks: chunks}) do
+    for chunk <- chunks do
+      %AudioFlow.Transcript.Segment{
+        text: String.trim(chunk.text),
+        start_ms: ms(chunk.start_timestamp_seconds),
+        end_ms: ms(chunk.end_timestamp_seconds)
+      }
+    end
+  end
+
+  defp ms(nil), do: nil
+  defp ms(seconds), do: round(seconds * 1000)
+
   @doc "Convert packed RGB bytes to an HWC unsigned 8-bit image tensor."
   def image_input(%AudioFlow.Image{} = image) do
     if not AudioFlow.Image.valid?(image), do: raise(ArgumentError, "invalid RGB image")
