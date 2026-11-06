@@ -18,34 +18,6 @@ defmodule AudioFlow.NxAdapter do
     :ok
   end
 
-  @doc "Convert mono PCM to a Whisper input tensor, without hidden resampling."
-  def whisper_input(%AudioFlow.Audio{sample_rate: 16_000, data: data}) do
-    samples = for <<sample::little-signed-16 <- data>>, do: sample / 32_768
-    Nx.tensor(samples, type: :f32)
-  end
-
-  def whisper_input(_), do: raise(ArgumentError, "Whisper requires 16000 Hz mono PCM")
-
-  def transcript(%{chunks: chunks}), do: Enum.map(chunks, & &1.text)
-
-  @doc """
-  Emit segments from a Whisper result. The times are `nil` unless the serving
-  uses `timestamps: :segments`. That option fails to compile with the pinned
-  Bumblebee 0.8.0 and EXLA 1.0.0.
-  """
-  def transcript_segments(%{chunks: chunks}) do
-    for chunk <- chunks do
-      %AudioFlow.Transcript.Segment{
-        text: String.trim(chunk.text),
-        start_ms: ms(chunk.start_timestamp_seconds),
-        end_ms: ms(chunk.end_timestamp_seconds)
-      }
-    end
-  end
-
-  defp ms(nil), do: nil
-  defp ms(seconds), do: round(seconds * 1000)
-
   @doc "Convert packed RGB bytes to an HWC unsigned 8-bit image tensor."
   def image_input(%AudioFlow.Image{} = image) do
     if not AudioFlow.Image.valid?(image), do: raise(ArgumentError, "invalid RGB image")

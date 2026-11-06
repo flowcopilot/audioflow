@@ -81,9 +81,9 @@ defmodule Chat.Setup do
 
     [
       stt:
-        {Adapters.Deepgram,
+        {AudioFlow.STT.ReqLLM,
          [
-           model: env.("DEEPGRAM_MODEL") || "nova-3",
+           model: "deepgram:" <> (env.("DEEPGRAM_MODEL") || "nova-3"),
            api_key: key(env, "DEEPGRAM_API_KEY"),
            language: s["language"]
          ]},

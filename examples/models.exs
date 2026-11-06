@@ -63,11 +63,7 @@ history =
 whisper_repository = "openai/whisper-tiny"
 whisper_revision = "169d4a4341b33bc18d8881c4b69c2e104e1cc0af"
 
-{:ok, whisper} =
-  AudioFlow.Models.whisper(whisper_repository,
-    load_options: [revision: whisper_revision],
-    model_options: [backend: EXLA.Backend]
-  )
+stt = {AudioFlow.STT.Bumblebee, model: whisper_repository, revision: whisper_revision}
 
 {llm_adapter, llm_children, llm_metadata, mode} =
   case System.get_env("AUDIOFLOW_LLM_ENGINE", "nx") do
@@ -142,24 +138,21 @@ whisper_revision = "169d4a4341b33bc18d8881c4b69c2e104e1cc0af"
 
 {:ok, _supervisor} =
   Supervisor.start_link(
-    [
-      AudioFlow.Models.child_spec(AudioFlow.Whisper, whisper)
-    ] ++ llm_children ++ tts_children,
+    [AudioFlow.Servings] ++ llm_children ++ tts_children,
     strategy: :one_for_one
   )
 
 options = [
-  stt:
-    {AudioFlow.NxAdapter,
-     serving: AudioFlow.Whisper,
-     input: &AudioFlow.NxAdapter.whisper_input/1,
-     output: &AudioFlow.NxAdapter.transcript/1},
+  stt: stt,
   llm: llm_adapter,
   history: history,
   tts: tts,
   timeout_ms: 120_000,
   max_events: 4096
 ]
+
+# The first local STT load downloads and compiles Whisper; do it before the first turn.
+{:ok, _} = AudioFlow.STT.Bumblebee.preload(elem(stt, 1))
 
 metadata = %{
   mode: mode,

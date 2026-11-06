@@ -58,10 +58,15 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
             {option.name, Map.get(option, :default, "x")}
           end
 
-        assert {AudioFlow.Graph.ModelAdapter, adapter} =
-                 Models.adapter(spec.type, options)
+        case Models.adapter(spec.type, options) do
+          # Speech recognition uses the common local STT adapter.
+          {AudioFlow.STT.Bumblebee, adapter} ->
+            assert {_, _} =
+                     AudioFlow.STT.split_options!(Keyword.take(adapter, [:model, :language]))
 
-        assert is_function(adapter[:build], 0)
+          {AudioFlow.Graph.ModelAdapter, adapter} ->
+            assert is_function(adapter[:build], 0)
+        end
       end
 
       # British voices share one serving with British English phonemes.

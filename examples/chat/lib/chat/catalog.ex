@@ -1,6 +1,7 @@
 defmodule Chat.Catalog do
   @moduledoc """
-  The models the chat can switch between. All run on the Apple GPU through MLX.
+  The models the chat can switch between. Local models run on the Apple GPU
+  through MLX. Qwen3-ASR runs on a separate vLLM server.
 
   `:memory_gb` estimates the loaded weights. Whisper loads in f32, so it uses
   about twice its f16 download. Compiled kernels and caches add to this.
@@ -31,21 +32,22 @@ defmodule Chat.Catalog do
       revision: "41f01f3fe87f28c78e2fbf8b568835947dd65ed9",
       memory_gb: 3.2
     },
+    # Bumblebee has no Qwen3-ASR model. These use a vLLM server at
+    # CHAT_ASR_BASE_URL (default http://localhost:8000/v1) through ReqLLM.
+    # The server holds the weights, so they do not count in this process.
     %{
       id: "qwen3-asr-0.6b",
-      label: "Qwen3-ASR 0.6B (8-bit)",
-      engine: :qwen3_asr,
-      repo: "mlx-community/Qwen3-ASR-0.6B-8bit",
-      revision: "89e96d92ba34aca20b3e29fb10cc284097d1219f",
-      memory_gb: 1.0
+      label: "Qwen3-ASR 0.6B (vLLM)",
+      engine: :req_llm,
+      model: "vllm:Qwen/Qwen3-ASR-0.6B",
+      memory_gb: 0.0
     },
     %{
       id: "qwen3-asr-1.7b",
-      label: "Qwen3-ASR 1.7B (8-bit)",
-      engine: :qwen3_asr,
-      repo: "mlx-community/Qwen3-ASR-1.7B-8bit",
-      revision: "a8379a2e2f9e313c9292cdf1af4055ab56d50d55",
-      memory_gb: 2.5
+      label: "Qwen3-ASR 1.7B (vLLM)",
+      engine: :req_llm,
+      model: "vllm:Qwen/Qwen3-ASR-1.7B",
+      memory_gb: 0.0
     }
   ]
 

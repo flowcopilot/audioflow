@@ -1,7 +1,6 @@
 defmodule AudioFlow.RemoteProvidersTest do
   use ExUnit.Case, async: true
   alias AudioFlow.Adapters.Cartesia
-  alias AudioFlow.Adapters.Deepgram
   alias AudioFlow.Adapters.ElevenLabs
   alias AudioFlow.Adapters.GeminiLive
   alias AudioFlow.Adapters.OpenAIRealtime
@@ -260,93 +259,6 @@ defmodule AudioFlow.RemoteProvidersTest do
     end
   end
 
-  test "Deepgram sends PCM and CloseStream, excludes interim results and retains final segments" do
-    task = start_run(Deepgram, socket_options(), 16_000)
-    assert_receive {:connected, socket}
-    assert_receive {:handshake, _, query, headers}
-    assert URI.decode_query(query)["encoding"] == "linear16"
-    assert {"authorization", "Token test-key"} in headers
-    assert_receive {:client, ^socket, :binary, <<1, 0, 2, 0>>}
-    assert_receive {:client, ^socket, :text, %{"type" => "CloseStream"}}
-
-    for {text, final} <- [{"draft", false}, {"Hello", true}, {"world", true}] do
-      event(socket, %{
-        type: "Results",
-        is_final: final,
-        channel: %{alternatives: [%{transcript: text}]}
-      })
-    end
-
-    event(socket, %{type: "Metadata"})
-    assert :ok = Task.await(task)
-    assert_receive {:output, "Hello"}
-    assert_receive {:output, " world"}
-    refute_receive {:output, "draft"}
-  end
-
-  test "Deepgram emits interim partials and timed segments when requested" do
-    options = socket_options() ++ [interim_results: true, segments: true]
-    task = start_run(Deepgram, options, 16_000)
-    assert_receive {:connected, socket}
-    assert_receive {:handshake, _, query, _}
-    assert URI.decode_query(query)["interim_results"] == "true"
-
-    event(socket, %{
-      type: "Results",
-      is_final: false,
-      start: 0.0,
-      duration: 0.4,
-      channel: %{alternatives: [%{transcript: "hel"}]}
-    })
-
-    event(socket, %{
-      type: "Results",
-      is_final: true,
-      start: 1.25,
-      duration: 0.5,
-      channel: %{
-        alternatives: [
-          %{
-            transcript: "hello there",
-            words: [
-              %{word: "hello", start: 1.25, end: 1.5, confidence: 0.9},
-              %{word: "there", punctuated_word: "there.", start: 1.5, end: 1.75}
-            ]
-          }
-        ]
-      }
-    })
-
-    event(socket, %{type: "Metadata"})
-    assert :ok = Task.await(task)
-    assert_receive {:output, {:partial, "hel"}}
-
-    assert_receive {:output,
-                    %AudioFlow.Transcript.Segment{
-                      text: "hello there",
-                      start_ms: 1250,
-                      end_ms: 1750,
-                      words: [
-                        %{word: "hello", start_ms: 1250, end_ms: 1500, confidence: 0.9},
-                        %{word: "there.", start_ms: 1500, end_ms: 1750}
-                      ]
-                    }}
-  end
-
-  test "Deepgram rejects final segments without valid times" do
-    task = start_run(Deepgram, socket_options() ++ [segments: true], 16_000)
-    assert_receive {:connected, socket}
-
-    event(socket, %{
-      type: "Results",
-      is_final: true,
-      channel: %{alternatives: [%{transcript: "hello"}]}
-    })
-
-    assert {:error, :invalid_event} = Task.await(task)
-    refute_receive {:output, _}
-  end
-
   test "remote errors, malformed events, incomplete close, and response budget fail" do
     for {message, extra, expected} <- [
           {{:event, %{error: %{message: "private"}}}, [], :remote_error},
@@ -390,12 +302,7 @@ defmodule AudioFlow.RemoteProvidersTest do
     end
   end
 
-  test "Deepgram errors and Gemini interruptions fail without fabricated output" do
-    task = start_run(Deepgram, socket_options(), 16_000)
-    assert_receive {:connected, socket}
-    event(socket, %{type: "Error", description: "private"})
-    assert {:error, :remote_error} = Task.await(task)
-
+  test "Gemini interruptions fail without fabricated output" do
     task = start_run(GeminiLive, socket_options(), 16_000)
     assert_receive {:connected, socket}
     event(socket, %{serverContent: %{interrupted: true}})

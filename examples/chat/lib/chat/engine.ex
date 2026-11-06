@@ -13,7 +13,8 @@ defmodule Chat.Engine do
       do: %{
         id: __MODULE__,
         start:
-          {Supervisor, :start_link, [[Chat.Qwen3ASR, Chat.LocalEngine], [strategy: :one_for_one]]}
+          {Supervisor, :start_link,
+           [[AudioFlow.Servings, Chat.LocalEngine], [strategy: :one_for_one]]}
       },
       else: %{id: __MODULE__, start: {Agent, :start_link, [fn -> nil end]}}
   end

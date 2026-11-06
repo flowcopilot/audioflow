@@ -6,11 +6,13 @@ defmodule AudioFlow.Graph.Nodes.Providers do
   """
   @behaviour AudioFlow.Graph.Node
   @providers %{
-    "deepgram.stt" => {AudioFlow.Adapters.Deepgram, "DEEPGRAM_API_KEY"},
-    "mistral.stt" => {AudioFlow.Adapters.ReqLLMTranscription, "MISTRAL_API_KEY"},
+    "deepgram.stt" => {AudioFlow.STT.ReqLLM, "DEEPGRAM_API_KEY"},
+    "mistral.stt" => {AudioFlow.STT.ReqLLM, "MISTRAL_API_KEY"},
     "elevenlabs.tts" => {AudioFlow.Adapters.ElevenLabs, "ELEVENLABS_API_KEY"},
     "cartesia.tts" => {AudioFlow.Adapters.Cartesia, "CARTESIA_API_KEY"}
   }
+
+  @stt_providers %{"deepgram.stt" => :deepgram, "mistral.stt" => :mistral}
 
   def providers, do: @providers
 
@@ -60,15 +62,17 @@ defmodule AudioFlow.Graph.Nodes.Providers do
   end
 
   @impl true
-  # ReqLLM reads MISTRAL_API_KEY at request time. A trusted endpoint is the API base URL.
-  def adapter("mistral.stt", options) do
-    endpoint = Application.get_env(:audio_flow, :speech_provider_endpoints, %{})["mistral.stt"]
+  # STT nodes use ReqLLM with a fixed provider, so graph data cannot select another
+  # one. ReqLLM reads the provider key at request time. A trusted endpoint is the
+  # API base URL.
+  def adapter(type, options) when is_map_key(@stt_providers, type) do
+    endpoint = Application.get_env(:audio_flow, :speech_provider_endpoints, %{})[type]
     {timeout, options} = Map.pop(options, :timeout_ms, 30_000)
     {model, options} = Map.pop!(options, :model)
 
-    {AudioFlow.Adapters.ReqLLMTranscription,
+    {AudioFlow.STT.ReqLLM,
      Map.to_list(options) ++
-       [model: %{provider: :mistral, id: model}, receive_timeout: timeout] ++
+       [model: %{provider: @stt_providers[type], id: model}, receive_timeout: timeout] ++
        if(endpoint, do: [base_url: endpoint], else: [])}
   end
 

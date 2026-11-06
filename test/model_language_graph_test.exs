@@ -34,8 +34,9 @@ if System.get_env("AUDIOFLOW_ML") == "1" do
       {_, spanish} =
         Models.adapter("whisper.stt", %{model: "openai/whisper-tiny", language: "es"})
 
-      assert auto[:key] == {:whisper, "openai/whisper-tiny", "auto"}
-      assert auto[:key] != spanish[:key]
+      assert auto[:language] == nil
+      assert spanish[:language] == "es"
+      assert auto[:revision] == spanish[:revision]
 
       assert_raise ArgumentError, ~r/English-only/, fn ->
         Models.adapter("whisper.stt", %{model: "openai/whisper-tiny.en", language: "es"})
