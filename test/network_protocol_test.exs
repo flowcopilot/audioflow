@@ -244,7 +244,8 @@ defmodule AudioFlow.NetworkProtocolTest do
 
     assert {:push, frames, _state} =
              handler.handle_info(
-               {AudioFlow.WebSocket, :push, {state.pcm.session, ref}, audio, {self(), tag}},
+               {AudioFlow.Transport.Connection, :push, {state.pcm.session, ref}, audio,
+                {self(), tag}},
                state
              )
 

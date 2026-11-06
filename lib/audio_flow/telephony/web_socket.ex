@@ -7,8 +7,9 @@ defmodule AudioFlow.Telephony.WebSocket do
   """
   @behaviour WebSock
   alias AudioFlow.Telephony.MuLaw
+  alias AudioFlow.Telephony.Packetizer
   alias AudioFlow.Telephony.RateConverter
-  alias AudioFlow.WebSocket, as: PCM
+  alias AudioFlow.Transport.Connection
 
   @limits_schema [
     max_playout_packets: [type: :pos_integer, default: 500],
@@ -37,9 +38,7 @@ defmodule AudioFlow.Telephony.WebSocket do
        pcm: nil,
        stream: nil,
        up: %RateConverter{},
-       down: %RateConverter{},
-       pending: <<>>,
-       output_rate: nil,
+       packetizer: %Packetizer{},
        last_chunk: nil,
        playout: :queue.new(),
        playout_timer: nil,
@@ -49,8 +48,7 @@ defmodule AudioFlow.Telephony.WebSocket do
        gap_timer: nil,
        reorder_window: limits[:reorder_window],
        reorder_max_bytes: limits[:reorder_max_bytes],
-       reorder_timeout_ms: limits[:reorder_timeout_ms],
-       output?: false
+       reorder_timeout_ms: limits[:reorder_timeout_ms]
      }}
   end
 
@@ -80,7 +78,12 @@ defmodule AudioFlow.Telephony.WebSocket do
       end
 
     if format == expected and is_binary(id) and id != "" do
-      translate(PCM.init(state.options), %{state | stream: id})
+      translate(
+        Connection.init(
+          Keyword.put(state.options, :output_check, &output_check(&1, state.max_playout_packets))
+        ),
+        %{state | stream: id}
+      )
     else
       fail(:unsupported_start, state)
     end
@@ -146,8 +149,6 @@ defmodule AudioFlow.Telephony.WebSocket do
       else: fail(:unordered_media, state)
   end
 
-  # Start at chunk 1 even if the first packet received is chunk 2.
-  # First copy wins; stale/duplicate packets never enter the resampler twice.
   defp reorder(chunk, bytes, state) do
     expected = (state.last_chunk || 0) + 1
 
@@ -194,7 +195,7 @@ defmodule AudioFlow.Telephony.WebSocket do
     {data, up} = RateConverter.up(MuLaw.decode(bytes), state.up)
 
     translate(
-      PCM.handle_in({data, opcode: :binary}, state.pcm),
+      Connection.audio(data, state.pcm),
       %{state | up: up, last_chunk: chunk}
     )
   end
@@ -237,36 +238,40 @@ defmodule AudioFlow.Telephony.WebSocket do
 
   def handle_info({__MODULE__, :gap_timeout, _}, state), do: {:ok, state}
 
-  def handle_info({PCM, :push, _key, audio, {from, tag}}, state)
-      when audio.sample_rate not in [8000, 16_000] do
-    send(from, {tag, {:error, :unsupported_telephony_output_rate}})
-    {:ok, state}
-  end
-
-  def handle_info({PCM, :push, _key, audio, {from, tag}}, state)
-      when byte_size(audio.data) > state.max_playout_packets * 640 do
-    send(from, {tag, {:error, :telephony_output_too_large}})
-    fail(:playout_limit, state)
-  end
-
   def handle_info(_, %{pcm: nil} = state), do: {:ok, state}
-  def handle_info(message, state), do: translate(PCM.handle_info(message, state.pcm), state)
+
+  def handle_info(message, state),
+    do: translate(Connection.handle_info(message, state.pcm), state)
 
   @impl true
   def terminate(reason, state) do
     cancel_timer(state.gap_timer)
     cancel_timer(state.playout_timer)
-    if state.pcm, do: PCM.terminate(reason, state.pcm), else: :ok
+    if state.pcm, do: Connection.terminate(reason, state.pcm), else: :ok
   end
+
+  defp output_check(audio, limit) do
+    cond do
+      audio.sample_rate not in [8000, 16_000] -> {:error, :unsupported_telephony_output_rate}
+      byte_size(audio.data) > limit * 640 -> {:error, :telephony_output_too_large}
+      true -> :ok
+    end
+  end
+
+  defp translate({:output_rejected, :unsupported_telephony_output_rate, pcm}, state),
+    do: {:ok, %{state | pcm: pcm}}
+
+  defp translate({:output_rejected, :telephony_output_too_large, pcm}, state),
+    do: fail(:playout_limit, %{state | pcm: pcm})
 
   defp translate({:ok, pcm}, state), do: {:ok, %{state | pcm: pcm}}
 
   defp translate({:stop, reason, close, pcm}, state),
     do: {:stop, reason, close, %{state | pcm: pcm}}
 
-  defp translate({:push, [{:text, data}] = frames, pcm}, state) do
-    case JSON.decode!(data) do
-      %{"type" => "error", "reason" => reason} ->
+  defp translate({:events, [{:event, message}] = frames, pcm}, state) do
+    case message do
+      %{type: :error, reason: reason} ->
         {:stop, {:session_error, reason}, {1011, "audio session failed"}, %{state | pcm: pcm}}
 
       _ ->
@@ -274,7 +279,7 @@ defmodule AudioFlow.Telephony.WebSocket do
     end
   end
 
-  defp translate({:push, frames, pcm}, state), do: translate_frames(frames, pcm, state)
+  defp translate({:events, frames, pcm}, state), do: translate_frames(frames, pcm, state)
 
   defp translate_frames(frames, pcm, state) do
     {frames, state} =
@@ -294,16 +299,13 @@ defmodule AudioFlow.Telephony.WebSocket do
     end
   end
 
-  defp queue_frame({:text, data} = frame, {now, state}) do
-    case JSON.decode!(data)["event"] do
-      "clear" ->
-        cancel_timer(state.playout_timer)
-        {now ++ [frame], %{state | playout: :queue.new(), playout_timer: nil}}
-
-      "media" ->
-        {now, %{state | playout: :queue.in(frame, state.playout)}}
-    end
+  defp queue_frame({:clear, frame}, {now, state}) do
+    cancel_timer(state.playout_timer)
+    {now ++ [frame], %{state | playout: :queue.new(), playout_timer: nil}}
   end
+
+  defp queue_frame({:media, frame}, {now, state}),
+    do: {now, %{state | playout: :queue.in(frame, state.playout)}}
 
   defp schedule_playout(%{playout_timer: nil} = state) do
     if :queue.is_empty(state.playout) do
@@ -317,54 +319,37 @@ defmodule AudioFlow.Telephony.WebSocket do
 
   defp schedule_playout(state), do: state
 
-  defp outgoing({:binary, data}, state) do
-    {data, down} =
-      if state.output_rate == 16_000,
-        do: RateConverter.down(data, state.down),
-        else: {data, state.down}
+  defp outgoing({:audio, data}, state) do
+    {packets, packetizer} =
+      Packetizer.push(
+        %AudioFlow.Audio{data: data, sample_rate: state.packetizer.rate},
+        state.packetizer
+      )
 
-    packetize(state.pending <> MuLaw.encode(data), %{state | down: down, output?: true})
+    packet_frames(packets, %{state | packetizer: packetizer})
   end
 
-  defp outgoing({:text, data}, state) do
-    case JSON.decode!(data) do
-      %{"type" => "output_format", "sample_rate" => rate} ->
-        {[], %{state | output_rate: rate, down: %RateConverter{}}}
+  defp outgoing({:event, %{type: :output_format, sample_rate: rate}}, state),
+    do: {[], %{state | packetizer: Packetizer.format(state.packetizer, rate)}}
 
-      %{"type" => "flush"} ->
-        {[wire(state, %{event: "clear"})],
-         %{state | pending: <<>>, down: %RateConverter{}, output?: false}}
+  defp outgoing({:event, %{type: :flush}}, state),
+    do:
+      {[{:clear, wire(state, %{event: "clear"})}],
+       %{state | packetizer: %Packetizer{rate: state.packetizer.rate}}}
 
-      %{"type" => "done"} ->
-        {tail, _} =
-          if state.output? and state.output_rate == 16_000,
-            do: RateConverter.down(:binary.copy(<<0>>, 60), state.down),
-            else: {<<>>, state.down}
-
-        data = state.pending <> MuLaw.encode(tail)
-        padding = rem(160 - rem(byte_size(data), 160), 160)
-
-        packetize(data <> :binary.copy(<<255>>, padding), %{
-          state
-          | pending: <<>>,
-            down: %RateConverter{},
-            output?: false
-        })
-
-      %{"type" => "error"} ->
-        {[], state}
-
-      _ ->
-        {[], state}
-    end
+  defp outgoing({:event, %{type: :done}}, state) do
+    {packets, packetizer} = Packetizer.finish(state.packetizer)
+    packet_frames(packets, %{state | packetizer: packetizer})
   end
 
-  defp packetize(data, state) when byte_size(data) < 160, do: {[], %{state | pending: data}}
+  defp outgoing({:event, _message}, state), do: {[], state}
 
-  defp packetize(<<packet::binary-size(160), rest::binary>>, state) do
-    {frames, state} = packetize(rest, state)
-    {[wire(state, %{event: "media", media: %{payload: Base.encode64(packet)}}) | frames], state}
-  end
+  defp packet_frames(packets, state),
+    do:
+      {Enum.map(
+         packets,
+         &{:media, wire(state, %{event: "media", media: %{payload: Base.encode64(&1)}})}
+       ), state}
 
   defp wire(%{provider: :twilio, stream: id}, message),
     do: {:text, JSON.encode!(Map.put(message, :streamSid, id))}
