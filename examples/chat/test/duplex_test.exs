@@ -165,7 +165,6 @@ if Code.ensure_loaded?(AudioFlow.Duplex.Moshi) do
       html = render(view)
       assert html =~ "Start conversation"
       assert html =~ "Not connected"
-      assert html =~ "AudioFlow sends your microphone audio to local Moshi"
       refute has_element?(view, "#prompt")
       refute has_element?(view, "#recorder")
       assert has_element?(view, "button[data-call=stop][disabled]")
@@ -176,7 +175,7 @@ if Code.ensure_loaded?(AudioFlow.Duplex.Moshi) do
       moshi(%{0 => " Hi", 1 => " there."})
       {:ok, view, _} = live(build_conn(), "/")
       generation = connect(view)
-      assert render(view) =~ "Live: microphone and playback on"
+      assert render(view) =~ "Live · microphone on"
       assert has_element?(view, "button[data-call=start][disabled]")
 
       render_hook(view, "call_audio", %{"generation" => generation, "pcm" => chunk()})
@@ -235,7 +234,7 @@ if Code.ensure_loaded?(AudioFlow.Duplex.Moshi) do
 
       render_hook(view, "call_audio", %{"generation" => generation, "pcm" => chunk()})
       assert_reply(view, %{ok: false, error: "overloaded"})
-      assert render(view) =~ "Live: microphone and playback on"
+      assert render(view) =~ "Live · microphone on"
     end
 
     test "settings and a second conversation are refused while one is active" do

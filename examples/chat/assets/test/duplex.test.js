@@ -78,7 +78,7 @@ function grantMicrophone() {
   return microphone;
 }
 
-function mount() {
+function mount(dataset = {}) {
   const handlers = {};
   const pushes = [];
   const listeners = {};
@@ -97,7 +97,7 @@ function mount() {
   };
   const hook = {
     ...Duplex,
-    el: { parentElement: el },
+    el: { parentElement: el, dataset },
     handleEvent(name, fn) {
       handlers[name] = fn;
     },
@@ -114,8 +114,8 @@ function mount() {
 }
 
 // Starts a conversation: click, microphone grant, server reply, model handshake.
-async function connect(generation = 1) {
-  const view = mount();
+async function connect(generation = 1, dataset = {}) {
+  const view = mount(dataset);
   grantMicrophone();
   view.click("start");
   await tick();
@@ -295,4 +295,54 @@ test("a microphone request that does not finish times out and releases a late gr
   await tick();
   assert.ok(mic.track.stopped);
   assert.equal(view.sent("call_start").length, 0);
+});
+
+test("user speech flushes queued reply audio, reports heard time and keeps the microphone", async () => {
+  const view = await connect(5, { playbackAhead: "60" });
+  const [context] = contexts.slice(-1);
+  context.outputLatency = 0.02;
+  for (let i = 0; i < 3; i++) {
+    view.handlers.call_play({ generation: 5, output: "item_1", pcm: pcm(1_920), rate: 24_000 });
+  }
+  // Chunks at 0.04, 0.12 and 0.2 s. At 0.1 s minus 20 ms latency, 40 ms were heard.
+  context.currentTime = 0.1;
+  view.handlers.call_flush({ generation: 4 });
+  assert.equal(view.sent("call_played").length, 0);
+  view.handlers.call_flush({ generation: 5 });
+
+  assert.ok(context.sources.every((source) => source.stopped));
+  assert.deepEqual(view.sent("call_played").at(-1).payload, {
+    generation: 5,
+    output: "item_1",
+    ms: 40,
+  });
+  assert.ok(!microphone.track.stopped);
+  assert.ok(!microphone.node.disconnected);
+  speak(30);
+  assert.equal(view.sent("call_audio").length, 1);
+
+  // Late audio of the cut reply is dropped; the next reply plays at once.
+  view.handlers.call_play({ generation: 5, output: "item_1", pcm: pcm(1_920), rate: 24_000 });
+  assert.equal(context.sources.length, 3);
+  view.handlers.call_play({ generation: 5, output: "item_2", pcm: pcm(1_920), rate: 24_000 });
+  assert.equal(context.sources.length, 4);
+  assert.equal(Number(context.sources[3].at.toFixed(2)), 0.14);
+});
+
+test("reply audio past the playback limit drops the rest of that reply", async () => {
+  const view = await connect(6, { playbackAhead: "0.2" });
+  const [context] = contexts.slice(-1);
+  for (let i = 0; i < 4; i++) {
+    view.handlers.call_play({ generation: 6, output: "item_1", pcm: pcm(1_920), rate: 24_000 });
+  }
+  // Chunks start at 0.04, 0.12 and 0.2 s; the fourth would start past 0.2 s.
+  assert.equal(context.sources.length, 3);
+  // Room is free again, but the reply has a gap; its heard time must stay a prefix.
+  context.currentTime = 0.5;
+  view.handlers.call_play({ generation: 6, output: "item_1", pcm: pcm(1_920), rate: 24_000 });
+  assert.equal(context.sources.length, 3);
+  view.handlers.call_flush({ generation: 6 });
+  assert.equal(view.sent("call_played").at(-1).payload.ms, 240);
+  view.handlers.call_play({ generation: 6, output: "item_2", pcm: pcm(1_920), rate: 24_000 });
+  assert.equal(context.sources.length, 4);
 });

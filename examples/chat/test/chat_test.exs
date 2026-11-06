@@ -36,24 +36,44 @@ defmodule ChatTest do
     assert :ok = AudioFlow.cancel(session)
   end
 
-  test "provider configuration validates missing environment and preserves speech contract" do
+  test "provider configuration validates missing environment and selects each speech contract" do
     settings = Map.put(Chat.Setup.defaults(), "mode", "remote")
     assert {:error, missing} = Chat.Setup.options(settings, fn _ -> nil end)
     assert missing =~ "DEEPGRAM_API_KEY"
     assert missing =~ "ELEVENLABS_VOICE_ID"
 
-    for {mode, rate, adapter} <- [
-          {"openai", 24_000, AudioFlow.Adapters.OpenAIRealtime},
-          {"gemini", 16_000, AudioFlow.Adapters.GeminiLive}
+    gemini = Map.put(settings, "mode", "gemini")
+    assert Chat.Setup.rate(gemini) == 16_000
+    assert {:ok, opts} = Chat.Setup.options(gemini, fn _ -> "server-value" end)
+    assert {AudioFlow.Adapters.GeminiLive, provider} = opts[:speech_to_speech]
+    assert is_function(provider[:api_key], 0)
+    refute Keyword.has_key?(opts, :history)
+    refute Keyword.has_key?(opts, :stt)
+
+    # OpenAI is an always-on conversation; the key stays a server-side function.
+    openai = %{settings | "mode" => "openai", "voice" => "cedar"}
+    assert Chat.Setup.rate(openai) == 24_000
+    assert Chat.Setup.duplex?(openai)
+    env = &%{"OPENAI_API_KEY" => "server-key", "OPENAI_REALTIME_MODEL" => "gpt-realtime"}[&1]
+
+    assert {:ok, [duplex: {AudioFlow.Duplex.OpenAIRealtime, provider}]} =
+             Chat.Setup.options(openai, env)
+
+    assert provider[:model] == "gpt-realtime" and provider[:voice] == "cedar"
+    assert provider[:api_key].() == "server-key"
+    refute Keyword.has_key?(provider, :endpoint)
+
+    for {endpoint, result} <- [
+          {"ws://127.0.0.1:9000/v1/realtime", :ok},
+          {"https://api.openai.com/v1/realtime", :error},
+          {"wss://user:secret@proxy.test/v1/realtime", :error}
         ] do
-      s = Map.put(settings, "mode", mode)
-      assert Chat.Setup.rate(s) == rate
-      assert {:ok, opts} = Chat.Setup.options(s, fn _ -> "server-value" end)
-      assert {^adapter, provider} = opts[:speech_to_speech]
-      assert is_function(provider[:api_key], 0)
-      refute Keyword.has_key?(opts, :history)
-      refute Keyword.has_key?(opts, :stt)
+      env = &(%{"OPENAI_REALTIME_ENDPOINT" => endpoint}[&1] || env.(&1))
+      assert elem(Chat.Setup.options(openai, env), 0) == result
     end
+
+    assert {:error, missing} = Chat.Setup.options(openai, fn _ -> nil end)
+    assert missing =~ "OPENAI_API_KEY"
   end
 
   test "recording redacts split text, omits PCM and deletes the private directory" do
@@ -91,12 +111,11 @@ defmodule ChatTest do
   test "actual LiveView controls submit, configure, record, download and delete" do
     {:ok, view, html} = live(build_conn(), "/")
     assert html =~ "Synthetic demo"
-    assert html =~ "No inference"
     view |> element("#configuration") |> render_submit(%{"mode" => "remote"})
     assert render(view) =~ "Missing server environment"
-    assert render(view) =~ "Active: demo"
+    assert has_element?(view, "select[name=mode] option[value=demo][selected]")
     view |> element("button[phx-click=capture]") |> render_click()
-    assert render(view) =~ "Disable and delete recordings"
+    assert render(view) =~ "Delete saved transcripts"
     render_hook(view, "send", %{"text" => "private-message"})
 
     assert eventually(fn ->

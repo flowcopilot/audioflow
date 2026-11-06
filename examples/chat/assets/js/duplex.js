@@ -1,14 +1,21 @@
-// Full duplex conversation with a local Moshi model through AudioFlow.Duplex.
+// Always-on conversation through AudioFlow.Duplex (local Moshi or OpenAI).
 //
-// The microphone stays open for the whole conversation. Its samples are
-// resampled continuously to 24 kHz and sent as 80 ms s16le chunks. Model audio
-// plays at the same time; microphone input never stops or flushes playback.
+// The microphone stays open from Start to Stop. Its samples are resampled
+// continuously to 24 kHz and sent as 80 ms s16le chunks. Model audio plays at
+// the same time; microphone input never stops playback.
+//
+// When the server reports user speech ("call_flush"), queued model audio is
+// stopped and the microphone stays open. The hook then reports how much of
+// the cut reply audio the browser rendered ("call_played"), and drops later
+// audio of that reply.
 //
 // Flow limits:
 // - Before the server reports the model handshake, microphone input is dropped.
 // - At most MAX_IN_FLIGHT chunks wait for a server acknowledgement.
 // - At most MAX_PENDING chunks wait to be sent; the oldest is dropped first.
-// - Model audio more than MAX_PLAYBACK_AHEAD seconds ahead of the clock is dropped.
+// - Model audio more than data-playback-ahead seconds (default
+//   MAX_PLAYBACK_AHEAD) ahead of the clock is dropped, and so is the rest of
+//   that reply, so the rendered time maps to a prefix of the reply.
 // - Each conversation has a server generation. Events of another generation
 //   are ignored.
 
@@ -94,9 +101,13 @@ export const Duplex = {
         clearTimeout(call.startupTimer);
       }
     });
-    this.handleEvent("call_play", ({ generation, pcm, rate }) => {
+    this.handleEvent("call_play", ({ generation, output, pcm, rate }) => {
       const call = this.current(generation);
-      if (call) this.play(call, pcm, rate);
+      if (call) this.play(call, pcm, rate, output ?? null);
+    });
+    this.handleEvent("call_flush", ({ generation }) => {
+      const call = this.current(generation);
+      if (call) this.flush(call);
     });
     this.handleEvent("call_stopped", ({ generation }) => {
       const call = this.current(generation);
@@ -133,6 +144,11 @@ export const Duplex = {
       sources: new Set(),
       next: 0,
       late: 0,
+      flushed: 0,
+      // Read at start: the server sets it per provider.
+      ahead: Number(this.el.dataset?.playbackAhead) || MAX_PLAYBACK_AHEAD,
+      output: null,
+      cut: null,
       released: false,
     };
     this.call = call;
@@ -177,7 +193,7 @@ export const Duplex = {
         track.onended = () => this.fail(call, new Error("Microphone disconnected"));
       }
 
-      this.draw("Connecting to Moshi…");
+      this.draw("Connecting…");
       this.pushEvent("call_start", {}, (reply) => {
         if (this.call !== call) {
           // Stopped while the server started it.
@@ -232,16 +248,22 @@ export const Duplex = {
     }
   },
 
-  play(call, pcm, rate) {
+  play(call, pcm, rate, output) {
+    if (output !== null && output === call.cut) return;
     const bytes = fromBase64(pcm);
     const samples = new Int16Array(bytes.buffer, 0, bytes.length >> 1);
     if (samples.length === 0) return;
 
+    if (output !== null && call.output?.id !== output) {
+      call.output = { id: output, spans: [], rendered: 0, dropping: false };
+    }
+    const reply = output === null ? null : call.output;
     const context = call.context;
     const now = context.currentTime;
     const start = Math.max(call.next, now + PLAYBACK_LEAD);
-    if (start - now > MAX_PLAYBACK_AHEAD) {
+    if (reply?.dropping || start - now > call.ahead) {
       call.late++;
+      if (reply) reply.dropping = true;
       return;
     }
 
@@ -256,6 +278,52 @@ export const Duplex = {
     source.start(start);
     call.sources.add(source);
     call.next = start + buffer.duration;
+    if (reply) {
+      this.fold(call, reply);
+      reply.spans.push([start, call.next]);
+    }
+  },
+
+  // Audio-clock time that the listener has heard: output latency is
+  // subtracted, so progress never counts audio still in the output buffer.
+  heard(call) {
+    const context = call.context;
+    return context.currentTime - (context.outputLatency || context.baseLatency || 0);
+  },
+
+  // Moves fully heard spans into a sum, so the span list stays short.
+  fold(call, reply) {
+    const heard = this.heard(call);
+    reply.spans = reply.spans.filter(([start, end]) => {
+      if (end > heard) return true;
+      reply.rendered += end - start;
+      return false;
+    });
+  },
+
+  // Seconds of this reply that were heard.
+  rendered(call, reply) {
+    const heard = this.heard(call);
+    let sum = reply.rendered;
+    for (const [start, end] of reply.spans) sum += Math.max(0, Math.min(heard, end) - start);
+    return sum;
+  },
+
+  // User speech: stop queued model audio, keep the microphone, report progress.
+  flush(call) {
+    const reply = call.output;
+    const ms = reply ? Math.max(0, Math.floor(this.rendered(call, reply) * 1000)) : 0;
+    for (const source of call.sources) {
+      source.onended = null;
+      source.stop();
+    }
+    call.sources.clear();
+    call.next = 0;
+    call.flushed++;
+    if (!reply) return;
+    call.cut = reply.id;
+    call.output = null;
+    this.pushEvent("call_played", { generation: call.generation, output: reply.id, ms });
   },
 
   release(call) {
@@ -299,6 +367,7 @@ export const Duplex = {
     const queued = Math.max(0, call.next - call.context.currentTime);
     stats.textContent =
       `Sent ${call.sent} · dropped ${call.dropped} input chunks · ` +
-      `${Math.round(queued * 1000)} ms queued playback · ${call.late} late output chunks`;
+      `${Math.round(queued * 1000)} ms queued playback · ${call.late} late output chunks · ` +
+      `${call.flushed} interruptions`;
   },
 };
