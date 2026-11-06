@@ -132,6 +132,31 @@ Whisper output to segments. With the pinned Bumblebee 0.8.0 and EXLA 1.0.0,
 Whisper `timestamps: :segments` fails to compile, so these segments have no
 times inside a session.
 
+### Speech-to-text models
+
+| Engine | Adapter | Models |
+| --- | --- | --- |
+| Local Whisper | `AudioFlow.NxAdapter` with `AudioFlow.Models.whisper/2` | Bumblebee Whisper checkpoints |
+| Deepgram | `AudioFlow.Adapters.Deepgram` | Nova and other Listen models |
+| ReqLLM providers | `AudioFlow.Adapters.ReqLLMTranscription` | Mistral Voxtral, OpenAI Whisper and GPT-4o transcription, Groq Whisper, ElevenLabs Scribe, OpenRouter |
+| Self-hosted servers | `AudioFlow.Adapters.ReqLLMTranscription` with `:base_url` | vLLM with Voxtral or Whisper, and other OpenAI-compatible `/audio/transcriptions` servers |
+
+```elixir
+voxtral = {AudioFlow.Adapters.ReqLLMTranscription,
+  [model: "mistral:voxtral-mini-latest", segments: true,
+   provider_options: [timestamp_granularities: "segment"]]}
+
+local_voxtral = {AudioFlow.Adapters.ReqLLMTranscription,
+  [model: "vllm:mistralai/Voxtral-Mini-3B-2507", base_url: "http://localhost:8000/v1"]}
+```
+
+The ReqLLM adapter sends each turn as one WAV upload and emits after the
+response. ReqLLM reads the provider key from its environment variable, for
+example `MISTRAL_API_KEY`, or from `:api_key`. Retries are off by default.
+Mistral does not accept `timestamp_granularities` together with `:language`.
+Set `segments: true` only with segment timestamps; ReqLLM puts word timestamps
+in the same list.
+
 For a long recording, use `AudioFlow.transcribe/3`. It cuts the audio into
 sections, runs the STT adapter on each section in a supervised task, and returns
 an `AudioFlow.Transcript` with times from the start of the input:
@@ -153,6 +178,7 @@ and the first failure returns `{:error, {:section, index, reason}}`.
 ```sh
 AUDIOFLOW_ML=1 mix run examples/transcribe.exs input.wav
 DEEPGRAM_API_KEY=... mix run examples/transcribe.exs input.wav deepgram
+MISTRAL_API_KEY=... mix run examples/transcribe.exs input.wav mistral:voxtral-mini-latest
 ```
 
 ## Conversation history

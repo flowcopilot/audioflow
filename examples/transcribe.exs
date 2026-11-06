@@ -2,6 +2,10 @@
 #
 #   AUDIOFLOW_ML=1 mix run examples/transcribe.exs input.wav
 #   DEEPGRAM_API_KEY=... mix run examples/transcribe.exs input.wav deepgram
+#   MISTRAL_API_KEY=... mix run examples/transcribe.exs input.wav mistral:voxtral-mini-latest
+#
+# Any ReqLLM transcription model works, for example groq:whisper-large-v3-turbo
+# or openai:gpt-4o-transcribe. For a local vLLM server, set AUDIOFLOW_STT_BASE_URL.
 #
 # Local Whisper needs 16 kHz input. Convert other files first:
 #   ffmpeg -i input.mp3 -ac 1 -ar 16000 -sample_fmt s16 input.wav
@@ -17,6 +21,16 @@ stt =
          segments: true,
          api_key: fn -> System.fetch_env!("DEEPGRAM_API_KEY") end
        ]}
+
+    [model] ->
+      base_url = System.get_env("AUDIOFLOW_STT_BASE_URL")
+
+      {AudioFlow.Adapters.ReqLLMTranscription,
+       [model: model, segments: true] ++
+         if(String.starts_with?(model, "mistral:"),
+           do: [provider_options: [timestamp_granularities: "segment"]],
+           else: []
+         ) ++ if(base_url, do: [base_url: base_url], else: [])}
 
     [] ->
       repository = "openai/whisper-tiny"
