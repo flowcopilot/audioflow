@@ -30,9 +30,11 @@ mix audio_flow.bench --runs 20 --concurrency 4
 For a browser chat with typed and spoken messages, see
 [examples/chat](examples/chat/README.md). Its Linux demo needs no model download;
 the app also exposes server-configured speech providers, languages, redacted
-recordings, playback progress and provisional pause/resume. Its full duplex
-mode talks to a local Moshi server through `AudioFlow.Duplex`: the microphone
-stays open and the model audio plays at the same time.
+recordings, playback progress and provisional pause/resume. Its always-on
+modes use `AudioFlow.Duplex` with OpenAI Realtime or a local Moshi server: the
+microphone stays open from Start to Stop and the model audio plays at the same
+time. OpenAI detects each utterance, replies by voice and stops the reply when
+you speak.
 
 To build agents as node graphs, see [ui](ui/README.md). It is a local dashboard
 with a canvas editor and an MCP endpoint for coding agents. A session runs an
@@ -68,7 +70,10 @@ For OpenAI Realtime, Gemini Live or a local
 [Moshi](docs/providers.md#local-moshi-speech-to-speech) server without chained
 stages, use the explicit
 [Session speech-to-speech mode](docs/providers.md#session-speech-to-speech-mode).
-It accepts committed PCM and does not replay cross-turn history.
+It accepts committed PCM and does not replay cross-turn history. For a
+continuous conversation with the microphone open, use `AudioFlow.Duplex` with
+[OpenAI Realtime](docs/providers.md#continuous-openai-realtime-conversation) or
+[Moshi](docs/providers.md#continuous-full-duplex-moshi).
 
 The owner receives transcript, text, audio, and terminal events. See
 `AudioFlow` for the event format. Each turn has a unique reference. A session

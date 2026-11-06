@@ -49,6 +49,10 @@ not decoded and are not requested.
 
 ## Direct speech-to-speech calls
 
+These calls send one committed utterance per connection. For an always-on
+OpenAI conversation with the microphone open, use
+[`AudioFlow.Duplex.OpenAIRealtime`](#continuous-openai-realtime-conversation).
+
 `AudioFlow.Adapters.OpenAIRealtime.run/3` and
 `AudioFlow.Adapters.GeminiLive.run/3` accept a committed `AudioFlow.Audio` and
 invoke an arity-one callback with `{:transcript, text}`, `{:text, delta}` and
@@ -129,7 +133,8 @@ explicit typed event ports (transcript, text and audio), routing/validation for
 each, and a dedicated history capability contract. Registering either adapter
 as an existing STT/LLM/TTS node would misrepresent its contract. Use the explicit
 Session mode or direct API today. There is no continuous duplex input, tool
-execution, automatic reconnect, resampling or WebRTC in this mode.
+execution, automatic reconnect, resampling or WebRTC in this mode. For
+continuous input, see `AudioFlow.Duplex` below.
 
 ## Local Moshi speech-to-speech
 
@@ -235,9 +240,11 @@ Bounds (defaults):
 - `:max_response_bytes` (67,108,864) for all incoming WebSocket bytes in a
   session, including fragments. The session fails with `:response_too_large`
   at this bound. Incomplete Ogg packets are limited to 256 KiB.
-- `:max_input_lead_ms` (2,000) of pushed audio that model audio has not
-  answered. A push past it returns `{:error, :overloaded}` and is not sent, for
-  example while MLX warms up.
+- `:max_input_lead_ms` (2,000). For Moshi (adapter input flow `:answered`):
+  pushed audio that model audio has not answered. For OpenAI (`:realtime`):
+  pushed audio ahead of the wall clock since `:ready`, so continuous silence
+  never fills it. A push past it returns `{:error, :overloaded}` and is not
+  sent, for example while MLX warms up.
 - `:max_owner_queue` (250): when the owner mailbox has this many messages, the
   session fails with `:owner_overloaded`. Output is not buffered or dropped.
 - `:send_timeout_ms` (5,000) for each TCP write.
@@ -253,6 +260,68 @@ input and output, frame sizes, the handshake gate, the input and owner bounds,
 timeouts and connection cleanup against a local fixture. With
 `AUDIOFLOW_HTTP_MODEL_TESTS=1` and `AUDIOFLOW_MOSHI_PCM`, it also streams the
 question and then silence in real time to a running server.
+
+### Continuous OpenAI Realtime conversation
+
+`AudioFlow.Duplex.OpenAIRealtime` keeps one authenticated OpenAI Realtime GA
+WebSocket open for a whole conversation. It needs no media build.
+
+```elixir
+{:ok, duplex} =
+  AudioFlow.Duplex.start(
+    owner: self(),
+    adapter:
+      {AudioFlow.Duplex.OpenAIRealtime,
+       model: System.fetch_env!("OPENAI_REALTIME_MODEL"),
+       api_key: fn -> System.fetch_env!("OPENAI_API_KEY") end,
+       voice: "marin"})
+
+# After {AudioFlow.Duplex, ^duplex, :ready}, push 24 kHz PCM continuously,
+# silence included:
+:ok = AudioFlow.Duplex.push(duplex, %AudioFlow.Audio{data: pcm, sample_rate: 24_000})
+```
+
+The adapter sends `session.update` (type `realtime`, `output_modalities`
+`["audio"]`, PCM 24 kHz in and out, the voice, input transcription and
+`server_vad` with `create_response` and `interrupt_response`) after
+`session.created`, and emits `:ready` after `session.updated`. Each push is one
+`input_audio_buffer.append`. The adapter never commits input and never sends
+`response.create`: OpenAI detects each utterance, replies to it and cancels the
+reply when new speech starts. All utterances of one connection share the
+provider conversation; a new connection starts a new one. The API key function
+runs only to connect, so the key is not kept in the session state. Options:
+`:model`, `:api_key`, `:voice` (`"marin"`), `:instructions` (`""`),
+`:transcription_model` (`"gpt-4o-mini-transcribe"`) and `:endpoint`.
+
+The owner also receives:
+
+| Event | Meaning |
+| --- | --- |
+| `{:speech_started, item}` | User speech started. Flush queued reply audio; keep the microphone open. Late audio and text of the interrupted reply are dropped. |
+| `{:transcript, item, text \| :failed}` | Final transcript of the user utterance `item`. |
+| `{:response, id, status}` | Reply `id` was `:created`, or ended `:completed`, `:cancelled`, `:incomplete` or `:failed`. |
+| `{:output, item}` | The next `{:audio, _}` events belong to reply audio `item`. |
+
+After a flush, report the played part of the cut reply with
+`AudioFlow.Duplex.control(duplex, {:played, item, ms})`. If `ms` is less than
+the audio received for `item`, the adapter sends `conversation.item.truncate`
+(`audio_end_ms` capped to the received audio), so the provider history keeps
+only the played audio and its transcript. Only the last interrupted reply is
+accepted, once; other reports return `{:error, :stale}` and leave the call
+open. A rejected truncation also leaves the call open. The played time is
+client playback time: it does not prove acoustic delivery. Without a report,
+the provider history keeps the full reply.
+
+Provider `error` events fail the session with `{:remote_error, code}` (only
+the code or type, never the message). Tool calls fail it with
+`:unsupported_tool_call`, because no tools are configured. All
+`AudioFlow.Duplex` bounds apply; `:max_response_bytes` (64 MiB) is about 17
+minutes of base64 reply audio per session.
+
+`mix test test/duplex_openai_test.exs` checks the handshake order, server VAD
+configuration, several utterances on one socket, continuous silence,
+interruption drops, truncation bounds, provider errors and cleanup against a
+local WebSocket peer, not OpenAI.
 
 ## Bounds, cancellation and errors
 
@@ -279,9 +348,14 @@ samples fail. Limits and timeout options must be positive integers.
 
 ## Protocol references and verification
 
-Wire shapes were checked against official documentation on 2026-11-03:
+Wire shapes were checked against official documentation on 2026-11-03
+(OpenAI Realtime events again on 2026-11-06):
 
 - [OpenAI Realtime conversations](https://developers.openai.com/api/docs/guides/realtime-conversations)
+- [OpenAI Realtime WebSocket](https://developers.openai.com/api/docs/guides/voice-websockets),
+  [voice activity detection](https://developers.openai.com/api/docs/guides/realtime-vad),
+  [client events](https://developers.openai.com/api/reference/resources/realtime/client-events) and
+  [server events](https://developers.openai.com/api/reference/resources/realtime/server-events)
 - [Gemini Live WebSocket reference](https://ai.google.dev/api/live)
 - [Deepgram pre-recorded utterances](https://developers.deepgram.com/docs/utterances)
 - [Cartesia bytes TTS](https://docs.cartesia.ai/api-reference/tts/bytes)

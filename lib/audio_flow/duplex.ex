@@ -26,7 +26,8 @@ defmodule AudioFlow.Duplex do
             max_input_lead_ms: [
               type: :pos_integer,
               default: 2_000,
-              doc: "Pushed audio not yet answered by model audio."
+              doc:
+                "Input lead. With adapter input flow `:answered`: pushed audio not yet answered by model audio. With `:realtime`: pushed audio ahead of the wall clock since `:ready`."
             ],
             max_owner_queue: [
               type: :pos_integer,
@@ -58,6 +59,9 @@ defmodule AudioFlow.Duplex do
                  `{:error, :not_ready}` before it.
                * `{:audio, %AudioFlow.Audio{}}` and `{:text, text}` with model output, in
                  wire order.
+               * Adapters with model turn detection also send `{:speech_started, item}`,
+                 `{:transcript, item, text | :failed}`, `{:response, id, status}` and
+                 `{:output, item}`. See `AudioFlow.Duplex.Adapter`.
                * `{:error, reason}` when the session fails. `:closed` follows.
                * `:closed` once, when the session stops for any reason except owner exit.
 
@@ -71,8 +75,12 @@ defmodule AudioFlow.Duplex do
 
              ## Bounds
 
-             Input that the model has not answered is at most `:max_input_lead_ms`.
-             A push past that bound returns `{:error, :overloaded}` and the chunk is not
+             The adapter selects the input flow. With `:answered` (Moshi, one output
+             frame for each input frame), input that the model has not answered is at
+             most `:max_input_lead_ms`. With `:realtime` (OpenAI, output only when the
+             model speaks), pushed audio is at most `:max_input_lead_ms` ahead of the
+             wall clock since `:ready`, so continuous silence never overloads. A push
+             past the bound returns `{:error, :overloaded}` and the chunk is not
              sent. Output is sent to the owner at once and is not buffered. If the owner
              mailbox has `:max_owner_queue` messages or more, the session fails with
              `:owner_overloaded`. The owner must be a local process.
@@ -101,6 +109,10 @@ defmodule AudioFlow.Duplex do
     Code.ensure_loaded!(module)
     config = module.config(adapter_options)
     Socket.endpoint!(config.url)
+
+    unless Map.get(config, :input_flow, :answered) in [:answered, :realtime],
+      do: raise(ArgumentError, "input_flow must be :answered or :realtime")
+
     args = {options, module, config}
 
     if link == :linked,
@@ -118,6 +130,19 @@ defmodule AudioFlow.Duplex do
   """
   def push(pid, audio) when is_pid(pid) do
     GenServer.call(pid, {:push, audio}, @call_timeout)
+  catch
+    :exit, {:timeout, _} -> {:error, :timeout}
+    :exit, _ -> {:error, :closed}
+  end
+
+  @doc """
+  Sends an adapter control command, for example playback progress. Returns
+  `:ok`, `{:error, :not_ready}`, `{:error, :unsupported}` (the adapter has no
+  controls), adapter errors such as `{:error, :stale}` (these leave the session
+  open), `{:error, :timeout}` or `{:error, :closed}`.
+  """
+  def control(pid, command) when is_pid(pid) do
+    GenServer.call(pid, {:control, command}, @call_timeout)
   catch
     :exit, {:timeout, _} -> {:error, :timeout}
     :exit, _ -> {:error, :closed}
@@ -154,6 +179,8 @@ defmodule AudioFlow.Duplex do
        module: module,
        adapter: module.init(config.options),
        rate: config.sample_rate,
+       input_flow: Map.get(config, :input_flow, :answered),
+       ready_at: nil,
        phase: :connecting,
        connector: connector,
        conn: nil,
@@ -174,8 +201,20 @@ defmodule AudioFlow.Duplex do
   end
 
   @impl true
-  def handle_call({:push, _audio}, _from, %{phase: phase} = state) when phase != :ready,
+  def handle_call({_kind, _value}, _from, %{phase: phase} = state) when phase != :ready,
     do: {:reply, {:error, :not_ready}, state}
+
+  def handle_call({:control, command}, _from, state) do
+    with true <- function_exported?(state.module, :handle_control, 2),
+         {:ok, frames, adapter} <- state.module.handle_control(command, state.adapter),
+         {:ok, state} <- send_frames(%{state | adapter: adapter}, frames) do
+      {:reply, :ok, state}
+    else
+      false -> {:reply, {:error, :unsupported}, state}
+      {:error, reason, state} -> fail({:error, reason}, state, reason)
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
 
   def handle_call({:push, audio}, _from, state) do
     with :ok <- check_audio(audio, state),
@@ -203,7 +242,7 @@ defmodule AudioFlow.Duplex do
       byte_size(audio.data) > state.max_chunk ->
         {:error, :too_large}
 
-      state.pushed + div(byte_size(audio.data), 2) - state.received > state.max_lead ->
+      state.pushed + div(byte_size(audio.data), 2) - allowance(state) > state.max_lead ->
         {:error, :overloaded}
 
       true ->
@@ -212,6 +251,12 @@ defmodule AudioFlow.Duplex do
   end
 
   defp check_audio(_audio, _state), do: {:error, :invalid_audio}
+
+  # Samples that the bound already counts as consumed.
+  defp allowance(%{input_flow: :answered} = state), do: state.received
+
+  defp allowance(%{input_flow: :realtime} = state),
+    do: div((System.monotonic_time(:millisecond) - state.ready_at) * state.rate, 1000)
 
   defp fail(reply, state, reason) do
     notify!(state, {:error, reason})
@@ -342,7 +387,15 @@ defmodule AudioFlow.Duplex do
 
   defp events(%{phase: :open} = state, [:ready | rest]) do
     :erlang.cancel_timer(state.connect_timer)
-    state = restart_idle(%{state | phase: :ready, connect_timer: nil})
+
+    state =
+      restart_idle(%{
+        state
+        | phase: :ready,
+          connect_timer: nil,
+          ready_at: System.monotonic_time(:millisecond)
+      })
+
     with :ok <- notify(state, :ready), do: events(state, rest)
   end
 
@@ -351,11 +404,25 @@ defmodule AudioFlow.Duplex do
     with :ok <- notify(state, event), do: events(state, rest)
   end
 
-  defp events(state, [{:text, text} = event | rest]) when is_binary(text) do
-    with :ok <- notify(state, event), do: events(state, rest)
+  defp events(state, [event | rest]) do
+    if valid_event?(event) do
+      with :ok <- notify(state, event), do: events(state, rest)
+    else
+      {:error, :invalid_event, state}
+    end
   end
 
-  defp events(state, _), do: {:error, :invalid_event, state}
+  @statuses [:created, :completed, :cancelled, :incomplete, :failed]
+
+  defp valid_event?({:text, text}), do: is_binary(text)
+  defp valid_event?({:speech_started, item}), do: is_binary(item)
+  defp valid_event?({:output, item}), do: is_binary(item)
+
+  defp valid_event?({:transcript, item, text}),
+    do: is_binary(item) and (is_binary(text) or text == :failed)
+
+  defp valid_event?({:response, id, status}), do: is_binary(id) and status in @statuses
+  defp valid_event?(_event), do: false
 
   defp notify(state, event) do
     case Process.info(state.owner, :message_queue_len) do
@@ -406,8 +473,10 @@ defmodule AudioFlow.Duplex do
   defp connect(server, config, timeout, send_timeout) do
     deadline = System.monotonic_time(:millisecond) + timeout
     transport = [send_timeout: send_timeout, send_timeout_close: true]
+    # A header function keeps credentials out of the session state.
+    headers = if is_function(config.headers, 0), do: config.headers.(), else: config.headers
 
-    case Socket.open(config.url, config.headers, deadline,
+    case Socket.open(config.url, headers, deadline,
            mode: :active,
            transport_opts: transport
          ) do
