@@ -30,7 +30,9 @@ mix audio_flow.bench --runs 20 --concurrency 4
 For a browser chat with typed and spoken messages, see
 [examples/chat](examples/chat/README.md). Its Linux demo needs no model download;
 the app also exposes server-configured speech providers, languages, redacted
-recordings, playback progress and provisional pause/resume.
+recordings, playback progress and provisional pause/resume. Its full duplex
+mode talks to a local Moshi server through `AudioFlow.Duplex`: the microphone
+stays open and the model audio plays at the same time.
 
 To build agents as node graphs, see [ui](ui/README.md). It is a local dashboard
 with a canvas editor and an MCP endpoint for coding agents. A session runs an

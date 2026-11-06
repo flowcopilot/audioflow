@@ -4,7 +4,7 @@ A local LiveView chat over one AudioFlow session per browser tab. Type a
 message, or record one with the microphone. While you record, the user message
 shows a live transcript. The reply text streams into the conversation, the
 reply audio plays as it arrives, and each reply keeps an audio player for
-replay. The UI uses [live_shadcn](https://live-shadcn-storybook.fly.dev/) and
+replay. A full duplex mode talks to a local Moshi model without turns. The UI uses [live_shadcn](https://live-shadcn-storybook.fly.dev/) and
 its AI Elements components.
 
 The native profile runs models on Apple Silicon through MLX (macOS 26.2+).
@@ -26,6 +26,81 @@ mix test
 Demo STT returns a fixed “Hello”, replies echo the input and output PCM is silent.
 It tests session wiring, not recognition or synthesis. No EMLX, EXLA, Bumblebee
 or model downloads are needed. Use the same profile for all Mix commands.
+
+## Full duplex conversation with local Moshi
+
+This mode has no turns. The microphone stays open, and Moshi audio plays at
+the same time. You can speak while Moshi speaks; your speech does not stop the
+playback. It uses `AudioFlow.Duplex` with `AudioFlow.Duplex.Moshi`. It needs
+`AUDIOFLOW_MEDIA=1` (Ogg Opus through Membrane) and no Whisper, Qwen or Kokoro
+download. The demo profile starts no native model.
+
+1. Start the Moshi server in a separate terminal. The model
+   `kyutai/moshika-mlx-q4` loads from the Hugging Face cache
+   (`~/.cache/huggingface/hub/models--kyutai--moshika-mlx-q4`). If the cache is
+   empty, the first start downloads approximately 5 GB. `HF_HUB_OFFLINE=1`
+   prevents network access when the model is in the cache.
+
+   ```sh
+   HF_HUB_OFFLINE=1 uvx --python 3.12 --from moshi_mlx python -m moshi_mlx.local_web \
+     -q 4 --hf-repo kyutai/moshika-mlx-q4 --no-browser --port 8998
+   ```
+
+2. Start the chat in full duplex mode:
+
+   ```sh
+   cd examples/chat
+   export CHAT_PROFILE=demo AUDIOFLOW_MEDIA=1 CHAT_MODE=moshi
+   mix setup
+   mix phx.server
+   ```
+
+3. Open <http://localhost:4000>, click **Start conversation** and allow the
+   microphone. Click **Stop** to end the conversation.
+
+Use the same three variables for all Mix commands of this profile. The build
+goes to `_build/demo_media`, so it does not reuse modules from another profile
+(`_build` native, `_build/demo` demo, `_build/native_media` native with media).
+Without `CHAT_MODE=moshi`, select **Local Moshi full duplex** in the Pipeline
+list and click **Apply**.
+
+The server reads the model endpoint only from `AUDIOFLOW_MOSHI_ENDPOINT`
+(default `ws://127.0.0.1:8998/api/chat`). The value must be a `ws://` or
+`wss://` URL without user information. Browser events never select the
+endpoint.
+
+Status and errors show next to the controls: **Connecting to Moshi…**, **Live**,
+**Conversation ended** or **Stopped by an error** with the reason (for
+example `connect_failed` when the Moshi server does not run, or the microphone
+error). The text input, the record button, the pause controls and the
+recordings control are not available in this mode. Moshi does not transcribe
+you, so only the model text shows. A pause of 1.5 s in the model text starts a
+new message.
+
+Limits:
+
+| Item | Limit |
+| --- | --- |
+| Input chunk | exactly 3,840 bytes: 80 ms of 24 kHz mono s16le PCM. Other sizes are refused. |
+| Resampling | continuous box filter from the capture rate to 24 kHz. Capture below 24 kHz fails. |
+| Input before the model handshake | dropped |
+| Input that waits for a server acknowledgement | 4 chunks (320 ms) |
+| Input that waits to be sent | 12 chunks (960 ms); the oldest chunk is dropped first |
+| Input that the model has not answered | 2 s (`AudioFlow.Duplex` `:max_input_lead_ms`); more is refused with `overloaded` and dropped |
+| Queued model audio in the browser | 1 s ahead of the playback clock; later chunks are dropped |
+| Time | 15 s to the model handshake; 30 s without accepted input ends the conversation; 30 min in total |
+| Conversation messages | the latest 200, 4,000 bytes each |
+
+The status line shows the sent and dropped input chunks, the queued playback
+and the dropped model audio. Each conversation has a generation number; the
+browser and the server ignore events of an earlier generation. Stop, an
+error, a microphone failure or disconnection, a LiveView disconnect and a
+server stop release the microphone, the queued playback and the model
+connection. The Moshi server serves one connection at a time.
+
+Use headphones. The browser requests echo cancellation, but AudioFlow does not
+verify it. Without headphones, Moshi can hear its own voice. Microphone access
+requires `localhost` or HTTPS.
 
 ## Run native models on Apple Silicon
 
@@ -226,11 +301,14 @@ Chat validation commands:
 ```sh
 cd examples/chat
 CHAT_PROFILE=demo mix test
-node --test assets/test/audio.test.js
+CHAT_PROFILE=demo AUDIOFLOW_MEDIA=1 mix test
+node --test assets/test/
 CHAT_PROFILE=demo mix assets.build
 ```
 
-The JS test uses a simulated AudioContext clock, not a browser speaker.
+The JS tests use a simulated AudioContext clock and microphone, not a browser
+speaker. With `AUDIOFLOW_MEDIA=1`, the duplex LiveView tests use a local
+WebSocket peer with the Moshi wire format, not the Moshi model.
 
 Implementation validation on Linux (synthetic/local fixtures only): 7 chat
 ExUnit tests, 1 simulated AudioContext test, and 51 relevant core tests passed;
