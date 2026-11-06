@@ -128,8 +128,14 @@ defmodule AudioFlow.GraphCheckpointTest do
         do: assert_receive({:synth_wait, _}),
         else: assert_receive({:waiting, _})
 
-      state = :sys.get_state(session)
-      assert :ok = Output.acknowledge(session, turn, state.active.playout.emitted)
+      emitted_ns =
+        case mode do
+          :branch -> 500_000
+          :join -> 0
+          _ -> 125_000
+        end
+
+      assert :ok = Output.acknowledge(session, turn, emitted_ns)
       assert :ok = AudioFlow.cancel(session)
       {:ok, _} = AudioFlow.submit(session, %Text{data: "next"})
       assert_receive {:prompt, [%{content: "next"}]}

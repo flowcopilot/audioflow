@@ -5,11 +5,9 @@ defmodule AudioFlow.RecordingTest do
   alias AudioFlow.Recording
   alias AudioFlow.Recording.Store
 
-  setup do
-    root =
-      Path.join(System.tmp_dir!(), "audioflow-recording-#{System.unique_integer([:positive])}")
+  @moduletag :tmp_dir
 
-    on_exit(fn -> File.rm_rf!(root) end)
+  setup %{tmp_dir: root} do
     {:ok, store} = Store.new(root)
 
     recorder =

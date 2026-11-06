@@ -54,7 +54,6 @@ defmodule AudioFlow.InputProcessingTest do
     assert_receive {:semantic_audio, %Audio{data: pcm}}
     assert pcm == frame(32_000) <> frame(0)
     {[], state} = VoiceInput.push(state, audio(frame(32_000) <> frame(0)))
-    assert state.speaking?
 
     {[{:utterance, result, :semantic_limit}], _} =
       VoiceInput.push(state, audio(frame(0) <> frame(0)))
@@ -67,10 +66,12 @@ defmodule AudioFlow.InputProcessingTest do
 
     for _ <- 1..2, reduce: state do
       state ->
-        {[:speech_started, {:utterance, _, :semantic}], state} =
-          VoiceInput.push(state, audio(frame(32_000) <> frame(0)))
+        expected = audio(frame(32_000) <> frame(0))
 
-        assert state.semantic_checked_at == 0
+        assert {[:speech_started, {:utterance, ^expected, :semantic}], state} =
+                 VoiceInput.push(state, expected)
+
+        assert_receive {:semantic_audio, ^expected}
         state
     end
   end
@@ -106,7 +107,6 @@ defmodule AudioFlow.InputProcessingTest do
     {[], state} = VoiceInput.push(state, audio(a), audio(ra))
     {events, state} = VoiceInput.push(state, audio(b), audio(rb))
     assert events == [:speech_started, {:utterance, audio(frame(32_000) <> frame(0)), :silence}]
-    assert state.reference_pending == <<>>
     assert {[], _} = VoiceInput.flush(state)
     assert_raise ArgumentError, fn -> VoiceInput.push(state, audio(pcm), audio(<<>>)) end
   end

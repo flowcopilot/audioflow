@@ -13,12 +13,10 @@ defmodule AudioFlow.CrossFeatureAcceptanceTest do
   alias AudioFlow.Text
   alias AudioFlow.VoiceInput
 
-  setup do
-    root =
-      Path.join(System.tmp_dir!(), "audioflow-acceptance-#{System.unique_integer([:positive])}")
+  @moduletag :tmp_dir
 
+  setup %{tmp_dir: root} do
     {:ok, store} = Store.new(root)
-    on_exit(fn -> File.rm_rf!(root) end)
     %{store: store, root: root}
   end
 

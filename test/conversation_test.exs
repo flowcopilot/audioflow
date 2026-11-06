@@ -20,10 +20,14 @@ defmodule AudioFlow.ConversationTest do
     end
 
     def adapter(_, %{name: name}) do
+      owner = self()
+
       {AudioFlow.Adapters.Function,
        run: fn messages, emit ->
          case List.last(messages).content do
            "wait" ->
+             send(owner, {:waiting, self()})
+
              receive do
                :resume -> :ok
                :fail -> throw(:test_failure)
@@ -118,7 +122,7 @@ defmodule AudioFlow.ConversationTest do
              Handoff.run(%{intent: "billing"}, %{session: session, turn: ref})
 
     assert {:ok, "triage"} = Conversation.state(session)
-    task = :sys.get_state(session).active.task.pid
+    assert_receive {:waiting, task}
     send(task, :resume)
     assert_receive {AudioFlow, ^session, ^ref, {:done, _}}
     assert {:ok, "billing"} = Conversation.state(session)
@@ -133,7 +137,8 @@ defmodule AudioFlow.ConversationTest do
     session = start()
     {:ok, ref} = AudioFlow.submit(session, %AudioFlow.Text{data: "wait"})
     assert :ok = Conversation.event(session, {:intent, "billing"})
-    send(:sys.get_state(session).active.task.pid, :fail)
+    assert_receive {:waiting, task}
+    send(task, :fail)
     assert_receive {AudioFlow, ^session, ^ref, {:error, :test_failure, _}}
     assert {:ok, "triage"} = Conversation.state(session)
     turn(session, "again", "triage:1")

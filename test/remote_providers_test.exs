@@ -194,14 +194,9 @@ defmodule AudioFlow.RemoteProvidersTest do
     end
   end
 
-  test "provider Session events are recorded and redacted without persisting raw PCM by default" do
-    root =
-      Path.join(
-        System.tmp_dir!(),
-        "audioflow-provider-recording-#{System.unique_integer([:positive])}"
-      )
-
-    on_exit(fn -> File.rm_rf!(root) end)
+  @tag :tmp_dir
+  test "provider Session events are recorded and redacted without persisting raw PCM by default",
+       %{tmp_dir: root} do
     {:ok, store} = Store.new(root)
     {:ok, session} = AudioFlow.start_session(speech_to_speech: {GeminiLive, socket_options()})
     on_exit(fn -> if Process.alive?(session), do: AudioFlow.stop_session(session) end)
