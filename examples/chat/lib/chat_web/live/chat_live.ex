@@ -943,7 +943,15 @@ defmodule ChatWeb.ChatLive do
     ~H"""
     <div id="chat" phx-hook="Player" class="mx-auto flex h-svh max-w-3xl flex-col gap-4 p-4">
       <header class="flex items-center justify-between gap-4">
-        <h1 class="text-lg font-semibold">AudioFlow</h1>
+        <h1 class="flex items-center gap-2.5 text-lg font-bold">
+          <svg viewBox="0 0 32 32" aria-hidden="true" class="size-7">
+            <rect width="32" height="32" rx="8" fill="#5B2E91" />
+            <g stroke="#7CE0C3" stroke-width="2.4" stroke-linecap="round">
+              <path d="M8 14v4" /><path d="M12 10v12" /><path d="M16 7v18" /><path d="M20 11v10" /><path d="M24 14v4" />
+            </g>
+          </svg>
+          AudioFlow
+        </h1>
         <Button.button variant="outline" size="sm" phx-click="new_chat">
           {if @duplex, do: "Clear text", else: "New chat"}
         </Button.button>
