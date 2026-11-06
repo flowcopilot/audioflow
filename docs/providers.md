@@ -131,6 +131,65 @@ as an existing STT/LLM/TTS node would misrepresent its contract. Use the explici
 Session mode or direct API today. There is no continuous duplex input, tool
 execution, automatic reconnect, resampling or WebRTC in this mode.
 
+## Local Moshi speech-to-speech
+
+`AudioFlow.Adapters.Moshi` runs one committed turn against a local
+[Kyutai Moshi](https://github.com/kyutai-labs/moshi) server. Moshi is a 7B
+full-duplex model. The 4-bit MLX build needs approximately 5 GB of weights and
+runs on an Apple Silicon laptop. The adapter needs `AUDIOFLOW_MEDIA=1`, because
+it uses `membrane_opus_plugin` for Opus and `membrane_ogg_plugin` for Ogg pages.
+
+Start the server (Python 3.12, approximately 5 GB download on first start):
+
+```sh
+uvx --python 3.12 --from moshi_mlx python -m moshi_mlx.local_web \
+  -q 4 --hf-repo kyutai/moshika-mlx-q4 --no-browser --port 8998
+```
+
+Use the adapter with 24 kHz input:
+
+```elixir
+{:ok, session} = AudioFlow.start_session(
+  speech_to_speech: {AudioFlow.Adapters.Moshi, [endpoint: "ws://127.0.0.1:8998/api/chat"]},
+  timeout_ms: 60_000)
+```
+
+The wire protocol is binary WebSocket messages with a one-byte kind: `0`
+handshake, `1` Ogg Opus audio (24 kHz mono), `2` UTF-8 text tokens. The adapter
+sends the input as 80 ms Ogg pages of four 20 ms Opus packets, then silence. It
+sends one silent frame for each output frame, so the model sets the pace, not
+the wall clock. Output for the input period is dropped.
+
+Moshi has no end-of-turn signal. The reply ends after `:end_silence_ms` (1,600)
+of model output without a text token. The turn fails with `:no_reply` if
+`:max_reply_ms` (20,000) passes without text. The default `:timeout_ms` is
+60,000. Moshi does not transcribe the user, so there is no `:transcript` event.
+
+Limits:
+
+- The server serves one connection at a time. A second turn waits for the lock.
+- Model state continues across connections. The server does not reset context
+  between turns, and the adapter cannot clear it.
+- The first turn after server start is slow (approximately 13 s on an M5) while
+  MLX warms up. Later turns gave the first reply audio approximately 2 s after
+  submit for a 3.2 s question.
+- Moshi speaks English only.
+- The adapter calls the Opus `Native` modules and the Ogg `Page`, `Parser` and
+  `Opus` modules directly, not through Membrane pipeline elements. The
+  `Membrane.Ogg.Muxer` element holds packets until a page has 255 segments
+  (approximately 5 s), which is too slow for a duplex model. These modules are
+  internal to the plugins, so the dependencies are pinned to `~> 0.21.0` and
+  `~> 0.5.2`.
+
+To check a running server, convert a question to raw 24 kHz PCM and run:
+
+```sh
+AUDIOFLOW_MEDIA=1 AUDIOFLOW_HTTP_MODEL_TESTS=1 \
+AUDIOFLOW_MOSHI_PCM=question.s16le mix test test/moshi_test.exs
+```
+
+`AUDIOFLOW_MOSHI_ENDPOINT` overrides the default endpoint.
+
 ## Bounds, cancellation and errors
 
 All providers accept `:endpoint` overrides for proxies and local tests. Use
