@@ -2,8 +2,14 @@ name: Runtime and examples
 
 on:
   pull_request:
+    paths-ignore: &docs-only
+      - '**/*.md'
+      - 'docs/**'
+      - 'site/**'
+      - '.github/workflows/pages.yml'
   push:
     branches: [main, feat/parallel-issue-integration]
+    paths-ignore: *docs-only
 
 permissions:
   contents: read
