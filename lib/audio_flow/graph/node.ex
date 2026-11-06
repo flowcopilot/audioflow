@@ -45,5 +45,7 @@ defmodule AudioFlow.Graph.Node do
 
   @callback nodes() :: [spec()]
   @callback adapter(type :: String.t(), options :: map()) :: {module(), keyword()}
-  @optional_callbacks adapter: 2
+  @doc "Server configuration errors for a type and its unvalidated, string-keyed options."
+  @callback prerequisites(type :: String.t(), options :: map()) :: [String.t()]
+  @optional_callbacks adapter: 2, prerequisites: 2
 end

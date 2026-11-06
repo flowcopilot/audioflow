@@ -24,7 +24,6 @@ defmodule AudioFlow.Resampler do
     count = div(byte_size(audio.data), 2)
     output_count = div(count * up, down)
     {table, half} = table(up, down)
-    # Zero padding keeps every filter window inside the input.
     padding = :binary.copy(<<0, 0>>, half)
     input = padding <> audio.data <> padding
     width = 4 * half
@@ -32,7 +31,6 @@ defmodule AudioFlow.Resampler do
     data =
       for k <- 0..(output_count - 1)//1, into: <<>> do
         position = k * down
-        # Window start: input sample center - half + 1, shifted by the padding.
         start = div(position, up) + 1
         window = binary_part(input, 2 * start, width)
         value = dot(window, elem(table, rem(position, up)), 0.0)
@@ -75,5 +73,27 @@ defmodule AudioFlow.Resampler do
     x = :math.pi() * cutoff * distance
     sinc = if abs(x) < 1.0e-9, do: 1.0, else: :math.sin(x) / x
     if abs(distance) >= half, do: 0.0, else: cutoff * sinc * window
+  end
+
+  @doc "Linear interpolation of mono signed 16-bit PCM."
+  def linear(%Audio{sample_rate: rate} = audio, rate), do: audio
+
+  def linear(%Audio{data: data, sample_rate: from}, to) do
+    samples = for <<sample::little-signed-16 <- data>>, do: sample
+    input = List.to_tuple(samples)
+    count = tuple_size(input)
+    length = if count == 0, do: 0, else: max(1, div(count * to, from))
+
+    pcm =
+      for index <- 0..(length - 1)//1, into: <<>> do
+        position = index * from / to
+        left = min(trunc(position), count - 1)
+        right = min(left + 1, count - 1)
+        weight = position - left
+        sample = round(elem(input, left) * (1 - weight) + elem(input, right) * weight)
+        <<sample::little-signed-16>>
+      end
+
+    %Audio{data: pcm, sample_rate: to}
   end
 end

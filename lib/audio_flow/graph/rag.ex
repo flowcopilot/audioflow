@@ -2,6 +2,7 @@ defmodule AudioFlow.Graph.Nodes.RAG do
   @moduledoc "Vector-to-document retrieval. Profiles are trusted application configuration."
   @behaviour AudioFlow.Graph.Node
 
+  @impl true
   def nodes do
     [
       %{
@@ -24,6 +25,17 @@ defmodule AudioFlow.Graph.Nodes.RAG do
     ]
   end
 
+  @impl true
+  def prerequisites("rag.retrieve", options) do
+    if Map.has_key?(
+         Application.get_env(:audio_flow, :retrieval_profiles, %{}),
+         options["profile"]
+       ),
+       do: [],
+       else: ["retrieval profile is not configured on the server (database/backend required)"]
+  end
+
+  @impl true
   def adapter("rag.retrieve", options) do
     profiles = Application.get_env(:audio_flow, :retrieval_profiles, %{})
     config = Map.fetch!(profiles, options.profile)

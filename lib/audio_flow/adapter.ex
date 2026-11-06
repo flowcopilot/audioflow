@@ -15,6 +15,18 @@ defmodule AudioFlow.Adapter do
   @callback run(input :: term(), options :: keyword(), emit :: (term() -> :ok)) ::
               :ok | {:error, term()}
 
+  @doc "Merges per-run context into adapter options when the adapter supports it."
+  @callback with_context(options :: keyword(), context :: map()) :: keyword()
+  @optional_callbacks with_context: 2
+
+  def with_context({module, options}, context) do
+    Code.ensure_loaded!(module)
+
+    if function_exported?(module, :with_context, 2),
+      do: {module, module.with_context(options, context)},
+      else: {module, options}
+  end
+
   def run({module, options}, input, emit) do
     case module.run(input, options, emit) do
       :ok -> :ok

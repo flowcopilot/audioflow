@@ -99,7 +99,6 @@ defmodule AudioFlow.Graph.Runner do
     end
   end
 
-  # All sources of `target` finished: run a joined step, then continue past it.
   defp ready(run, target) do
     step = run.plan.steps[target]
     if step.input_mode == :join, do: run_join(run, target, step)
@@ -125,7 +124,7 @@ defmodule AudioFlow.Graph.Runner do
     value = if step.history, do: run.callbacks.context.(value), else: value
 
     {module, _} = step.adapter
-    adapter = with_tool_context(step.adapter, Map.get(run.callbacks, :telemetry, %{}))
+    adapter = Adapter.with_context(step.adapter, Map.get(run.callbacks, :telemetry, %{}))
 
     metadata =
       run.callbacks
@@ -136,20 +135,6 @@ defmodule AudioFlow.Graph.Runner do
       Adapter.run(adapter, value, &emit_output(run, step, &1))
     end)
   end
-
-  defp with_tool_context({AudioFlow.Adapters.ReqLLM, options}, telemetry) do
-    execution = Keyword.get(options, :audio_flow, [])
-    context = Map.merge(Keyword.get(execution, :tool_context, %{}), telemetry)
-    execution = Keyword.put(execution, :tool_context, context)
-    {AudioFlow.Adapters.ReqLLM, Keyword.put(options, :audio_flow, execution)}
-  end
-
-  defp with_tool_context({AudioFlow.Adapters.ChatHTTP, options}, telemetry) do
-    context = Map.merge(Keyword.get(options, :tool_context, %{}), telemetry)
-    {AudioFlow.Adapters.ChatHTTP, Keyword.put(options, :tool_context, context)}
-  end
-
-  defp with_tool_context(adapter, _telemetry), do: adapter
 
   defp emit_output(run, step, output) do
     :ok = run.callbacks.emit.(step, output)
@@ -180,7 +165,6 @@ defmodule AudioFlow.Graph.Runner do
       Enum.count(step.sources, &MapSet.member?(active, &1)) <= 1
   end
 
-  # A history text node whose only target is the one terminal streaming audio node.
   defp aligned_node(plan, active, id) do
     with %{history: true, event: :text, targets: [target]} <- plan.steps[id],
          %{input_mode: :stream, event: :audio, targets: [], sources: [^id]} <-
@@ -198,7 +182,6 @@ defmodule AudioFlow.Graph.Runner do
     end)
   end
 
-  # `groups` has the values of each source, in edge order.
   defp join([]), do: nil
 
   defp join([[value | _] | _] = groups) when is_binary(value) do

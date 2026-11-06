@@ -59,7 +59,6 @@ defmodule AudioFlow.Graph do
   defp add_type(catalog, module, spec),
     do: Map.put(catalog, spec.type, {module, complete_spec(spec)})
 
-  # Defaults for the optional spec keys. See `AudioFlow.Graph.Node`.
   defp complete_spec(spec) do
     spec =
       Map.merge(
@@ -304,7 +303,6 @@ defmodule AudioFlow.Graph do
   defp fetch_node(nodes, declared, id) do
     cond do
       Map.has_key?(nodes, id) -> {:ok, nodes[id]}
-      # An invalid node is reported once, as a node error.
       MapSet.member?(declared, id) -> :skip
       true -> {:error, "edge refers to unknown node #{inspect(id)}"}
     end
@@ -364,7 +362,6 @@ defmodule AudioFlow.Graph do
       else: reach(Map.get(targets, id, []) ++ rest, targets, MapSet.put(reached, id))
   end
 
-  # Depth-first search. A node on the current path that is seen again closes a cycle.
   defp cycles(ids, targets) do
     {_, errors} =
       Enum.reduce(Enum.sort(ids), {MapSet.new(), []}, fn id, {done, errors} ->

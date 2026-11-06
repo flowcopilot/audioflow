@@ -163,7 +163,6 @@ defmodule AudioFlow.Graph.Nodes.Models do
   @impl true
   def adapter("whisper.stt", %{model: model} = options) do
     language = Map.get(options, :language, "auto")
-    # Validate when the graph is built, not on the first turn.
     ModelLanguages.whisper_options!(model, language)
 
     {AudioFlow.STT.Bumblebee,
@@ -292,29 +291,4 @@ defmodule AudioFlow.Graph.Nodes.Models do
   end
 
   defp exla, do: [backend: EXLA.Backend]
-end
-
-defmodule AudioFlow.Graph.ModelAdapter do
-  @moduledoc """
-  Runs `AudioFlow.NxAdapter` on a shared serving from `AudioFlow.Servings`.
-
-  Options: `:key` and `:build` for `AudioFlow.Servings.fetch/2`, and the
-  `:input` and `:output` mappers of `AudioFlow.NxAdapter`.
-  """
-  @behaviour AudioFlow.Adapter
-
-  @impl true
-  def run(input, options, emit) do
-    case AudioFlow.Servings.fetch(Keyword.fetch!(options, :key), Keyword.fetch!(options, :build)) do
-      {:ok, name} ->
-        AudioFlow.NxAdapter.run(
-          input,
-          [serving: name] ++ Keyword.take(options, [:input, :output]),
-          emit
-        )
-
-      {:error, reason} ->
-        {:error, {:model_load, reason}}
-    end
-  end
 end
