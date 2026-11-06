@@ -46,8 +46,10 @@ The server sends binary frames of mono s16le reply PCM for the current turn.
 An `output_format` event with `sample_rate` comes before the first binary
 frame, and before each change of rate. JSON events have a `type` field:
 `ready`, `speech_started`, `turn_started`, `transcript`, `description`, `text`,
-`done`, `cancelled`, `flush`, `history_cleared`, and `error`. Turn events
-include a connection-local integer `turn`. When the client receives `flush`,
+`partial_transcript`, `done`, `cancelled`, `flush`, `history_cleared`, and
+`error`. Turn events include a connection-local integer `turn`. A `transcript`
+event for an STT segment also has `start_ms`, `end_ms` and `words`. See
+[Transcription](../transcription/). When the client receives `flush`,
 it must discard its queued playback. After a cancellation, the connection
 drops output from the old turn. An invalid client message gets an `error`
 event, and the connection stays open.
