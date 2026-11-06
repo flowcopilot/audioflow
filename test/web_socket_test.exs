@@ -61,6 +61,38 @@ defmodule AudioFlow.WebSocketTest do
     assert done["metrics"]["events"] == 3
   end
 
+  test "a transcription session sends partials and timed transcripts" do
+    stt =
+      function(fn _, emit ->
+        emit.({:partial, "hel"})
+
+        emit.(%AudioFlow.Transcript.Segment{
+          text: "hello",
+          start_ms: 0,
+          end_ms: 400,
+          words: [%{word: "hello", start_ms: 0, end_ms: 400}]
+        })
+      end)
+
+    socket = connect(session: [stt: stt])
+    ready(socket)
+    Client.send_binary(socket, silence(800))
+    Client.send_json(socket, %{type: "commit"})
+
+    assert_json(socket, %{"type" => "turn_started", "turn" => 1})
+    assert_json(socket, %{"type" => "partial_transcript", "turn" => 1, "text" => "hel"})
+
+    assert_json(socket, %{
+      "type" => "transcript",
+      "text" => "hello",
+      "start_ms" => 0,
+      "end_ms" => 400,
+      "words" => [%{"word" => "hello", "start_ms" => 0, "end_ms" => 400}]
+    })
+
+    assert_json(socket, %{"type" => "done", "turn" => 1})
+  end
+
   test "a typed message skips transcription and the format is sent once" do
     socket = connect()
     ready(socket)
