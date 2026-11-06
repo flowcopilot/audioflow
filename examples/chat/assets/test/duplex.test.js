@@ -346,3 +346,16 @@ test("reply audio past the playback limit drops the rest of that reply", async (
   view.handlers.call_play({ generation: 6, output: "item_2", pcm: pcm(1_920), rate: 24_000 });
   assert.equal(context.sources.length, 4);
 });
+
+test("a fully played reply at a large clock time keeps its provider history", async () => {
+  const view = await connect(7, { playbackAhead: "60" });
+  const context = contexts.at(-1);
+  context.currentTime = 123.46;
+  for (let i = 0; i < 50; i++) {
+    view.handlers.call_play({ generation: 7, output: "complete", pcm: pcm(2_400), rate: 24_000 });
+  }
+  context.currentTime = 130;
+  view.handlers.call_flush({ generation: 7 });
+  assert.equal(view.sent("call_played").length, 0);
+  assert.equal(microphone.track.stopped, undefined);
+});

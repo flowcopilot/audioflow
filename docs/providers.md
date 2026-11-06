@@ -317,6 +317,8 @@ the code or type, never the message). Tool calls fail it with
 `:unsupported_tool_call`, because no tools are configured. All
 `AudioFlow.Duplex` bounds apply; `:max_response_bytes` (64 MiB) is about 17
 minutes of base64 reply audio per session.
+The chat example sets this bound to 256 MiB for OpenAI calls, to allow the
+30-minute call limit to apply before the response byte limit in ordinary use.
 
 `mix test test/duplex_openai_test.exs` checks the handshake order, server VAD
 configuration, several utterances on one socket, continuous silence,

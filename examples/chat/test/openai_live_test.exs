@@ -209,7 +209,12 @@ defmodule Chat.OpenAILiveTest do
     send(
       peer,
       {:events,
-       [%{type: "error", error: %{type: "server_error", code: "boom", message: "provider-message-text"}}]}
+       [
+         %{
+           type: "error",
+           error: %{type: "server_error", code: "boom", message: "provider-message-text"}
+         }
+       ]}
     )
 
     assert_push_event(view, "call_stopped", %{generation: ^generation}, 2_000)
@@ -219,6 +224,74 @@ defmodule Chat.OpenAILiveTest do
 
     {next, _peer, _} = connect(view)
     assert next == generation + 1
+  end
+
+  test "old response completion cannot close the current reply and clearing text stays clear" do
+    openai_peer()
+    {:ok, view, _} = live(build_conn(), "/")
+    {_generation, peer, _} = connect(view)
+
+    send(
+      peer,
+      {:events,
+       [
+         %{type: "response.created", response: %{id: "old"}},
+         %{
+           type: "response.output_audio_transcript.delta",
+           response_id: "old",
+           delta: "Old reply"
+         },
+         %{type: "response.created", response: %{id: "new"}},
+         %{type: "response.output_audio_transcript.delta", response_id: "new", delta: "New"},
+         %{type: "response.done", response: %{id: "old", status: "cancelled", output: []}},
+         %{type: "response.output_audio_transcript.delta", response_id: "new", delta: " reply"}
+       ]}
+    )
+
+    assert eventually(fn ->
+             messages(view) == [{"assistant", "Old reply"}, {"assistant", "New reply"}]
+           end)
+
+    render_hook(view, "new_chat", %{})
+
+    send(
+      peer,
+      {:events,
+       [
+         %{
+           type: "response.output_audio_transcript.delta",
+           response_id: "new",
+           delta: " after clearing"
+         },
+         %{type: "response.done", response: %{id: "new", status: "completed", output: []}}
+       ]}
+    )
+
+    assert eventually(fn ->
+             :sys.get_state(view.pid).socket.assigns.call.reply_response == nil
+           end)
+
+    assert messages(view) == []
+  end
+
+  test "pending transcript eviction removes waiting messages" do
+    openai_peer()
+    {:ok, view, _} = live(build_conn(), "/")
+    {_generation, peer, _} = connect(view)
+
+    for n <- 1..20 do
+      send(
+        peer,
+        {:events,
+         [%{type: "input_audio_buffer.speech_started", item_id: "u#{n}", audio_start_ms: n * 100}]}
+      )
+    end
+
+    assert eventually(fn ->
+             state = :sys.get_state(view.pid).socket.assigns
+             Enum.count_until(state.call.users, 17) == 16 and
+               Enum.count_until(state.messages, 17) == 16
+           end)
   end
 
   defp eventually(fun, tries \\ 100)

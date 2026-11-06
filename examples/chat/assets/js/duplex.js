@@ -255,7 +255,7 @@ export const Duplex = {
     if (samples.length === 0) return;
 
     if (output !== null && call.output?.id !== output) {
-      call.output = { id: output, spans: [], rendered: 0, dropping: false };
+      call.output = { id: output, spans: [], rendered: 0, rate, dropping: false };
     }
     const reply = output === null ? null : call.output;
     const context = call.context;
@@ -280,7 +280,7 @@ export const Duplex = {
     call.next = start + buffer.duration;
     if (reply) {
       this.fold(call, reply);
-      reply.spans.push([start, call.next]);
+      reply.spans.push([start, call.next, samples.length]);
     }
   },
 
@@ -294,25 +294,29 @@ export const Duplex = {
   // Moves fully heard spans into a sum, so the span list stays short.
   fold(call, reply) {
     const heard = this.heard(call);
-    reply.spans = reply.spans.filter(([start, end]) => {
+    reply.spans = reply.spans.filter(([_start, end, samples]) => {
       if (end > heard) return true;
-      reply.rendered += end - start;
+      reply.rendered += samples;
       return false;
     });
   },
 
-  // Seconds of this reply that were heard.
-  rendered(call, reply) {
+  // Count exact scheduled samples and round only the partially rendered span.
+  renderedSamples(call, reply) {
     const heard = this.heard(call);
     let sum = reply.rendered;
-    for (const [start, end] of reply.spans) sum += Math.max(0, Math.min(heard, end) - start);
+    for (const [start, end, samples] of reply.spans) {
+      sum += Math.min(samples, Math.max(0, Math.round((Math.min(heard, end) - start) * reply.rate)));
+    }
     return sum;
   },
 
   // User speech: stop queued model audio, keep the microphone, report progress.
   flush(call) {
     const reply = call.output;
-    const ms = reply ? Math.max(0, Math.floor(this.rendered(call, reply) * 1000)) : 0;
+    if (reply) this.fold(call, reply);
+    const ms = reply ? Math.floor(this.renderedSamples(call, reply) * 1000 / reply.rate) : 0;
+    const complete = reply && reply.spans.length === 0 && !reply.dropping;
     for (const source of call.sources) {
       source.onended = null;
       source.stop();
@@ -323,7 +327,7 @@ export const Duplex = {
     if (!reply) return;
     call.cut = reply.id;
     call.output = null;
-    this.pushEvent("call_played", { generation: call.generation, output: reply.id, ms });
+    if (!complete) this.pushEvent("call_played", { generation: call.generation, output: reply.id, ms });
   },
 
   release(call) {

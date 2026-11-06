@@ -394,6 +394,7 @@ defmodule ChatWeb.ChatLive do
           ready: false,
           turns: turns,
           reply_id: nil,
+          reply_response: nil,
           text_at: nil,
           output: nil,
           users: []
@@ -410,7 +411,12 @@ defmodule ChatWeb.ChatLive do
 
   # A model failure must not stop the LiveView. Duplex monitors this owner.
   defp start_duplex(adapter) do
-    Duplex.start(owner: self(), adapter: adapter)
+    limits =
+      if elem(adapter, 0) == Duplex.OpenAIRealtime,
+        do: [max_response_bytes: 256 * 1024 * 1024],
+        else: []
+
+    Duplex.start([owner: self(), adapter: adapter] ++ limits)
   rescue
     error in ArgumentError -> {:error, Exception.message(error)}
   end
@@ -452,8 +458,9 @@ defmodule ChatWeb.ChatLive do
     %{call: call} = socket.assigns
     socket = add_message(socket, "user", "", pending: true, live: true)
 
-    users =
-      Enum.take(call.users ++ [{item, List.last(socket.assigns.messages).id}], -@call_max_pending)
+    pending = call.users ++ [{item, List.last(socket.assigns.messages).id}]
+    {removed, users} = Enum.split(pending, max(length(pending) - @call_max_pending, 0))
+    socket = Enum.reduce(removed, socket, fn {_, id}, socket -> settle(socket, id) end)
 
     socket
     |> assign(call: %{call | output: nil, users: users})
@@ -470,26 +477,28 @@ defmodule ChatWeb.ChatLive do
     end
   end
 
-  defp call_event(socket, {:response, _id, :created}) do
+  defp call_event(socket, {:response, id, :created}) do
     %{call: call} = socket.assigns
     socket = if call.reply_id, do: settle(socket, call.reply_id), else: socket
     socket = add_message(socket, "assistant", "", pending: true)
 
-    assign(socket, call: %{call | reply_id: List.last(socket.assigns.messages).id})
+    assign(socket,
+      call: %{call | reply_id: List.last(socket.assigns.messages).id, reply_response: id}
+    )
     |> trim_messages()
   end
 
-  defp call_event(%{assigns: %{call: %{reply_id: nil}}} = socket, {:response, _id, _status}),
-    do: socket
-
-  defp call_event(socket, {:response, _id, status}) do
-    %{call: call} = socket.assigns
-
+  defp call_event(
+         %{assigns: %{call: %{reply_response: id} = call}} = socket,
+         {:response, id, status}
+       ) do
     socket
     |> update_message(call.reply_id, &%{&1 | note: reply_note(status, &1.text)})
     |> settle(call.reply_id)
-    |> assign(call: %{call | reply_id: nil})
+    |> assign(call: %{call | reply_id: nil, reply_response: nil})
   end
+
+  defp call_event(socket, {:response, _id, _status}), do: socket
 
   defp call_event(socket, {:output, item}),
     do: assign(socket, call: %{socket.assigns.call | output: item})
@@ -520,6 +529,8 @@ defmodule ChatWeb.ChatLive do
   defp call_text(%{assigns: %{call: %{turns: true, reply_id: id}}} = socket, text)
        when id != nil,
        do: update_message(socket, id, &%{&1 | text: &1.text <> text, pending: false})
+
+  defp call_text(%{assigns: %{call: %{turns: true}}} = socket, _text), do: socket
 
   # Moshi does not mark turns. A pause in the model text starts a new message,
   # and the conversation keeps only the latest messages.
