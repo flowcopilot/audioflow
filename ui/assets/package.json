@@ -3,12 +3,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "npm run build:css && npm run build:js",
+    "build": "npm run build:css && npm run build:js && npm run build:fonts",
     "build:css": "tailwindcss --input=css/app.css --output=../priv/static/assets/app.css",
-    "build:js": "rolldown -c rolldown.config.mjs"
+    "build:js": "rolldown -c rolldown.config.mjs",
+    "build:fonts": "node fonts.mjs"
   },
   "dependencies": {
     "@floating-ui/dom": "^1.8.0",
+    "@fontsource-variable/bricolage-grotesque": "^5.3.0",
+    "@fontsource/ibm-plex-mono": "^5.3.0",
     "@rive-app/webgl2": "2.34.1",
     "embla-carousel": "8.5.2",
     "embla-carousel-autoplay": "8.5.2",

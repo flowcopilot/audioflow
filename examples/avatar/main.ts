@@ -1,3 +1,6 @@
+import '@fontsource-variable/bricolage-grotesque/standard.css';
+import '@fontsource/ibm-plex-mono/400.css';
+import './theme.css';
 import { Receiver } from './receiver';
 const button = (id: string) => document.getElementById(id) as HTMLButtonElement;
 const file = document.getElementById('pcm') as HTMLInputElement;

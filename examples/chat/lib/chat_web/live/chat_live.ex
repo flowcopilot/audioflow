@@ -26,8 +26,14 @@ defmodule ChatWeb.ChatLive do
   alias AudioFlow.Text
   alias Chat.Catalog
   alias Chat.Setup
+  alias ChatWeb.Components.UI.Alert
   alias ChatWeb.Components.UI.Badge
   alias ChatWeb.Components.UI.Button
+  alias ChatWeb.Components.UI.Card
+  alias ChatWeb.Components.UI.Collapsible
+  alias ChatWeb.Components.UI.Empty
+  alias ChatWeb.Components.UI.Field
+  alias ChatWeb.Components.UI.Item
   alias ChatWeb.Components.UI.NativeSelect
   alias ChatWeb.Components.UI.Spinner
   alias LiveAiElements.Components.AudioPlayer
@@ -251,6 +257,13 @@ defmodule ChatWeb.ChatLive do
 
   def handle_event("call_failed", %{"message" => message}, socket) when is_binary(message),
     do: {:noreply, call_error(socket, "Microphone error: " <> String.slice(message, 0, 200))}
+
+  # The voice applies at the next call start, so it needs no new chat and no Apply.
+  def handle_event("select_voice", %{"voice" => voice}, socket) do
+    if voice in Setup.voices() and is_nil(socket.assigns.call),
+      do: {:noreply, assign(socket, settings: Map.put(socket.assigns.settings, "voice", voice))},
+      else: {:noreply, socket}
+  end
 
   def handle_event("select_model", %{"_target" => [field]} = params, socket)
       when field in ["stt", "llm", "voice"] do
@@ -943,16 +956,24 @@ defmodule ChatWeb.ChatLive do
     ~H"""
     <div id="chat" phx-hook="Player" class="mx-auto flex h-svh max-w-3xl flex-col gap-4 p-4">
       <header class="flex items-center justify-between gap-4">
-        <h1 class="text-lg font-semibold">AudioFlow</h1>
+        <h1 class="flex items-center gap-2.5 text-lg font-bold">
+          <svg viewBox="0 0 32 32" aria-hidden="true" class="size-7">
+            <rect width="32" height="32" rx="8" fill="#5B2E91" />
+            <g stroke="#7CE0C3" stroke-width="2.4" stroke-linecap="round">
+              <path d="M8 14v4" /><path d="M12 10v12" /><path d="M16 7v18" /><path d="M20 11v10" /><path d="M24 14v4" />
+            </g>
+          </svg>
+          AudioFlow
+        </h1>
         <Button.button variant="outline" size="sm" phx-click="new_chat">
           {if @duplex, do: "Clear text", else: "New chat"}
         </Button.button>
       </header>
 
       <form id="configuration" phx-submit="configure" class="flex flex-wrap items-end gap-3 text-sm">
-        <label class="grid gap-1">
-          Provider
-          <NativeSelect.native_select name="mode" size="sm">
+        <Field.field class="w-auto gap-1.5">
+          <Field.field_label for="setting-mode">Provider</Field.field_label>
+          <NativeSelect.native_select id="setting-mode" name="mode" size="sm">
             <NativeSelect.native_select_option
               :for={{id, label} <- Setup.modes()}
               value={id}
@@ -961,10 +982,16 @@ defmodule ChatWeb.ChatLive do
               {label}
             </NativeSelect.native_select_option>
           </NativeSelect.native_select>
-        </label>
-        <label :if={@settings["mode"] == "openai"} class="grid gap-1">
-          Voice
-          <NativeSelect.native_select name="voice" size="sm">
+        </Field.field>
+        <Field.field :if={@settings["mode"] == "openai"} class="w-auto gap-1.5">
+          <Field.field_label for="setting-voice">Voice</Field.field_label>
+          <NativeSelect.native_select
+            id="setting-voice"
+            name="voice"
+            size="sm"
+            phx-change="select_voice"
+            disabled={@call != nil}
+          >
             <NativeSelect.native_select_option
               :for={voice <- Setup.voices()}
               value={voice}
@@ -973,10 +1000,10 @@ defmodule ChatWeb.ChatLive do
               {voice}
             </NativeSelect.native_select_option>
           </NativeSelect.native_select>
-        </label>
-        <label :if={@settings["mode"] == "remote"} class="grid gap-1">
-          Language
-          <NativeSelect.native_select name="language" size="sm">
+        </Field.field>
+        <Field.field :if={@settings["mode"] == "remote"} class="w-auto gap-1.5">
+          <Field.field_label for="setting-language">Language</Field.field_label>
+          <NativeSelect.native_select id="setting-language" name="language" size="sm">
             <NativeSelect.native_select_option
               :for={lang <- Setup.languages()}
               value={lang}
@@ -985,10 +1012,10 @@ defmodule ChatWeb.ChatLive do
               {lang}
             </NativeSelect.native_select_option>
           </NativeSelect.native_select>
-        </label>
-        <label :if={@settings["mode"] == "remote"} class="grid gap-1">
-          Voice service
-          <NativeSelect.native_select name="tts" size="sm">
+        </Field.field>
+        <Field.field :if={@settings["mode"] == "remote"} class="w-auto gap-1.5">
+          <Field.field_label for="setting-tts">Voice service</Field.field_label>
+          <NativeSelect.native_select id="setting-tts" name="tts" size="sm">
             <NativeSelect.native_select_option
               :for={tts <- Setup.tts_providers()}
               value={tts}
@@ -997,19 +1024,22 @@ defmodule ChatWeb.ChatLive do
               {tts}
             </NativeSelect.native_select_option>
           </NativeSelect.native_select>
-        </label>
+        </Field.field>
         <Button.button type="submit" variant="outline" size="sm" disabled={@call != nil}>
           Apply
         </Button.button>
       </form>
-      <p :if={@setup_error} role="alert" class="text-sm text-destructive">{@setup_error}</p>
+      <Alert.alert :if={@setup_error} variant="destructive">
+        <LiveShadcn.Icon.icon name="circle-alert" />
+        <Alert.alert_description>{@setup_error}</Alert.alert_description>
+      </Alert.alert>
       <form
         :if={@settings["mode"] == "local"}
         id="models"
         phx-change="select_model"
         class="grid gap-3 sm:grid-cols-3"
       >
-        <.model_field label="Speech recognition" status={@models.status[:stt]}>
+        <.model_field label="Speech recognition" for="model-stt" status={@models.status[:stt]}>
           <NativeSelect.native_select id="model-stt" name="stt" size="sm" class="w-full">
             <NativeSelect.native_select_option
               :for={model <- @stt_models}
@@ -1020,7 +1050,7 @@ defmodule ChatWeb.ChatLive do
             </NativeSelect.native_select_option>
           </NativeSelect.native_select>
         </.model_field>
-        <.model_field label="Reply model" status={@models.status[:llm]}>
+        <.model_field label="Reply model" for="model-llm" status={@models.status[:llm]}>
           <NativeSelect.native_select id="model-llm" name="llm" size="sm" class="w-full">
             <NativeSelect.native_select_option
               :for={model <- @llm_models}
@@ -1031,7 +1061,7 @@ defmodule ChatWeb.ChatLive do
             </NativeSelect.native_select_option>
           </NativeSelect.native_select>
         </.model_field>
-        <.model_field label="Voice (Kokoro)" status={@models.status[:tts]}>
+        <.model_field label="Voice (Kokoro)" for="model-voice" status={@models.status[:tts]}>
           <NativeSelect.native_select id="model-voice" name="voice" size="sm" class="w-full">
             <NativeSelect.native_select_option
               :for={voice <- @voices}
@@ -1044,39 +1074,36 @@ defmodule ChatWeb.ChatLive do
         </.model_field>
       </form>
 
-      <div
-        :if={@duplex}
-        id="duplex"
-        class="flex flex-wrap items-center gap-3 rounded-lg border p-3"
-      >
-        <div
-          id="duplex-io"
-          phx-hook="Duplex"
-          phx-update="ignore"
-          data-playback-ahead={@playback_ahead[@settings["mode"]]}
-        >
-        </div>
-        <Button.button type="button" data-call="start" disabled={@call != nil}>
-          <LiveShadcn.Icon.icon name="phone" /> Start conversation
-        </Button.button>
-        <Button.button type="button" variant="destructive" data-call="stop" disabled={@call == nil}>
-          <LiveShadcn.Icon.icon name="phone-off" /> Stop
-        </Button.button>
-        <div id="duplex-status" role="status" class="flex items-center gap-2 text-sm">
-          <Spinner.spinner :if={@call_status == "connecting"} class="size-3" />
-          <Badge.badge variant={call_variant(@call_status)}>{call_label(@call_status)}</Badge.badge>
-        </div>
-        <p :if={@call_error} role="alert" class="w-full text-sm text-destructive">
-          {@call_error}
-        </p>
-        <details class="w-full text-xs text-muted-foreground">
-          <summary class="cursor-pointer">Diagnostics</summary>
-          <span id="duplex-stats" phx-update="ignore"></span>
-        </details>
-      </div>
-      <details :if={not @duplex} id="settings" class="text-sm">
-        <summary class="cursor-pointer text-muted-foreground">Settings</summary>
-        <div class="mt-2 grid gap-2">
+      <Card.card :if={@duplex} id="duplex" size="sm">
+        <Card.card_content class="flex flex-wrap items-center gap-3">
+          <div
+            id="duplex-io"
+            phx-hook="Duplex"
+            phx-update="ignore"
+            data-playback-ahead={@playback_ahead[@settings["mode"]]}
+          >
+          </div>
+          <Button.button type="button" data-call="start" disabled={@call != nil}>
+            <LiveShadcn.Icon.icon name="phone" /> Start conversation
+          </Button.button>
+          <Button.button type="button" variant="destructive" data-call="stop" disabled={@call == nil}>
+            <LiveShadcn.Icon.icon name="phone-off" /> Stop
+          </Button.button>
+          <div id="duplex-status" role="status" class="flex items-center gap-2 text-sm">
+            <Spinner.spinner :if={@call_status == "connecting"} class="size-3" />
+            <Badge.badge variant={call_variant(@call_status)}>{call_label(@call_status)}</Badge.badge>
+          </div>
+          <Alert.alert :if={@call_error} variant="destructive" class="w-full">
+            <LiveShadcn.Icon.icon name="circle-alert" />
+            <Alert.alert_description>{@call_error}</Alert.alert_description>
+          </Alert.alert>
+          <.disclosure id="duplex-diagnostics" title="Diagnostics" class="w-full">
+            <span id="duplex-stats" phx-update="ignore"></span>
+          </.disclosure>
+        </Card.card_content>
+      </Card.card>
+      <.disclosure :if={not @duplex} id="settings" title="Settings">
+        <div class="grid gap-2">
           <p :if={@settings["mode"] == "local"} class="text-xs text-muted-foreground">
             ≈ {gb(@models.memory_gb)} GB of model weights{if @system_memory_gb,
               do: " · #{gb(@system_memory_gb)} GB memory"}. {fit_text(@system_memory_gb)}
@@ -1089,21 +1116,35 @@ defmodule ChatWeb.ChatLive do
               Text only, with all words replaced by [REDACTED]. Deleted when you leave.
             </span>
           </div>
-          <div :for={id <- @artifacts} class="flex items-center gap-2 text-xs">
-            {id}
-            <Button.button variant="ghost" size="sm" phx-click="download" phx-value-id={id}>
-              Download
-            </Button.button>
-            <Button.button variant="ghost" size="sm" phx-click="delete" phx-value-id={id}>
-              Delete
-            </Button.button>
-          </div>
+          <Item.item :for={id <- @artifacts} variant="outline" size="xs">
+            <Item.item_content>
+              <Item.item_title class="font-mono text-xs">{id}</Item.item_title>
+            </Item.item_content>
+            <Item.item_actions>
+              <Button.button variant="ghost" size="sm" phx-click="download" phx-value-id={id}>
+                Download
+              </Button.button>
+              <Button.button variant="ghost" size="sm" phx-click="delete" phx-value-id={id}>
+                Delete
+              </Button.button>
+            </Item.item_actions>
+          </Item.item>
         </div>
-      </details>
+      </.disclosure>
       <Conversation.conversation id="chat-log" class="rounded-lg border">
-        <p :if={@messages == []} class="py-16 text-center text-sm text-muted-foreground">
-          No messages yet.
-        </p>
+        <Empty.empty :if={@messages == []} class="border-0">
+          <Empty.empty_header>
+            <Empty.empty_media variant="icon">
+              <LiveShadcn.Icon.icon name="audio-lines" />
+            </Empty.empty_media>
+            <Empty.empty_title>No messages yet.</Empty.empty_title>
+            <Empty.empty_description>
+              {if @duplex,
+                do: "Start the conversation and speak.",
+                else: "Type a message, or record one with the microphone."}
+            </Empty.empty_description>
+          </Empty.empty_header>
+        </Empty.empty>
         <Message.message :for={message <- @messages} id={message.id} from={message.role}>
           <Message.message_content class={message.live && "opacity-70"}>
             <Shimmer.shimmer :if={message.pending and message.text == ""} id={"#{message.id}-wait"}>
@@ -1132,9 +1173,8 @@ defmodule ChatWeb.ChatLive do
         </Message.message>
       </Conversation.conversation>
 
-      <details :if={not @duplex} class="text-xs text-muted-foreground">
-        <summary class="cursor-pointer">Diagnostics</summary>
-        <div class="mt-2 flex flex-wrap items-center gap-2">
+      <.disclosure :if={not @duplex} id="diagnostics" title="Diagnostics">
+        <div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <Button.button variant="outline" size="sm" phx-click="pause" disabled={@candidate != nil}>
             Pause playback
           </Button.button>
@@ -1144,7 +1184,7 @@ defmodule ChatWeb.ChatLive do
           <Button.button variant="outline" size="sm" phx-click="stop">Confirm stop</Button.button>
           <span>Playback acknowledged: {@played_ms} ms</span>
         </div>
-      </details>
+      </.disclosure>
       <PromptInput.prompt_input :if={not @duplex} id="prompt" on_submit="send">
         <PromptInput.prompt_input_textarea
           id="prompt-text"
@@ -1181,21 +1221,50 @@ defmodule ChatWeb.ChatLive do
   end
 
   attr(:label, :string, required: true)
+  attr(:for, :string, required: true)
   attr(:status, :any, default: nil)
   slot(:inner_block, required: true)
 
   defp model_field(assigns) do
     ~H"""
-    <label class="grid gap-1.5 text-xs font-medium">
-      <span class="flex items-center gap-1.5">
+    <Field.field class="gap-1.5">
+      <Field.field_label for={@for} class="text-xs">
         {@label}
         <Spinner.spinner :if={@status == :loading} class="size-3" />
-      </span>
+      </Field.field_label>
       {render_slot(@inner_block)}
-      <span :if={status_text(@status)} class="font-normal text-muted-foreground">
+      <Field.field_description :if={status_text(@status)} class="text-xs">
         {status_text(@status)}
-      </span>
-    </label>
+      </Field.field_description>
+    </Field.field>
+    """
+  end
+
+  attr(:id, :string, required: true)
+  attr(:title, :string, required: true)
+  attr(:class, :any, default: nil)
+  attr(:rest, :global)
+  slot(:inner_block, required: true)
+
+  # A closed section with a chevron trigger, for settings and diagnostics.
+  defp disclosure(assigns) do
+    ~H"""
+    <Collapsible.collapsible
+      id={@id}
+      class={["text-sm", @class]}
+      trigger_class="group/trigger flex cursor-pointer items-center gap-1 text-muted-foreground hover:text-foreground"
+      content_class="pt-2"
+      {@rest}
+    >
+      <:trigger>
+        <LiveShadcn.Icon.icon
+          name="chevron-right"
+          class="size-4 transition-transform group-aria-expanded/trigger:rotate-90"
+        />
+        {@title}
+      </:trigger>
+      {render_slot(@inner_block)}
+    </Collapsible.collapsible>
     """
   end
 end

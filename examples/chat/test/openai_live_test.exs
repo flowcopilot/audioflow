@@ -129,6 +129,15 @@ defmodule Chat.OpenAILiveTest do
     assert :sys.get_state(view.pid).socket.assigns.session == nil
   end
 
+  test "a new voice applies at the next call start without Apply" do
+    openai_peer()
+    {:ok, view, _} = live(build_conn(), "/")
+    view |> element("#setting-voice") |> render_change(%{"voice" => "cedar"})
+    {_generation, _peer, session} = connect(view)
+    assert session["audio"]["output"]["voice"] == "cedar"
+    assert has_element?(view, "#setting-voice[disabled]")
+  end
+
   test "one connection hears several utterances while the microphone streams" do
     openai_peer()
     {:ok, view, _} = live(build_conn(), "/")
@@ -289,6 +298,7 @@ defmodule Chat.OpenAILiveTest do
 
     assert eventually(fn ->
              state = :sys.get_state(view.pid).socket.assigns
+
              Enum.count_until(state.call.users, 17) == 16 and
                Enum.count_until(state.messages, 17) == 16
            end)
