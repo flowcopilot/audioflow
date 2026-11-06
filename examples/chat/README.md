@@ -30,9 +30,8 @@ or model downloads are needed. Use the same profile for all Mix commands.
 ## Run native models on Apple Silicon
 
 The repository `mise.toml` pins Erlang, Elixir, Node.js, and
-[uv](https://docs.astral.sh/uv/). uv runs the separate Qwen3-ASR Python
-process; reply model downloads use Elixir's `hf_hub` and need no Python or
-`uvx`. Kokoro also needs `espeak-ng`, which mise does not provide.
+[uv](https://docs.astral.sh/uv/). Model downloads use Elixir's `hf_hub` and
+need no Python. Kokoro also needs `espeak-ng`, which mise does not provide.
 
 ```sh
 mise install
@@ -54,7 +53,7 @@ model per stage stays loaded.
 | Stage | Models | Runtime |
 | --- | --- | --- |
 | Speech recognition | Whisper tiny, small, large v3 turbo | Bumblebee on the EMLX GPU backend |
-| Speech recognition | Qwen3-ASR 0.6B and 1.7B, 8-bit | mlx-audio in a Python process managed by uv |
+| Speech recognition | Qwen3-ASR 0.6B and 1.7B | a vLLM server at `CHAT_ASR_BASE_URL`, through ReqLLM |
 | Reply | Qwen3 0.6B, 1.7B, 4B, and 8B, 4-bit | native EMLXAxon Qwen3 generation |
 | Speech | Kokoro 82M, four voices | Transmuter on the EMLX GPU backend |
 
@@ -69,11 +68,16 @@ Measured on an Apple M5 with 24 GB of memory, after the first turn:
 | Models | First text | First audio |
 | --- | ---: | ---: |
 | Whisper small, Qwen3 1.7B | 0.9 s | 1.5 s |
-| Qwen3-ASR 0.6B, Qwen3 0.6B | 0.3 s | 0.8 s |
 
 The first turn after a switch compiles the new model. It took up to 6 s to the
-first audio. Bumblebee has no Qwen3-ASR model, so Qwen3-ASR runs outside the
-BEAM. Its log is `$TMPDIR/audioflow-chat-qwen3-asr.log`. Model checkpoints for
+first audio.
+
+Speech recognition uses the common `AudioFlow.STT` interface: local Whisper
+through `AudioFlow.STT.Bumblebee`, and external services through
+`AudioFlow.STT.ReqLLM`. Bumblebee has no Qwen3-ASR model, so Qwen3-ASR needs a
+separate vLLM server, for example `vllm serve Qwen/Qwen3-ASR-1.7B`. Set
+`CHAT_ASR_BASE_URL` when it does not listen on `http://localhost:8000/v1`. vLLM
+needs a supported GPU; it does not use the Apple GPU. Model checkpoints for
 the reply stage use hf_hub's cache, by default
 `~/.cache/huggingface/hub/models--OWNER--REPO/snapshots/REVISION`.
 The pinned revisions in `Chat.Catalog` are passed unchanged, and this directory

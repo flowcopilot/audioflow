@@ -94,8 +94,8 @@ AUDIOFLOW_ML=1 mix phx.server
 A model loads on the first turn that uses it, and all sessions share it.
 The first turn can take minutes to download and compile. Set the graph
 setting `timeout_ms` to allow for this. Models run with EXLA on the CPU.
-Kokoro speaks at 24 kHz and Whisper needs 16 kHz, so put an
-`audio.resample` node between them. The graph keeps the
+Kokoro speaks at 24 kHz. The Whisper node converts its input to 16 kHz, so an
+`audio.resample` node between them is optional. The graph keeps the
 name of the API key variable (`api_key_env`), not the key.
 To add node types, write an `AudioFlow.Graph.Node` module and set the list:
 
@@ -147,7 +147,8 @@ ffmpeg -i speech.wav -ac 1 -ar 16000 -f s16le speech.pcm
 
 The runner displays transcripts and PCM byte counts, with per-node WAV playback
 after completion (first 8 MB total PCM; no mixing or resampling). Use the [chat app](../examples/chat/README.md) for interactive voice.
-Deepgram receives an already committed utterance, not continuous mic ingress.
+Speech-to-text nodes receive an already committed utterance, not continuous
+mic ingress. Remote STT nodes use ReqLLM, and whisper.stt uses Bumblebee.
 OpenAI Realtime and Gemini Live emit mixed transcript/text/audio and cannot
 occupy single-output graph nodes. Use their dedicated Session examples in
 [providers.md](../docs/providers.md).
