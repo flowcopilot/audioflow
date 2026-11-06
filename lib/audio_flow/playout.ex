@@ -21,7 +21,6 @@ defmodule AudioFlow.Playout do
           checkpoints: [{state.emitted, bytes} | state.checkpoints]
       }
     else
-      # An unsynthesized text chunk breaks the contiguous spoken prefix.
       %{state | covered?: false}
     end
   end

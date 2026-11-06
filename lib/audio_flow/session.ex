@@ -557,7 +557,6 @@ defmodule AudioFlow.Session do
     end
   end
 
-  # Updates the playout of the active turn, or of the last finished one.
   defp acknowledge_playout(state, active, ns) do
     with {:ok, playout} <- AudioFlow.Playout.acknowledge(active.playout, ns) do
       field = if state.active, do: :active, else: :playback_history
@@ -664,7 +663,6 @@ defmodule AudioFlow.Session do
 
     emit = fn kind, value -> call!(session, {:emit, turn, kind, value}, :infinity) end
 
-    # Input chunks describe one utterance or image. Generate only once.
     key = make_ref()
     Process.put(key, [])
 
@@ -712,7 +710,6 @@ defmodule AudioFlow.Session do
 
   defp input_output(_, _emit, _key, _stage, _kind), do: throw(:invalid_output)
 
-  # Strings keep their own spacing. Segment text is joined with one space.
   defp join_input(parts) do
     parts
     |> Enum.reduce({[], nil}, fn
@@ -752,7 +749,6 @@ defmodule AudioFlow.Session do
     call!(session, {:speech_checkpoint, turn})
   end
 
-  # Turn tasks stop on the first refused call; the pipeline catches the reason.
   defp call!(session, request, timeout \\ 5000) do
     case GenServer.call(session, request, timeout) do
       :ok -> :ok

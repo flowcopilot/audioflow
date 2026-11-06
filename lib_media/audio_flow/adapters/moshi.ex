@@ -167,7 +167,6 @@ defmodule AudioFlow.Adapters.Moshi do
     end
   end
 
-  # Sends input, then silence, until `target` samples or the reply bound.
   defp top_up(state, target) do
     target = min(target, state.input_samples + state.max_reply + @lead)
     top_up(state, target, [])

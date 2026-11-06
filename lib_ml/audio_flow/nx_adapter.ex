@@ -32,7 +32,6 @@ defmodule AudioFlow.NxAdapter do
 
   @doc "Convert floating point speech output to bounded mono s16le PCM chunks."
   def speech_audio(%{audio: samples, sampling_rate: rate}) do
-    # Clamp before conversion so model overshoot cannot wrap a signed sample.
     pcm =
       samples
       |> Nx.flatten()

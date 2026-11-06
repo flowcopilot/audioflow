@@ -106,7 +106,6 @@ defmodule AudioFlow.Worker do
     end
   end
 
-  # Runs in the job task: each output waits for the caller's ack before the next.
   defp send_output(reply_to, request, value) do
     send(reply_to, {__MODULE__, request, {:output, self(), value}})
 

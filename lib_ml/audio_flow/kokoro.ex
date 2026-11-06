@@ -133,7 +133,7 @@ defmodule AudioFlow.Kokoro do
 
     symbols = phonemes |> String.trim() |> String.codepoints()
     if symbols == [], do: raise(ArgumentError, "phoneme input is empty")
-    # Every symbol is checked before inference. Unknown symbols are never dropped.
+
     ids =
       Enum.map(symbols, fn symbol ->
         Map.get(vocabulary, symbol) ||
