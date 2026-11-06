@@ -1,3 +1,6 @@
+import "@fontsource-variable/bricolage-grotesque/standard.css";
+import "@fontsource/ibm-plex-mono/400.css";
+import "./theme.css";
 import { PipecatClient, LogLevel } from "@pipecat-ai/client-js";
 import { AudioFlowTransport } from "./transport.ts";
 let client: PipecatClient | undefined;

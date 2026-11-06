@@ -1,20 +1,38 @@
 <!doctype html>
 <html lang="en">
-  <meta charset="utf-8" /><title>AudioFlow Pipecat client</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AudioFlow Pipecat client</title>
   <body>
-    <h1>AudioFlow Pipecat client</h1>
-    <label
-      >Authenticated WebSocket endpoint
-      <input id="url" value="ws://127.0.0.1:4000/rtvi"
-    /></label>
-    <button id="connect">Connect</button
-    ><button id="disconnect">Disconnect</button>
-    <form id="chat">
-      <input id="text" aria-label="Message" value="Hello" /><button>
-        Send text
-      </button>
-    </form>
-    <pre id="status" aria-live="polite"></pre>
+    <main class="wrap">
+      <div class="brand">
+        <svg viewBox="0 0 32 32" aria-hidden="true">
+          <rect width="32" height="32" rx="8" fill="#5B2E91" />
+          <g stroke="#7CE0C3" stroke-width="2.4" stroke-linecap="round">
+            <path d="M8 14v4" />
+            <path d="M12 10v12" />
+            <path d="M16 7v18" />
+            <path d="M20 11v10" />
+            <path d="M24 14v4" />
+          </g>
+        </svg>
+        AudioFlow
+      </div>
+      <h1>AudioFlow Pipecat client</h1>
+      <div class="controls">
+        <label
+          >Authenticated WebSocket endpoint
+          <input id="url" value="ws://127.0.0.1:4000/rtvi"
+        /></label>
+        <button id="connect" class="primary">Connect</button>
+        <button id="disconnect">Disconnect</button>
+      </div>
+      <form id="chat" class="controls">
+        <input id="text" aria-label="Message" value="Hello" />
+        <button>Send text</button>
+      </form>
+      <pre id="status" class="status" aria-live="polite"></pre>
+    </main>
     <script type="module" src="/main.ts"></script>
   </body>
 </html>
