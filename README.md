@@ -96,6 +96,65 @@ consume its mailbox. The event limit bounds output per turn, but does not bound
 the owner's mailbox across turns. An adapter must also bound individual output
 sizes. Do not pass an untrusted client directly as the owner.
 
+## Transcription
+
+A session without `:llm` and `:tts` is a transcription session. Each audio turn
+runs only the STT adapter and then ends with `{:done, metrics}`. Text input
+returns `{:error, {:unsupported_input, :llm}}`, and `:history` is rejected.
+
+```elixir
+stt = {AudioFlow.Adapters.Deepgram,
+  [model: "nova-3", segments: true, interim_results: true,
+   api_key: fn -> System.fetch_env!("DEEPGRAM_API_KEY") end]}
+{:ok, session} = AudioFlow.start_session(stt: stt)
+{:ok, turn} = AudioFlow.submit(session, audio)
+```
+
+An STT adapter can emit three kinds of values, in any session:
+
+| Adapter output | Session event | In the prompt and history |
+| --- | --- | --- |
+| `text` | `{:transcript, text}` | yes |
+| `%AudioFlow.Transcript.Segment{}` | `{:segment, segment}` | yes, joined with spaces |
+| `{:partial, text}` | `{:partial_transcript, text}` | no |
+
+A segment has `text`, `start_ms` and `end_ms` from the start of the turn audio,
+and optional `words` with their own times. Times are `nil` when the engine does
+not give them. A partial is an unstable hypothesis for the text that follows
+the final text emitted so far. The metrics add `first_partial_transcript_us`.
+The WebSocket transport sends segments as `transcript` messages with timing
+fields, and partials as `partial_transcript` messages. Recordings keep segment
+text and drop partials. Graph sessions do not use these values.
+
+Deepgram partials arrive while the provider processes a committed utterance,
+not while the user speaks. `AudioFlow.NxAdapter.transcript_segments/1` maps
+Whisper output to segments. With the pinned Bumblebee 0.8.0 and EXLA 1.0.0,
+Whisper `timestamps: :segments` fails to compile, so these segments have no
+times inside a session.
+
+For a long recording, use `AudioFlow.transcribe/3`. It cuts the audio into
+sections, runs the STT adapter on each section in a supervised task, and returns
+an `AudioFlow.Transcript` with times from the start of the input:
+
+```elixir
+{:ok, audio} = AudioFlow.Wav.read("meeting.wav")
+{:ok, transcript} = AudioFlow.transcribe(audio, stt, chunk_ms: 30_000, max_concurrency: 4)
+transcript.text
+File.write!("meeting.srt", AudioFlow.Transcript.to_srt(transcript))
+```
+
+Fixed sections can cut a word at a boundary. Set `:vad` to a voice detector
+tuple to send only detected utterances; the audio must then use the detector
+sample rate. Each section has its own `:timeout_ms` (120 seconds by default),
+and the first failure returns `{:error, {:section, index, reason}}`.
+`:on_segment` receives each segment in order. `AudioFlow.Wav` reads only mono
+16-bit PCM WAV. Convert other files with FFmpeg. To print captions for a file:
+
+```sh
+AUDIOFLOW_ML=1 mix run examples/transcribe.exs input.wav
+DEEPGRAM_API_KEY=... mix run examples/transcribe.exs input.wav deepgram
+```
+
 ## Conversation history
 
 Enable history when the LLM adapter accepts chat messages:

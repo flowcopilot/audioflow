@@ -5,6 +5,8 @@ defmodule AudioFlow do
   Each session sends `{AudioFlow, session_pid, turn_ref, event}` to its owner.
   Events are `{:transcript, text}`, `{:description, text}`, `{:text, text}`, `{:audio, audio}`,
   `{:done, metrics}`, `{:cancelled, metrics}`, or `{:error, reason, metrics}`.
+  STT adapters can also cause `{:segment, %AudioFlow.Transcript.Segment{}}` and
+  `{:partial_transcript, text}` events. See `AudioFlow.Session`.
   A session that runs an `AudioFlow.Graph` sends node outputs as
   `{kind, value, node_id}`, where kind can also be `:image` or `:vector`.
   """
@@ -18,6 +20,10 @@ defmodule AudioFlow do
   def submit(session, %AudioFlow.Image{} = image), do: GenServer.call(session, {:submit, image})
   def submit(session, %AudioFlow.Text{} = text), do: GenServer.call(session, {:submit, text})
   def cancel(session), do: GenServer.call(session, :cancel)
+
+  @doc "Transcribe long PCM audio with an STT adapter. See `AudioFlow.Transcription`."
+  defdelegate transcribe(audio, stt, options \\ []), to: AudioFlow.Transcription
+
   @doc "Clear saved conversation text while idle. Returns `{:error, :busy}` during a turn."
   def clear_history(session), do: GenServer.call(session, :clear_history)
   def stop_session(session), do: DynamicSupervisor.terminate_child(AudioFlow.Sessions, session)
