@@ -127,14 +127,20 @@ respect graph history settings. MCP offers evaluate_conversation with id/script.
 These checks do not grade audio or classify intents with a model.
 
 Remote speech nodes are deepgram.stt, mistral.stt (Voxtral), elevenlabs.tts and
-cartesia.tts. Create a starter, select its node, and save model, language code
+cartesia.tts. Self-hosted Fish Speech is available as fish_audio.tts with an
+optional reference_id; configure its trusted server endpoint and optional
+FISH_SPEECH_API_KEY as described in [providers](../docs/providers.md#fish-audio--self-hosted-fish-speech).
+The hosted Fish Audio node is fish_audio_api.tts; set FISH_AUDIO_API_KEY and
+select its model and hosted reference_id. It supports configurable PCM rates,
+including 8 and 16 kHz for telephony. Native Fish on Nx is not currently available.
+For the hosted providers, create a starter, select its node, and save model, language code
 and voice options. Cartesia also requires an explicit API version; see
 [contracts](../docs/providers.md). Set only the selected provider's
 DEEPGRAM_API_KEY, MISTRAL_API_KEY, ELEVENLABS_API_KEY or CARTESIA_API_KEY in the
 **server environment**, using your secret manager.
 Never paste credentials into graphs, scripts or browser/MCP payloads. Speech
 nodes accept neither raw keys nor arbitrary environment-variable names or URLs.
-A missing key disables dashboard runs and returns an MCP prerequisite error.
+For hosted providers, a missing key disables dashboard runs and returns an MCP prerequisite error.
 Key presence is not evidence of account/model access.
 
 STT graphs accept committed mono signed 16-bit little-endian PCM uploads,
