@@ -1,23 +1,37 @@
 defmodule AudioFlow.Telephony.MuLaw do
-  @moduledoc "G.711 μ-law codec. PCM values are signed 16-bit little-endian."
-  import Bitwise
+  @moduledoc """
+  G.711 μ-law codec on FFmpeg, through `membrane_g711_ffmpeg_plugin`. PCM
+  values are signed 16-bit little-endian.
+  """
+  alias Membrane.G711.FFmpeg.Decoder
+  alias Membrane.G711.FFmpeg.Encoder
 
-  def decode(data) do
-    for <<byte <- data>>, into: <<>> do
-      value = bxor(byte, 255)
-      magnitude = (((value &&& 15) <<< 3) + 132) <<< (value >>> 4 &&& 7)
-      sample = if (value &&& 128) == 0, do: magnitude - 132, else: 132 - magnitude
-      <<sample::little-signed-16>>
-    end
+  def decode(<<>>), do: <<>>
+
+  def decode(data) when is_binary(data) do
+    {:ok, frames} = Decoder.Native.decode(data, codec(:decoder))
+    IO.iodata_to_binary(frames)
   end
 
+  def encode(<<>>), do: <<>>
+
   def encode(data) when rem(byte_size(data), 2) == 0 do
-    for <<sample::little-signed-16 <- data>>, into: <<>> do
-      mask = if sample < 0, do: 127, else: 255
-      value = min(abs(sample), 32_635) + 132
-      exponent = Enum.find(7..0//-1, 0, fn e -> value >= 128 <<< e end)
-      mantissa = value >>> (exponent + 3) &&& 15
-      <<bxor(exponent <<< 4 ||| mantissa, mask)>>
+    {:ok, frames} = Encoder.Native.encode(data, codec(:encoder))
+    IO.iodata_to_binary(frames)
+  end
+
+  # An FFmpeg codec context is not safe to share, so each process keeps its own.
+  defp codec(kind) do
+    key = {__MODULE__, kind}
+
+    with nil <- Process.get(key) do
+      {:ok, codec} =
+        if kind == :decoder,
+          do: Decoder.Native.create(:PCMU),
+          else: Encoder.Native.create(:s16le, :PCMU)
+
+      Process.put(key, codec)
+      codec
     end
   end
 end

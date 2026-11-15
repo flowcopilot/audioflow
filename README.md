@@ -28,7 +28,9 @@ mix run examples/demo.exs
 mix audio_flow.bench --runs 20 --concurrency 4
 ```
 
-The core needs no model downloads. Optional parts are enabled with environment
+The core needs no model downloads. It resamples audio and codes G.711 with
+FFmpeg through two Membrane plugins, so the first build needs a C compiler and
+downloads prebuilt FFmpeg libraries. Optional parts are enabled with environment
 variables:
 
 | Variable | Adds | Source directory |

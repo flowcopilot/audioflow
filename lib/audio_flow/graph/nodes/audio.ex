@@ -29,6 +29,5 @@ defmodule AudioFlow.Graph.Nodes.Audio do
   def adapter("audio.resample", %{sample_rate: rate}),
     do: {AudioFlow.Adapters.Function, [run: fn audio, emit -> emit.(resample(audio, rate)) end]}
 
-  @doc "Linear interpolation of mono signed 16-bit PCM."
-  defdelegate resample(audio, rate), to: AudioFlow.Resampler, as: :linear
+  defdelegate resample(audio, rate), to: AudioFlow.Resampler, as: :convert
 end

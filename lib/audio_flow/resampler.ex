@@ -1,99 +1,50 @@
 defmodule AudioFlow.Resampler do
   @moduledoc """
-  Converts complete mono s16le PCM to another sample rate.
+  Converts mono s16le PCM to another sample rate with FFmpeg's libswresample,
+  through `Membrane.FFmpeg.SWResample.Converter.Native`.
 
-  It uses a polyphase windowed-sinc filter with 8 zero crossings on each side.
-  The cut-off is 0.9 of the lower Nyquist frequency, so downsampling removes
-  content that would alias. The conversion is not stateful: convert a complete
-  utterance, not separate stream chunks. It runs in Elixir. On an Apple M-series
-  CPU, one minute of 48 kHz input takes about 1.8 seconds, and one minute of
-  8 kHz input about 0.9 seconds.
+  `convert/2` converts complete audio. For a stream, keep the state from
+  `new/2`, call `push/2` for each chunk and `flush/1` at the end. The converter
+  holds a few milliseconds of audio until the flush, so the chunks of a stream
+  join to the same samples as one conversion of the whole input.
+
+  The state is a native handle. Use it from one process, and do not push to it
+  after a flush.
   """
   alias AudioFlow.Audio
+  alias Membrane.FFmpeg.SWResample.Converter.Native
 
-  @zero_crossings 8
+  @format Membrane.RawAudio.SampleFormat.serialize(:s16le)
 
   def convert(%Audio{sample_rate: rate} = audio, rate), do: audio
 
   def convert(%Audio{} = audio, rate) when is_integer(rate) and rate > 0 do
     unless Audio.valid?(audio), do: raise(ArgumentError, "expected mono s16le PCM")
-    divisor = Integer.gcd(audio.sample_rate, rate)
-    up = div(rate, divisor)
-    down = div(audio.sample_rate, divisor)
-
-    count = div(byte_size(audio.data), 2)
-    output_count = div(count * up, down)
-    {table, half} = table(up, down)
-    padding = :binary.copy(<<0, 0>>, half)
-    input = padding <> audio.data <> padding
-    width = 4 * half
-
-    data =
-      for k <- 0..(output_count - 1)//1, into: <<>> do
-        position = k * down
-        start = div(position, up) + 1
-        window = binary_part(input, 2 * start, width)
-        value = dot(window, elem(table, rem(position, up)), 0.0)
-        <<value |> round() |> max(-32_768) |> min(32_767)::little-signed-16>>
-      end
-
-    %Audio{data: data, sample_rate: rate}
+    state = new(audio.sample_rate, rate)
+    data = push(state, audio.data) <> flush(state)
+    # The flush can round the length up by one sample.
+    size = div(div(byte_size(audio.data), 2) * rate, audio.sample_rate) * 2
+    %Audio{data: binary_part(data, 0, min(size, byte_size(data))), sample_rate: rate}
   end
 
-  defp dot(<<sample::little-signed-16, rest::binary>>, [weight | weights], acc),
-    do: dot(rest, weights, acc + weight * sample)
-
-  defp dot(<<>>, [], acc), do: acc
-
-  # One weight list for each output phase. Weight j of phase p applies to input
-  # sample center - half + 1 + j, at distance (j + 1 - half - p / up) samples.
-  defp table(up, down) do
-    cutoff = 0.9 * min(1.0, up / down)
-    half = ceil(@zero_crossings / cutoff)
-
-    phases =
-      for phase <- 0..(up - 1) do
-        offset = phase / up
-
-        weights =
-          for j <- 0..(2 * half - 1) do
-            distance = j + 1 - half - offset
-            kernel(distance, cutoff, half)
-          end
-
-        sum = Enum.sum(weights)
-        Enum.map(weights, &(&1 / sum))
-      end
-
-    {List.to_tuple(phases), half}
+  @doc "Starts a stream conversion between two sample rates."
+  def new(from, to) when is_integer(from) and from > 0 and is_integer(to) and to > 0 do
+    {:ok, state} = Native.create(@format, from, 1, @format, to, 1)
+    state
   end
 
-  defp kernel(distance, cutoff, half) do
-    window = 0.5 + 0.5 * :math.cos(:math.pi() * distance / half)
-    x = :math.pi() * cutoff * distance
-    sinc = if abs(x) < 1.0e-9, do: 1.0, else: :math.sin(x) / x
-    if abs(distance) >= half, do: 0.0, else: cutoff * sinc * window
+  @doc "Converts the next chunk. The output can be shorter than the input duration."
+  # The native converter reads an empty chunk as a flush.
+  def push(_state, <<>>), do: <<>>
+
+  def push(state, data) when rem(byte_size(data), 2) == 0 do
+    {:ok, output} = Native.convert(data, state)
+    output
   end
 
-  @doc "Linear interpolation of mono signed 16-bit PCM."
-  def linear(%Audio{sample_rate: rate} = audio, rate), do: audio
-
-  def linear(%Audio{data: data, sample_rate: from}, to) do
-    samples = for <<sample::little-signed-16 <- data>>, do: sample
-    input = List.to_tuple(samples)
-    count = tuple_size(input)
-    length = if count == 0, do: 0, else: max(1, div(count * to, from))
-
-    pcm =
-      for index <- 0..(length - 1)//1, into: <<>> do
-        position = index * from / to
-        left = min(trunc(position), count - 1)
-        right = min(left + 1, count - 1)
-        weight = position - left
-        sample = round(elem(input, left) * (1 - weight) + elem(input, right) * weight)
-        <<sample::little-signed-16>>
-      end
-
-    %Audio{data: pcm, sample_rate: to}
+  @doc "Returns the audio that the converter still holds."
+  def flush(state) do
+    {:ok, output} = Native.convert(<<>>, state)
+    output
   end
 end

@@ -4,7 +4,7 @@ defmodule AudioFlow.Telephony.Packetizer do
   alias AudioFlow.Telephony.MuLaw
   alias AudioFlow.Telephony.RateConverter
 
-  defstruct rate: nil, converter: %RateConverter{}, pending: <<>>, active?: false
+  defstruct rate: nil, converter: %RateConverter{}, pending: <<>>
 
   def format(state, rate), do: %{state | rate: rate, converter: %RateConverter{}}
 
@@ -14,20 +14,11 @@ defmodule AudioFlow.Telephony.Packetizer do
         do: RateConverter.down(data, state.converter),
         else: {data, state.converter}
 
-    split(state.pending <> MuLaw.encode(data), %{
-      state
-      | rate: rate,
-        converter: converter,
-        active?: true
-    })
+    split(state.pending <> MuLaw.encode(data), %{state | rate: rate, converter: converter})
   end
 
   def finish(state) do
-    {tail, _} =
-      if state.active? and state.rate == 16_000,
-        do: RateConverter.finish_down(state.converter),
-        else: {<<>>, state.converter}
-
+    {tail, _} = RateConverter.finish(state.converter)
     data = state.pending <> MuLaw.encode(tail)
     padding = rem(160 - rem(byte_size(data), 160), 160)
     split(data <> :binary.copy(<<255>>, padding), %__MODULE__{rate: state.rate})

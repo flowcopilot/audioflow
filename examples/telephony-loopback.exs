@@ -69,8 +69,8 @@ for provider <- [:twilio, :telnyx] do
           media: %{
             track: "inbound",
             chunk: Integer.to_string(chunk),
-            timestamp: Integer.to_string((chunk - 1) * 48),
-            payload: Base.encode64(:binary.copy(<<255>>, 384))
+            timestamp: Integer.to_string((chunk - 1) * 50),
+            payload: Base.encode64(:binary.copy(<<255>>, 400))
           }
         },
         key,
@@ -79,7 +79,7 @@ for provider <- [:twilio, :telnyx] do
     )
   end
 
-  for _ <- 1..6 do
+  for _ <- 1..5 do
     {:json, %{"event" => "media", "media" => %{"payload" => payload}}} = Client.recv(socket)
     160 = byte_size(Base.decode64!(payload))
   end
@@ -88,5 +88,5 @@ for provider <- [:twilio, :telnyx] do
   {:close, _} = Client.recv(socket)
   Client.close(socket)
   GenServer.stop(server)
-  IO.puts("#{provider}: start/media/stop passed; received six paced PCMU packets")
+  IO.puts("#{provider}: start/media/stop passed; received five paced PCMU packets")
 end
