@@ -47,6 +47,154 @@ string). Older Cartesia schemas are not supported. These are text-in/audio-out
 HTTP streams, not bidirectional text WebSocket streams. MP3, WAV and μ-law are
 not decoded and are not requested.
 
+## Fish Audio hosted API
+
+`AudioFlow.Adapters.FishAudioAPI` calls the hosted service. It requires a model,
+a hosted voice model ID and an API key. It does not require a local Python server.
+
+```elixir
+tts = {AudioFlow.Adapters.FishAudioAPI,
+  [model: "s2.1-pro", reference_id: System.fetch_env!("FISH_AUDIO_VOICE_ID"),
+   api_key: fn -> System.fetch_env!("FISH_AUDIO_API_KEY") end,
+   sample_rate: 24_000]}
+```
+
+It streams raw mono s16le PCM from `https://api.fish.audio/v1/tts`, using JSON,
+Bearer authentication and a `model` header. `:sample_rate` defaults to 44,100;
+supported rates are 8,000, 16,000, 24,000, 32,000 and 44,100 Hz. Optional
+`:language` affects text normalization; `:latency` accepts `"normal"` (default),
+`"balanced"` or `"low"`. Inline tags pass through unchanged. `:reference_id`
+is a single hosted voice ID; uploading references and multi-speaker voice ID
+arrays are not exposed by this adapter. Account access and model availability
+still apply. Empty keys, models and voice IDs fail before making a request.
+
+The graph/UI node is `fish_audio_api.tts`. Set `FISH_AUDIO_API_KEY` in the server
+environment. Its options are `model`, `reference_id`, `sample_rate`, `language`,
+`latency`, `timeout_ms` and `receive_timeout_ms`. The endpoint defaults to the
+hosted service; trusted server code can override it using
+`speech_provider_endpoints["fish_audio_api.tts"]`. Graph data cannot set keys
+or endpoints. Shared HTTP bounds apply; the idle timeout defaults to the
+request timeout (30 seconds). For slow or long requests, raise both timeouts
+and the graph/Session turn deadline.
+
+The [hosted API reference](https://docs.fish.audio/api-reference/endpoint/openapi-v1/text-to-speech)
+and [official SDK endpoints](https://github.com/fishaudio/fish-audio-python/blob/main/_autodocs/endpoints.md)
+were checked on 2026-11-15. Tests use local fixtures, not a paid API account.
+
+## Fish Audio / self-hosted Fish Speech
+
+`AudioFlow.Adapters.FishAudio` connects to a running
+[Fish Speech API server](https://github.com/fishaudio/fish-speech). Install its
+runtime and model weights using the upstream [installation guide](https://speech.fish.audio/install/).
+In that checkout, launch the server with the downloaded checkpoint:
+
+```sh
+python tools/api_server.py --listen 127.0.0.1:8080 \
+  --llama-checkpoint-path checkpoints/s2-pro
+```
+
+The checkpoint selects the model. AudioFlow does not load weights or launch a
+Python process. Select a stored server voice with `:reference_id`, or omit it
+for unconditioned generation. Empty or whitespace-only reference IDs are omitted.
+Register voice references through the server's
+`POST /v1/references/add` API (multipart `id`, `audio`, and transcript `text`).
+
+```elixir
+tts = {AudioFlow.Adapters.FishAudio,
+  [endpoint: "http://127.0.0.1:8080/v1/tts", reference_id: "narrator"]}
+
+# Use in an existing pipeline:
+{:ok, session} = AudioFlow.start_session(stt: stt, llm: llm, tts: tts)
+```
+
+The default endpoint is `http://127.0.0.1:8080/v1/tts`. Authentication is
+optional; if the server was launched with `--api-key`, pass `:api_key` as a
+string or zero-argument function. The adapter sends Bearer authentication only
+when the resolved key is nonempty. This adapter targets the self-hosted
+server. Use `AudioFlow.Adapters.FishAudioAPI` for the hosted service.
+The graph uses `FISH_SPEECH_API_KEY`, independently of the hosted API key.
+
+Requests use JSON with `format: "wav"` and `streaming: true`. The adapter strips
+Fish Speech's canonical 44-byte streaming WAV header, accepts both zero and
+`0xFFFFFFFF` unknown-length markers, and emits mono signed 16-bit little-endian
+PCM during the response. The header determines the actual sample rate; no
+resampling is performed. Unsupported headers, stereo, non-16-bit PCM,
+truncated headers, empty audio and incomplete final samples return errors.
+HTTP byte limits include the WAV header. Shared HTTP deadlines, cancellation
+and request/response limits below apply. For Fish Speech, the idle timeout
+`:receive_timeout_ms` defaults to the request `:timeout_ms` (30 seconds), rather
+than the shared 10-second default. Increase both for slow or cold servers and
+long passages; the server may pause between decoded text chunks. Also raise
+the Session or graph turn deadline when needed. Telephony output needs explicit
+resampling to its supported 8 or 16 kHz rate. Inline emotion/speaker tags in text
+pass through unchanged. There are no `:model`, `:language`, `:voice_id`, or
+`:sample_rate` options; use `:reference_id` for the voice.
+
+The graph/UI catalog includes `fish_audio.tts`, with optional `reference_id`
+and `timeout_ms` / `receive_timeout_ms` options. A graph requires an explicit
+trusted endpoint in server code (the localhost default is for direct use only):
+
+```elixir
+# Merge with any existing provider endpoints.
+Application.put_env(:audio_flow, :speech_provider_endpoints, %{
+  "fish_audio.tts" => "http://127.0.0.1:8080/v1/tts"
+})
+```
+
+Set `FISH_SPEECH_API_KEY` in the server environment only if authentication is
+required. Graph data cannot supply endpoints or credentials. Local servers
+need no key. Missing endpoint configuration disables graph runs with a
+prerequisite message. The server
+must be reachable from the AudioFlow process (including its container).
+
+Wire behavior was checked against upstream
+[request schema](https://github.com/fishaudio/fish-speech/blob/main/fish_speech/utils/schema.py),
+[TTS route](https://github.com/fishaudio/fish-speech/blob/main/tools/server/views.py), and
+[stream header](https://github.com/fishaudio/fish-speech/blob/main/fish_speech/inference_engine/utils.py)
+on 2026-11-15. Tests use local HTTP fixtures; no live Fish Speech model inference
+has been run.
+
+## Native Fish Speech on Nx
+
+Fish Speech is not currently a native Nx backend in AudioFlow. The two HTTP
+adapters above run inference in Fish Audio's hosted service or in your Python
+server. Neither is presented as native inference or wrapped in `Nx.Serving`.
+For native TTS available today, use `AudioFlow.Kokoro` or VITS with
+`AUDIOFLOW_ML=1`.
+
+A native S2-Pro implementation is feasible in principle, but needs a dedicated
+model integration. The official checkpoint was inspected at revision
+`1de9996b6be38b745688de084d87a5633f714e4e`: it contains sharded transformer
+safetensors, tokenizer/config files, and `codec.pth`, with no ONNX files.
+See the [checkpoint files](https://huggingface.co/fishaudio/s2-pro/tree/1de9996b6be38b745688de084d87a5633f714e4e).
+The [configuration](https://huggingface.co/fishaudio/s2-pro/blob/1de9996b6be38b745688de084d87a5633f714e4e/config.json)
+identifies `fish_qwen3_omni`, with a 36-layer text model, a four-layer audio
+decoder, and ten audio codebooks. A generic Qwen3 text generator cannot run the
+complete speech pipeline.
+
+The implementation path would require:
+
+1. Pin a model revision and preserve Fish's prompt/speaker formatting and
+   [semantic-token mapping](https://github.com/fishaudio/fish-speech/blob/main/fish_speech/tokenizer.py).
+2. Implement/export the slow transformer and fast codebook decoder, including
+   their separate KV caches, generation loop and sampling. Validate token
+   logits and generated codebooks against the
+   [upstream implementation](https://github.com/fishaudio/fish-speech/blob/main/fish_speech/models/text2semantic/llama.py).
+3. Implement/export the
+   [ModifiedDAC codec](https://github.com/fishaudio/fish-speech/blob/main/fish_speech/models/dac/modded_dac.py)
+   decoder, plus the encoder for reference-voice conditioning. Verify waveform
+   shape, sample rate, reconstruction quality and chunk boundaries against Python.
+4. Integrate proven inference with a shared `Nx.Serving` and AudioFlow's PCM
+   adapter. Check memory use, compile cost, cancellation and generation latency
+   on the actual target backend before registering a runnable graph node.
+
+The existing Transmuter dependency consumes ONNX graphs, so it would need exports
+of those components and operator/parity validation; it cannot load the supplied
+safetensors and codec checkpoint as a complete Fish model. An Axon implementation
+would instead need model definitions and weight mapping. Neither path has been
+implemented or validated here. The assessment does not establish that every
+required export/operator works. Drama 3 needs its own architecture assessment.
+
 ## Direct speech-to-speech calls
 
 These calls send one committed utterance per connection. For an always-on

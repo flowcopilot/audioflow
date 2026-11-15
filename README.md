@@ -66,6 +66,13 @@ AudioFlow.cancel(session)
 AudioFlow.stop_session(session)
 ```
 
+For hosted Fish Audio TTS, use `AudioFlow.Adapters.FishAudioAPI` with an API
+key, model and hosted voice ID. For self-hosted Fish Speech, use
+`AudioFlow.Adapters.FishAudio` with a server endpoint and optional voice reference.
+See [Fish Audio backends](docs/providers.md#fish-audio-hosted-api).
+Native Fish inference on Nx needs a separate model/codec integration; see the
+[Nx feasibility assessment](docs/providers.md#native-fish-speech-on-nx).
+
 For OpenAI Realtime, Gemini Live or a local
 [Moshi](docs/providers.md#local-moshi-speech-to-speech) server without chained
 stages, use the explicit

@@ -2,6 +2,8 @@ defmodule AudioFlow.RemoteProvidersTest do
   use ExUnit.Case, async: true
   alias AudioFlow.Adapters.Cartesia
   alias AudioFlow.Adapters.ElevenLabs
+  alias AudioFlow.Adapters.FishAudio
+  alias AudioFlow.Adapters.FishAudioAPI
   alias AudioFlow.Adapters.GeminiLive
   alias AudioFlow.Adapters.OpenAIRealtime
   alias AudioFlow.Audio
@@ -348,11 +350,23 @@ defmodule AudioFlow.RemoteProvidersTest do
     assert_receive {:peer_result, {:error, :closed}}, 3_000
   end
 
-  test "both HTTP TTS providers request raw PCM and stream before EOF across odd byte boundaries" do
-    for provider <- [Cartesia, ElevenLabs] do
+  test "HTTP TTS providers stream before EOF across odd byte boundaries" do
+    for provider <- [Cartesia, ElevenLabs, FishAudio, FishAudioAPI] do
       options =
         http_options(fn socket, _ ->
-          pcm_headers(socket)
+          pcm_headers(socket, if(provider == FishAudio, do: "audio/wav", else: "audio/pcm"))
+
+          if provider == FishAudio do
+            <<first::binary-size(17), rest::binary>> = fish_header()
+            HTTP.chunk(socket, first)
+
+            receive do
+              :header_rest -> :ok
+            end
+
+            HTTP.chunk(socket, rest)
+          end
+
           HTTP.chunk(socket, <<1, 0, 2>>)
 
           receive do
@@ -362,6 +376,20 @@ defmodule AudioFlow.RemoteProvidersTest do
           HTTP.chunk(socket, <<0>>)
           HTTP.finish(socket)
         end)
+
+      options =
+        if provider == FishAudioAPI do
+          Keyword.merge(options,
+            reference_id: "hosted-voice",
+            model: "s2.1-pro",
+            api_key: fn -> "api-key" end,
+            sample_rate: 16_000,
+            language: "ro",
+            latency: "balanced"
+          )
+        else
+          options
+        end
 
       owner = self()
 
@@ -375,27 +403,238 @@ defmodule AudioFlow.RemoteProvidersTest do
 
       assert_receive {:http_request, server, request}
 
-      if provider == Cartesia do
-        assert request.headers["authorization"] == "Bearer key"
-        assert request.headers["cartesia-version"] == "2026-03-01"
-        assert request.body["voice"] == "voice"
-
-        assert request.body["output_format"] == %{
-                 "container" => "raw",
-                 "encoding" => "pcm_s16le",
-                 "sample_rate" => 24_000
-               }
-      else
-        assert request.headers["xi-api-key"] == "key"
-        assert request.line =~ "output_format=pcm_24000"
-        assert request.body["text"] == "Hello"
+      if provider == FishAudio do
+        refute_receive {:pcm, _}, 20
+        send(server, :header_rest)
       end
 
-      assert_receive {:pcm, %Audio{data: <<1, 0>>, sample_rate: 24_000}}
+      case provider do
+        Cartesia ->
+          assert request.headers["authorization"] == "Bearer key"
+          assert request.headers["cartesia-version"] == "2026-03-01"
+          assert request.body["voice"] == "voice"
+
+          assert request.body["output_format"] == %{
+                   "container" => "raw",
+                   "encoding" => "pcm_s16le",
+                   "sample_rate" => 24_000
+                 }
+
+        FishAudio ->
+          assert request.headers["authorization"] == "Bearer key"
+          assert request.body == %{"text" => "Hello", "format" => "wav", "streaming" => true}
+
+        FishAudioAPI ->
+          assert request.headers["authorization"] == "Bearer api-key"
+          assert request.headers["model"] == "s2.1-pro"
+          assert request.headers["content-type"] == "application/json"
+
+          assert request.body == %{
+                   "text" => "Hello",
+                   "format" => "pcm",
+                   "reference_id" => "hosted-voice",
+                   "sample_rate" => 16_000,
+                   "language" => "ro",
+                   "latency" => "balanced"
+                 }
+
+        ElevenLabs ->
+          assert request.headers["xi-api-key"] == "key"
+          assert request.line =~ "output_format=pcm_24000"
+          assert request.body["text"] == "Hello"
+      end
+
+      rate =
+        case provider do
+          FishAudio -> 44_100
+          FishAudioAPI -> 16_000
+          _ -> 24_000
+        end
+
+      assert_receive {:pcm, %Audio{data: <<1, 0>>, sample_rate: ^rate}}
       send(server, :continue)
       assert :ok = Task.await(task)
       assert_receive {:pcm, %Audio{data: <<2, 0>>}}
     end
+  end
+
+  test "hosted Fish Audio defaults to 44.1 kHz and rejects unusable configuration before HTTP" do
+    options =
+      http_options(fn socket, _ ->
+        pcm_headers(socket)
+        HTTP.chunk(socket, <<1, 0>>)
+        HTTP.finish(socket)
+      end)
+      |> Keyword.put(:reference_id, "hosted-voice")
+
+    assert :ok =
+             FishAudioAPI.run("Hello", options, fn audio ->
+               send(self(), {:pcm, audio})
+               :ok
+             end)
+
+    assert_receive {:pcm, %Audio{data: <<1, 0>>, sample_rate: 44_100}}
+
+    assert_receive {:http_request, _,
+                    %{body: %{"format" => "pcm", "sample_rate" => 44_100, "latency" => "normal"}}}
+
+    for extra <- [
+          [sample_rate: 22_050],
+          [sample_rate: 48_000],
+          [latency: "invalid"],
+          [reference_id: ""],
+          [reference_id: " \t"],
+          [model: ""],
+          [api_key: fn -> nil end],
+          [api_key: fn -> "" end]
+        ] do
+      assert_raise ArgumentError, fn ->
+        FishAudioAPI.run("Hi", Keyword.merge(options, extra), fn _ -> flunk("unexpected PCM") end)
+      end
+    end
+
+    refute_receive {:http_request, _, _}
+  end
+
+  # Independent wire fixture matching Python wave's canonical streaming header.
+  defp fish_header(rate \\ 44_100, channels \\ 1, bits \\ 16, size \\ 0xFFFFFFFF) do
+    riff_size = if size == 0, do: 36, else: 0xFFFFFFFF
+    align = div(channels * bits, 8)
+
+    <<"RIFF", riff_size::little-32, "WAVEfmt ", 16::little-32, 1::little-16, channels::little-16,
+      rate::little-32, rate * align::little-32, align::little-16, bits::little-16, "data",
+      size::little-32>>
+  end
+
+  test "Fish Speech supports unauthenticated local servers, reference voices and legacy WAV headers" do
+    options =
+      http_options(fn socket, _ ->
+        pcm_headers(socket, "audio/wav")
+        HTTP.chunk(socket, fish_header(48_000, 1, 16, 0) <> <<3, 0>>)
+        HTTP.finish(socket)
+      end)
+      |> Keyword.delete(:api_key)
+      |> Keyword.put(:reference_id, "narrator")
+
+    assert :ok =
+             FishAudio.run("[whisper] Hello", options, fn audio ->
+               send(self(), {:pcm, audio})
+               :ok
+             end)
+
+    assert_receive {:http_request, _, request}
+    refute Map.has_key?(request.headers, "authorization")
+    assert request.body["reference_id"] == "narrator"
+    assert request.body["text"] == "[whisper] Hello"
+    assert_receive {:pcm, %Audio{data: <<3, 0>>, sample_rate: 48_000}}
+  end
+
+  test "Fish Speech rejects invalid WAV streams and enforces HTTP budgets" do
+    for {type, data, extra, expected} <- [
+          {"audio/mpeg", <<1, 2>>, [], :invalid_content_type},
+          {"audio/wav", "RIFF", [], :invalid_wav},
+          {"audio/wav", fish_header(44_100, 2), [], :unsupported_wav},
+          {"audio/wav", fish_header(44_100, 1, 32), [], :unsupported_wav},
+          {"audio/wav", String.duplicate("x", 44), [], :unsupported_wav},
+          {"audio/wav", fish_header(), [], :empty_response},
+          {"audio/wav", fish_header() <> <<1>>, [], :incomplete_sample},
+          {"audio/wav", fish_header() <> <<1, 0>>, [max_response_bytes: 45], :response_too_large}
+        ] do
+      options =
+        http_options(fn socket, _ ->
+          pcm_headers(socket, type)
+          HTTP.chunk(socket, data)
+          HTTP.finish(socket)
+        end)
+
+      assert {:error, ^expected} =
+               FishAudio.run("Hi", options ++ extra, fn _ -> flunk("unexpected PCM") end)
+    end
+
+    options =
+      http_options(fn socket, _ ->
+        HTTP.headers(socket, 401)
+        HTTP.finish(socket)
+      end)
+
+    assert {:error, {:http_status, 401}} = FishAudio.run("Hi", options, fn _ -> :ok end)
+
+    assert {:error, :request_too_large} =
+             FishAudio.run("Hi", options ++ [max_request_bytes: 1], fn _ -> :ok end)
+  end
+
+  test "Fish Speech omits blank reference IDs and resolves optional API-key callbacks" do
+    for {reference, key} <- [{nil, nil}, {"", ""}, {" \t", "rotated-key"}] do
+      options =
+        http_options(fn socket, _ ->
+          pcm_headers(socket, "audio/wav")
+          HTTP.chunk(socket, fish_header() <> <<1, 0>>)
+          HTTP.finish(socket)
+        end)
+
+      options = Keyword.merge(options, reference_id: reference, api_key: fn -> key end)
+      assert :ok = FishAudio.run("Hi", options, fn _ -> :ok end)
+      assert_receive {:http_request, _, request}
+      refute Map.has_key?(request.body, "reference_id")
+      expected = if key in [nil, ""], do: nil, else: "Bearer " <> key
+      assert request.headers["authorization"] == expected
+    end
+  end
+
+  test "Fish Speech rejects premature HTTP EOF after headers or partial PCM" do
+    for pcm <- [<<>>, <<1, 0, 2>>] do
+      options =
+        http_options(fn socket, _ ->
+          pcm_headers(socket, "audio/wav")
+          HTTP.chunk(socket, fish_header() <> pcm)
+          # The fixture closes without the terminating HTTP chunk.
+        end)
+
+      assert {:error, :http_stream_failed} = FishAudio.run("Hi", options, fn _ -> :ok end)
+    end
+  end
+
+  test "Fish Speech idle timeout closes the connection before or during the WAV header" do
+    owner = self()
+
+    for partial <- [<<>>, "RIFF"] do
+      options =
+        http_options(fn socket, _ ->
+          pcm_headers(socket, "audio/wav")
+          if partial != <<>>, do: HTTP.chunk(socket, partial)
+          send(owner, {:peer_result, :gen_tcp.recv(socket, 0, 2_000)})
+        end)
+
+      options = Keyword.merge(options, timeout_ms: 1_000, receive_timeout_ms: 40)
+
+      assert {:error, :http_stream_failed} =
+               FishAudio.run("Hi", options, fn _ -> flunk("unexpected PCM") end)
+
+      assert_receive {:peer_result, {:error, :closed}}, 3_000
+    end
+  end
+
+  test "Fish Speech cancellation closes the HTTP stream" do
+    owner = self()
+
+    options =
+      http_options(fn socket, _ ->
+        pcm_headers(socket, "audio/wav")
+        HTTP.chunk(socket, fish_header() <> <<1, 0>>)
+        send(owner, {:peer_result, :gen_tcp.recv(socket, 0, 2_000)})
+      end)
+
+    task =
+      Task.async(fn ->
+        FishAudio.run("Hi", options, fn audio ->
+          send(owner, {:pcm, audio})
+          :ok
+        end)
+      end)
+
+    assert_receive {:pcm, _}
+    Task.shutdown(task, :brutal_kill)
+    assert_receive {:peer_result, {:error, :closed}}, 3_000
   end
 
   test "TTS rejects status errors, compressed audio, incomplete samples, empty and oversized responses" do
