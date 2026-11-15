@@ -12,11 +12,11 @@ defmodule AudioFlowUI.MCPTest do
 
   test "an agent builds a graph in steps, then runs it", %{client: client} do
     assert {:ok, %{structured: %{"node_types" => types}}} = call_tool(client, "list_node_types")
-    llm = Enum.find(types, &(&1["type"] == "llm.chat_http"))
+    llm = Enum.find(types, &(&1["type"] == "llm.req_llm"))
     assert %{"input" => "text", "output" => "text"} = llm
 
     assert %{"type" => "string", "required" => true} =
-             Enum.find(llm["options"], &(&1["name"] == "endpoint"))
+             Enum.find(llm["options"], &(&1["name"] == "model"))
 
     partial = Map.update!(voice(), "edges", &Enum.drop(&1, -1))
 

@@ -70,8 +70,7 @@ claude mcp add --transport http audioflow http://localhost:4100/mcp \
 ## Node types
 
 The default catalog has the input nodes, `audio.resample`, the demo STT,
-LLM, and TTS nodes, `llm.req_llm` for ReqLLM models and endpoints, and the
-deprecated `llm.chat_http` chat-completions node.
+LLM, and TTS nodes, and `llm.req_llm` for ReqLLM models and endpoints.
 
 To add the native model nodes, build with `AUDIOFLOW_ML=1`:
 
@@ -103,7 +102,7 @@ To add node types, write an `AudioFlow.Graph.Node` module and set the list:
 config :audio_flow_ui, :nodes, [
   AudioFlow.Graph.Nodes.Input,
   AudioFlow.Graph.Nodes.Demo,
-  AudioFlow.Graph.Nodes.ChatHTTP,
+  AudioFlow.Graph.Nodes.ReqLLM,
   MyApp.WhisperNodes
 ]
 ```
@@ -129,13 +128,13 @@ These checks do not grade audio or classify intents with a model.
 Remote speech nodes are deepgram.stt, mistral.stt (Voxtral), elevenlabs.tts and
 cartesia.tts. Self-hosted Fish Speech is available as fish_audio.tts with an
 optional reference_id; configure its trusted server endpoint and optional
-FISH_SPEECH_API_KEY as described in [providers](../docs/providers.md#fish-audio--self-hosted-fish-speech).
+FISH_SPEECH_API_KEY as described in [providers](https://flowcopilot.github.io/audioflow/docs/features/providers/#fish-audio--self-hosted-fish-speech).
 The hosted Fish Audio node is fish_audio_api.tts; set FISH_AUDIO_API_KEY and
 select its model and hosted reference_id. It supports configurable PCM rates,
 including 8 and 16 kHz for telephony. Native Fish on Nx is not currently available.
 For the hosted providers, create a starter, select its node, and save model, language code
 and voice options. Cartesia also requires an explicit API version; see
-[contracts](../docs/providers.md). Set only the selected provider's
+[contracts](https://flowcopilot.github.io/audioflow/docs/features/providers/). Set only the selected provider's
 DEEPGRAM_API_KEY, MISTRAL_API_KEY, ELEVENLABS_API_KEY or CARTESIA_API_KEY in the
 **server environment**, using your secret manager.
 Never paste credentials into graphs, scripts or browser/MCP payloads. Speech
@@ -157,7 +156,7 @@ Speech-to-text nodes receive an already committed utterance, not continuous
 mic ingress. Remote STT nodes use ReqLLM, and whisper.stt uses Bumblebee.
 OpenAI Realtime and Gemini Live emit mixed transcript/text/audio and cannot
 occupy single-output graph nodes. Use their dedicated Session examples in
-[providers.md](../docs/providers.md).
+[providers](https://flowcopilot.github.io/audioflow/docs/features/providers/).
 
 ### RAG
 

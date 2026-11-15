@@ -15,7 +15,7 @@ completes DTLS, and sends paced PCMU silence plus encoded VP8 frames over SRTP.
 The receiver counts audio packets and completed video frames, then both peers
 close. Expected bundled-fixture result: **21 PCMU packets, 3 VP8 frames**.
 This is a terminal loopback example; it does not display video or open a server.
-OpenSSL headers/ABI setup is covered in [the integration guide](../../docs/webrtc-avatars.md).
+OpenSSL headers/ABI setup is covered in [the integration guide](https://flowcopilot.github.io/audioflow/docs/features/webrtc-avatars/).
 
 The included test pattern is generated without user media:
 

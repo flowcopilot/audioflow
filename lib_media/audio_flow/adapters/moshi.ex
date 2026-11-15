@@ -6,7 +6,8 @@ defmodule AudioFlow.Adapters.Moshi do
 
   `run/3` emits `{:text, delta}` and `{:audio, Audio}` like `OpenAIRealtime`.
   Moshi does not transcribe the user, so there is no `:transcript` event.
-  Use directly or in Session `:speech_to_speech`; see docs/providers.md.
+  Use directly or in Session `:speech_to_speech`; see
+  https://flowcopilot.github.io/audioflow/docs/features/providers/.
 
   Moshi is full duplex and has no end-of-turn signal. For continuous microphone
   input with simultaneous output, use `AudioFlow.Duplex` with

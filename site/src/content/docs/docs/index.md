@@ -49,7 +49,8 @@ know which one it calls.
 ## Build profiles
 
 The core needs no model downloads. Environment variables add the optional
-parts. Each combination uses its own `_build` directory.
+parts. Each combination uses its own `_build` directory. Changing a feature
+flag does not remove modules used by another build profile.
 
 | Variable | Adds | Source directory |
 | --- | --- | --- |
@@ -57,6 +58,18 @@ parts. Each combination uses its own `_build` directory.
 | `AUDIOFLOW_ML=1` | Bumblebee, EXLA, Transmuter models | `lib_ml` |
 | `AUDIOFLOW_MEDIA=1` | Membrane audio and video | `lib_media` |
 | `AUDIOFLOW_WEBRTC=1` | ExWebRTC media output and the PCM bridge | `lib_webrtc` |
+
+## Status
+
+This implements the session runtime, model routing, distributed inference
+workers, native Silero voice detection, Whisper and text-generation adapters,
+Kokoro and VITS speech synthesis, and Membrane audio and video input. The native
+media path has a recorded-speech integration check and a controlled Pipecat
+comparison. Output interruption is measured at the software transport. Acoustic
+interruption needs a device loopback check. HTTP language inference can use a
+compatible local server or cloud endpoint. Text embeddings, CLIP image
+embeddings, and BLIP image captions use shared native model services. Their model
+checks use independent PyTorch references.
 
 ## Next steps
 

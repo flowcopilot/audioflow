@@ -33,7 +33,7 @@ defmodule AudioFlow.Telemetry do
   `[:audio_flow, :stage, :start | :stop | :exception]` is a `:telemetry.span/3`
   around each adapter call, in the turn task. Metadata is `%{session, turn,
   stage, adapter}`. `stage` is `:stt`, `:vision`, `:llm`, or `:tts`. In a graph
-  session it is the node type, such as `"llm.chat_http"`, and `:node` is the
+  session it is the node type, such as `"llm.req_llm"`, and `:node` is the
   node id.
   TTS runs once per text chunk, inside the LLM stage. An adapter error, an
   exception, or a downstream failure emits `:exception` with `:kind` and

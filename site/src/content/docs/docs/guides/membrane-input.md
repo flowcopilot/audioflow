@@ -26,20 +26,25 @@ submits utterances after endpoint detection:
 Start `AudioFlow.VAD` once with `AudioFlow.Silero.serving/2` and
 `AudioFlow.Models.child_spec/3`. The Silero source can be a local ONNX file or
 `{:hf, "onnx-community/silero-vad", "onnx/model.onnx"}`. Each sink keeps its
-own recurrent state; only the weights are shared. Input must be 16 kHz.
+own recurrent state; only the weights are shared. Input must be 16 kHz. Pin the
+model with `load_options: [revision: "e71cae966052b992a7eca6b17738916ce0eca4ec"]`.
+Put a resampler before the sink for other rates.
 
 ## Barge-in
 
 After speech confirmation, the sink cancels the active reply and sends
 `{:audio_flow_speech_started, session}` to its parent. A configured output
-transport is flushed by the session. After endpoint detection, the sink sends
-`{:audio_flow_input, result}`. The parent must handle busy input.
+transport is flushed by the session. Otherwise, the parent must flush playback.
+After endpoint detection, the sink sends `{:audio_flow_input, result}`. The parent
+must handle busy input. At end of stream, the sink flushes the final utterance.
+Without `vad`, each input buffer must be one complete utterance.
 
 ## Without Membrane
 
 `AudioFlow.VoiceInput` supplies the same frame processing without Membrane. It
 keeps pre-roll, confirms speech, uses separate start and stop thresholds, and
-limits utterance length.
+limits utterance length. It pads a partial final frame with silence. Endpoint
+options are documented in the module.
 
 ```sh
 AUDIOFLOW_ML=1 AUDIOFLOW_PCM=recording.s16le mix run examples/vad.exs
@@ -51,8 +56,17 @@ AUDIOFLOW_ML=1 AUDIOFLOW_PCM=recording.s16le mix run examples/vad.exs
 Membrane source chain. It converts mono or stereo input to mono s16le at the
 selected rate (16 kHz by default). `AudioFlow.InputPipeline` supplies this
 chain as a complete pipeline. The source can be `AudioFlow.PCMFileSource` or
-`Membrane.PortAudio.Source`.
+`Membrane.PortAudio.Source`. The file source reads bounded chunks and preserves
+sample timestamps. It rejects incomplete PCM frames. Set the source format to match
+the actual file or device.
 
 :::caution
 Echo cancellation is not included. Speaker audio can trigger the detector.
 :::
+
+`AudioFlow.Input.attach/3` requires a voice detector tuple.
+
+## References
+
+- [Silero frame and context protocol](https://github.com/snakers4/silero-vad/blob/master/src/silero_vad/utils_vad.py)
+- [FFmpeg resampler](https://membrane-ffmpeg-swresample-plugin.hexdocs.pm/Membrane.FFmpeg.SWResample.Converter.html)

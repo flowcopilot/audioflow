@@ -75,7 +75,7 @@ defmodule AudioFlowUIWeb.ExamplesLive do
         <button phx-click="starter" phx-value-kind="stt">Create remote STT graph (mono s16le PCM)</button>
         <button phx-click="starter" phx-value-kind="rag">Create RAG graph (AUDIOFLOW_ML=1 + starter retrieval profile)</button>
         <p>
-          RAG retrieves documents; the starter reply is a synthetic echo. Replace demo.llm with llm.chat_http for generated answers.
+          RAG retrieves documents; the starter reply is a synthetic echo. Replace demo.llm with llm.req_llm for generated answers.
         </p>
       </section>
       <section class="flex flex-col gap-3">
@@ -112,7 +112,7 @@ defmodule AudioFlowUIWeb.ExamplesLive do
         <h2>Speech-to-speech and standalone transports</h2>
         <p>OpenAI Realtime and Gemini Live emit transcript, text and audio together.
           Use the dedicated Session example or chat app; these are not single-output graph nodes.</p>
-        <a href="https://github.com/flowcopilot/audioflow/blob/feat/parallel-issue-integration/docs/providers.md">Speech-to-speech Session setup</a>
+        <a href="https://flowcopilot.github.io/audioflow/docs/features/providers/">Speech-to-speech Session setup</a>
         <a href="https://github.com/flowcopilot/audioflow/tree/feat/parallel-issue-integration/examples/chat">Chat app</a>
         <a href="https://github.com/flowcopilot/audioflow/tree/feat/parallel-issue-integration/examples/rtvi-client">Official Pipecat SDK RTVI client (typed input/audio output)</a>
         <a href="https://github.com/flowcopilot/audioflow/blob/feat/parallel-issue-integration/examples/telephony-loopback.exs">Telephony loopback</a>

@@ -19,7 +19,7 @@ control event. No speech quality or live inference claim follows from Demo PCM.
 ## Run
 
 From this directory: `npm ci`, then `npm run sample`. Enter the WSS URL of a
-host-mounted `AudioFlow.RTVI.WebSocket` endpoint (see `docs/transports.md`). Use
+host-mounted `AudioFlow.RTVI.WebSocket` endpoint (see [network transports](https://flowcopilot.github.io/audioflow/docs/features/transports/)). Use
 host-owned session adapters and authenticate the HTTP upgrade before allocating
 a session. Browser WebSocket uses cookies or another host-authorized mechanism;
 it cannot set arbitrary authentication headers. The Vite page is a development

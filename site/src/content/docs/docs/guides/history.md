@@ -31,7 +31,8 @@ The runtime removes the oldest complete pairs to fit the new prompt. It also
 removes old pairs when a successful reply makes saved history exceed a limit.
 
 Current input and reply text must fit as one pair. Excess text ends the turn
-with `{:error, :context_limit, metrics}`. The budget excludes role fields,
+with `{:error, :context_limit, metrics}`. The input limit also applies while
+transcript or description chunks arrive. The budget excludes role fields,
 prompt delimiters, and system instructions. It is a byte limit, not a model
 token limit. Set model sequence limits for the chosen workload.
 
@@ -39,7 +40,8 @@ token limit. Set model sequence limits for the chosen workload.
 
 Only nonempty user and assistant text becomes a saved pair. The session saves
 it after successful inference and acknowledgement from `Output.finish/2`.
-Failed or cancelled turns leave the previous saved pairs intact. A cancellation
+Failed or cancelled turns leave the previous saved pairs intact. Transport
+completion can precede physical playback. A cancellation
 after `:done` flushes output and keeps that completed pair. Each session owns
 its history, also when sessions share the same inference worker.
 
@@ -54,7 +56,8 @@ Clear the saved text while the session is idle:
 :ok = AudioFlow.clear_history(session)
 ```
 
-An active turn returns `{:error, :busy}`. History lasts for the session
+An active turn returns `{:error, :busy}`. Clearing a session with history
+disabled is an idempotent operation. History lasts for the session
 process; owner exit or a session crash ends it.
 
 ## Try it
@@ -65,4 +68,12 @@ AUDIOFLOW_ML=1 AUDIOFLOW_HISTORY=1 AUDIOFLOW_LLM=Qwen/Qwen3-0.6B \
 ```
 
 Inputs are mono 16 kHz s16le PCM. The example loads shared models once and
-writes one PCM file plus JSON metadata per turn.
+writes one PCM file plus JSON metadata per turn. It does not open a sound device.
+
+Set `AUDIOFLOW_HISTORY=1` for `examples/models.exs`, `examples/media.exs`, and
+`examples/local.exs`. The supplied history prompt supports native Qwen3 or an
+HTTP chat engine. Other native models need their own message formatter.
+Benchmark attempts use new sessions, so their history starts empty.
+
+The native conversation model check and the saved speech conversation checks are
+described in [Model checks](../../validation/model-checks/#conversation-checks).

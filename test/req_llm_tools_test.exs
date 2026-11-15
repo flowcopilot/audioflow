@@ -1,7 +1,7 @@
-defmodule AudioFlow.ChatHTTPToolsTest do
+defmodule AudioFlow.ReqLLMToolsTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.Adapters.ChatHTTP
   alias AudioFlow.Adapters.Demo
+  alias AudioFlow.Adapters.ReqLLM, as: Bridge
   alias AudioFlow.Test.HTTPFixture, as: HTTP
 
   defmodule Weather do
@@ -18,7 +18,14 @@ defmodule AudioFlow.ChatHTTPToolsTest do
     {child, listener, endpoint} = HTTP.start(self(), handler)
     start_supervised!(child)
     on_exit(fn -> :gen_tcp.close(listener) end)
-    [endpoint: endpoint, model: "fixture-model"]
+
+    [
+      model: %{provider: :openai, id: "fixture-model"},
+      base_url: String.replace_suffix(endpoint, "/chat/completions", ""),
+      api_key: "local",
+      # The default system prompt keeps the message layout these tests assert.
+      system_prompt: AudioFlow.Prompt.default_system()
+    ]
   end
 
   defp data(delta, finish \\ nil),
@@ -39,7 +46,7 @@ defmodule AudioFlow.ChatHTTPToolsTest do
     owner = self()
 
     result =
-      ChatHTTP.run(input, options, fn text ->
+      Bridge.run(input, options, fn text ->
         send(owner, {:text, text})
         :ok
       end)
@@ -85,7 +92,13 @@ defmodule AudioFlow.ChatHTTPToolsTest do
 
     options =
       options ++
-        [tools: [Weather, clock], tool_context: %{unit: "C"}, tool_filler: "One moment."]
+        [
+          audio_flow: [
+            tools: [Weather, clock],
+            tool_context: %{unit: "C"},
+            tool_filler: "One moment."
+          ]
+        ]
 
     assert {:ok, ["One moment.", "It is sunny."]} = collect("Weather?", options)
 
@@ -141,7 +154,7 @@ defmodule AudioFlow.ChatHTTPToolsTest do
             )
       end)
 
-    options = options ++ [tools: [Weather], tool_filler: "One moment."]
+    options = options ++ [audio_flow: [tools: [Weather], tool_filler: "One moment."]]
     assert {:ok, ["Let me check. ", "Done."]} = collect("Hi", options)
     assert_receive {:http_request, _, _}
     assert_receive {:http_request, _, second}
@@ -160,7 +173,7 @@ defmodule AudioFlow.ChatHTTPToolsTest do
         )
       end)
 
-    options = options ++ [tools: [Weather], max_tool_rounds: 2]
+    options = options ++ [audio_flow: [tools: [Weather], max_tool_rounds: 2]]
     assert {{:error, :tool_round_limit}, []} = collect("Hi", options)
     assert_receive {:http_request, _, _}
     assert_receive {:http_request, _, _}
@@ -182,7 +195,10 @@ defmodule AudioFlow.ChatHTTPToolsTest do
           {data(%{function_call: %{name: "weather"}}), [], :unsupported_tool_call}
         ] do
       options = server(fn socket, _ -> reply(socket, body) end)
-      assert {{:error, ^expected}, []} = collect("Hi", options ++ [tools: [Weather]] ++ extra)
+
+      assert {{:error, ^expected}, []} =
+               collect("Hi", options ++ [audio_flow: [tools: [Weather]] ++ extra])
+
       assert_receive {:http_request, _, _}
     end
   end
@@ -207,7 +223,7 @@ defmodule AudioFlow.ChatHTTPToolsTest do
       end
     }
 
-    llm = {ChatHTTP, options ++ [tools: [wait]]}
+    llm = {Bridge, options ++ [audio_flow: [tools: [wait]]]}
 
     {:ok, session} =
       AudioFlow.start_session(Keyword.put(Demo.options(), :llm, llm))

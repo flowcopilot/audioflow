@@ -82,7 +82,8 @@ accepted by ExWebRTC or rendered remotely. RTP acceptance is not playout ack.
 
 The [standalone server-backed browser viewer](https://github.com/flowcopilot/audioflow/blob/main/examples/avatar/README.md)
 invokes this publisher with supplied 24 kHz PCM and subscribes to both provider
-tracks using `livekit-client`. It defaults to no paid calls, keeps provider
+tracks using `livekit-client`. It subscribes only when explicitly configured with
+an account. It defaults to no paid calls, keeps provider
 secrets server-side, checks room-scoped subscription-only grants, and demonstrates
 explicit start/cancel/disconnect and repeated finite sessions. Its opt-in viewer
 readiness gate waits at most 15 seconds for both track subscriptions before PCM.

@@ -54,6 +54,24 @@ An empty transcript ends the turn without generation. Speech recognition chunks
 form one prompt. Language model chunks go to speech synthesis in sequence. Use
 complete sentences for language model output when possible.
 
+## Remote and speech-to-speech adapters
+
+For hosted Fish Audio TTS, use `AudioFlow.Adapters.FishAudioAPI` with an API
+key, model and hosted voice ID. For self-hosted Fish Speech, use
+`AudioFlow.Adapters.FishAudio` with a server endpoint and optional voice
+reference. See [Fish Audio backends](../../features/providers/#fish-audio-hosted-api).
+Native Fish inference on Nx needs a separate model/codec integration; see the
+[Nx feasibility assessment](../../features/providers/#native-fish-speech-on-nx).
+
+For OpenAI Realtime, Gemini Live or a local
+[Moshi](../../features/providers/#local-moshi-speech-to-speech) server without
+chained stages, use the explicit
+[Session speech-to-speech mode](../../features/providers/#session-speech-to-speech-mode).
+It accepts committed PCM and does not replay cross-turn history. For a
+continuous conversation with the microphone open, use `AudioFlow.Duplex` with
+[OpenAI Realtime](../../features/providers/#continuous-openai-realtime-conversation)
+or [Moshi](../../features/providers/#continuous-full-duplex-moshi).
+
 ## Lifetime
 
 The session stops when its owner exits. Turn failures do not stop the session.

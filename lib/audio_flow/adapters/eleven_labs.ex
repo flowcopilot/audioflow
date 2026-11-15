@@ -1,5 +1,8 @@
 defmodule AudioFlow.Adapters.ElevenLabs do
-  @moduledoc "ElevenLabs streaming HTTP TTS (raw s16le PCM). See docs/providers.md."
+  @moduledoc """
+  ElevenLabs streaming HTTP TTS (raw s16le PCM). See
+  https://flowcopilot.github.io/audioflow/docs/features/providers/.
+  """
   @behaviour AudioFlow.Adapter
   alias AudioFlow.Adapters.Providers.PCMHTTP
   alias AudioFlow.Adapters.Providers.Socket

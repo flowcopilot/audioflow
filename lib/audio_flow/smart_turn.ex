@@ -5,7 +5,8 @@ defmodule AudioFlow.SmartTurn do
   No downloads occur at runtime. Pass `{AudioFlow.SmartTurn, worker: pid}` as
   VoiceInput's `:turn_detector`. Inference receives only the last eight seconds
   at 16 kHz and returns the model's completion probability. See the pinned
-  model and dependency installation instructions in `docs/input-processing.md`.
+  model and dependency installation instructions in
+  https://flowcopilot.github.io/audioflow/docs/features/input-processing/.
   """
   alias AudioFlow.Audio
   alias AudioFlow.PacketWorker

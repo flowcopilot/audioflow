@@ -9,7 +9,8 @@ sidebar:
 [ReqLLM](https://hexdocs.pm/req_llm). It takes ReqLLM's model, context, and
 generation options directly. It groups the generated text into sentences, with
 whitespace preserved, and runs tools in the turn. It uses the same adapter
-interface as the native models, and needs no native model dependencies.
+interface as the native models, and needs no native model dependencies. Local Nx
+adapters do not depend on ReqLLM.
 
 ```elixir
 llm = {AudioFlow.Adapters.ReqLLM,
@@ -46,7 +47,8 @@ tool limits, and the byte and time limits below.
 The adapter reads the HTTP stream in the turn process. It uses ReqLLM's request
 builders, SSE parser, provider decoders, and chunk accumulator, but not ReqLLM's
 stream server. The shared Finch pool uses HTTP/1, so the output callback applies
-back pressure to socket reads. Cancellation closes the active connection.
+back pressure to socket reads. Cancellation closes the active connection. A
+failed output callback also releases the connection.
 
 Each request runs once. The adapter does not follow redirects, retry, use
 ReqLLM's cache, or replay fixtures. Only HTTP SSE transports are supported, not
@@ -65,7 +67,9 @@ These limits go under `:audio_flow`:
 | `pool_timeout_ms` | 5,000 | Wait for a connection |
 
 ReqLLM's `request_timeout`, `receive_timeout`, and `pool_timeout` options are
-also accepted; the `:audio_flow` values take precedence. Use the session
+also accepted; the `:audio_flow` values take precedence. Connections have a
+five-second connection timeout. The response-read budget excludes pool checkout,
+connection setup, and time blocked in the output callback. Use the session
 deadline to bound the complete turn, including tools and a blocked callback.
 
 Refusals, truncation, incomplete streams, invalid events, and empty replies
@@ -78,7 +82,8 @@ the last text is emitted.
 Put Jido actions and `AudioFlow.Tool` maps under `audio_flow: [tools: ...]`. A
 tool map has `:name`, `:description`, `:parameters` (JSON Schema), and a
 one-argument `:run` function. Native `ReqLLM.Tool` structs go in the top-level
-`:tools` option. Tool names must be unique.
+`:tools` option. Tool names must be unique. Both kinds run in linked tasks with
+bounded results and deadlines, and cancellation stops them.
 
 ```elixir
 llm = {AudioFlow.Adapters.ReqLLM,
@@ -105,24 +110,6 @@ In graphs, use the `llm.req_llm` node. Its options are `model` (a
 of the environment variable, never the key), `tools_profile`, and `timeout_ms`.
 The graph runner passes the session and turn to the tools as `tool_context`.
 
-## Migrate from ChatHTTP
-
-`AudioFlow.Adapters.ChatHTTP` and the `llm.chat_http` node are deprecated. The
-adapter now only maps its old options to `AudioFlow.Adapters.ReqLLM`:
-
-| ChatHTTP | ReqLLM |
-| --- | --- |
-| `endpoint: ".../v1/chat/completions"` | `base_url: ".../v1"` |
-| `model: "id"` | `model: %{provider: :openai, id: "id"}` |
-| `system:` | `system_prompt:` |
-| `parameters: %{temperature:, max_tokens:}` | `temperature:`, `max_tokens:` |
-| `headers:` | `req_http_options: [headers: ...]` |
-| `tools:`, `tool_filler:`, limits | the same keys under `:audio_flow` |
-
-Other `:parameters` entries raise an error; set them as ReqLLM generation or
-provider options. ReqLLM now chooses the token field name, enables usage
-streaming, omits `n: 1`, and normalizes tool argument JSON.
-
 ## Run
 
 ```sh
@@ -133,4 +120,17 @@ AUDIOFLOW_CHAT_ENDPOINT=http://127.0.0.1:18082/v1/chat/completions \
 Set `AUDIOFLOW_CHAT_API_KEY` when the server needs authentication. To use HTTP
 language inference with native Whisper and Kokoro, set
 `AUDIOFLOW_LLM_ENGINE=http` and `AUDIOFLOW_CHAT_ENDPOINT` for
-`examples/local.exs` or `examples/media.exs`.
+`examples/local.exs` or `examples/media.exs`. `AUDIOFLOW_LLM` becomes the server's
+model ID. This mode does not load a native language model. The benchmark
+metadata uses `mode=hybrid_inference` and records the language engine as HTTP.
+Optional `AUDIOFLOW_LLM_SOURCE` and `AUDIOFLOW_LLM_REVISION` identify the deployed
+weights. The metadata does not contain the API key or endpoint query string.
+
+The real HTTP check, and the llama.cpp server it was last run against, are
+described in [Model checks](../../validation/model-checks/#http-inference-check).
+
+## References
+
+- [Chat completion stream protocol](https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events)
+- [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md)
+- [Finch streaming](https://hexdocs.pm/finch/Finch.html#stream_while/5)

@@ -10,7 +10,9 @@ defmodule AudioFlow.Adapters.FishAudioAPI do
 
   `:receive_timeout_ms` defaults to `:timeout_ms` (30 seconds).
   For a self-hosted Fish Speech server, use `AudioFlow.Adapters.FishAudio`.
-  See `docs/providers.md` for configuration and shared HTTP bounds.
+  See
+  https://flowcopilot.github.io/audioflow/docs/features/providers/
+  for configuration and shared HTTP bounds.
   """
   @behaviour AudioFlow.Adapter
   alias AudioFlow.Adapters.Providers.PCMHTTP

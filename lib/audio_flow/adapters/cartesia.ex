@@ -1,5 +1,8 @@
 defmodule AudioFlow.Adapters.Cartesia do
-  @moduledoc "Cartesia streaming HTTP bytes TTS (raw s16le PCM). See docs/providers.md."
+  @moduledoc """
+  Cartesia streaming HTTP bytes TTS (raw s16le PCM). See
+  https://flowcopilot.github.io/audioflow/docs/features/providers/.
+  """
   @behaviour AudioFlow.Adapter
   alias AudioFlow.Adapters.Providers.PCMHTTP
   alias AudioFlow.Adapters.Providers.Socket

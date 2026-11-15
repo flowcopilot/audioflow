@@ -8,7 +8,7 @@ on:
       - 'site/**'
       - '.github/workflows/pages.yml'
   push:
-    branches: [main, feat/parallel-issue-integration]
+    branches: [main]
     paths-ignore: *docs-only
 
 permissions:

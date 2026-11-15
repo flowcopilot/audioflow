@@ -2,7 +2,8 @@ defmodule AudioFlow.Adapters.GeminiLive do
   @moduledoc """
   One committed audio turn over Gemini Live v1beta WebSocket.
   Direct callers receive transcript/text deltas and Audio tuples, like OpenAIRealtime.
-  Use directly or in Session `:speech_to_speech`; see docs/providers.md.
+  Use directly or in Session `:speech_to_speech`; see
+  https://flowcopilot.github.io/audioflow/docs/features/providers/.
   """
   @behaviour AudioFlow.Adapter
   alias AudioFlow.Adapters.Providers.Socket
