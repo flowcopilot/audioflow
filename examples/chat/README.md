@@ -284,7 +284,7 @@ Export credentials in the server shell before `mix phx.server`:
 
 Missing variables produce a visible error and keep the existing chat active.
 Provider account/model/voice availability must be checked with your account.
-See [provider contracts](../../docs/providers.md). The chained pipeline supports
+See [provider contracts](https://flowcopilot.github.io/audioflow/docs/features/providers/). The chained pipeline supports
 text and microphone messages with text history. Gemini speech-to-speech accepts
 only committed microphone utterances, opens a fresh provider connection each
 turn, and has **no history replay**. OpenAI live conversation is described above. The language control applies only to the remote

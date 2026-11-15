@@ -8,7 +8,9 @@ sidebar:
 `scripts/compare_pipecat.py` measures AudioFlow and Pipecat over the same
 shared Nx model services. One Elixir process loads Silero, Whisper tiny,
 Qwen3-0.6B, and Kokoro. Pipecat calls these services through private local
-pipes; AudioFlow calls them in the same process.
+pipes, so its result includes that transfer cost; AudioFlow calls them in the
+same process. This does not compare Nx against Python inference engines. The run includes Membrane file
+input, resampling, endpoint detection, model queues, and software output delivery.
 
 :::caution
 This compares orchestration over one inference engine. Pipe transfer, JSON,
@@ -48,6 +50,14 @@ uv run scripts/compare_pipecat.py FIRST.s16le SECOND.s16le \
 python3 scripts/comparison_report.py \
   benchmarks/comparison.json benchmarks/comparison.html
 ```
+
+The runner retains failed attempts, input hashes, detected-utterance hashes, output
+PCM hashes, model revisions, and source fingerprints. It separates warmup, measured
+turns, and serial interruption checks. Choose `--max-first-output-ms` before the
+run. The default rule allows no measured errors and requires p95 first output
+within 10 seconds. The report checks input agreement and all lower tested levels
+before it assigns a highest passing tested concurrency. This threshold is a test
+rule; it does not establish conversational quality.
 
 Each input must be mono 16 kHz s16le PCM with one detected utterance. See
 [`scripts/COMPARISON.md`](https://github.com/flowcopilot/audioflow/blob/main/scripts/COMPARISON.md) for the full method.

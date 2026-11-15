@@ -8,9 +8,9 @@ defmodule AudioFlow.Graph do
         "nodes" => [
           %{"id" => "mic", "type" => "input.audio"},
           %{"id" => "stt", "type" => "demo.stt"},
-          %{"id" => "llm", "type" => "llm.chat_http",
-            "options" => %{"endpoint" => "http://localhost:8080/v1/chat/completions",
-                           "model" => "qwen3"}},
+          %{"id" => "llm", "type" => "llm.req_llm",
+            "options" => %{"model" => "openai:qwen3",
+                           "base_url" => "http://localhost:8080/v1"}},
           %{"id" => "tts", "type" => "demo.tts"}
         ],
         "edges" => [
@@ -37,7 +37,7 @@ defmodule AudioFlow.Graph do
   alias AudioFlow.Graph.Nodes
   alias AudioFlow.Graph.OptionSchema
 
-  @default_nodes [Nodes.Input, Nodes.Audio, Nodes.Demo, Nodes.ChatHTTP, Nodes.RAG]
+  @default_nodes [Nodes.Input, Nodes.Audio, Nodes.Demo, Nodes.ReqLLM, Nodes.RAG]
   @kinds [:audio, :image, :text, :vector]
   @events [:transcript, :description, :text, :audio, :image, :vector]
   @settings %{

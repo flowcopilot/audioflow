@@ -1,4 +1,4 @@
-defmodule AudioFlow.ChatHTTPModelTest do
+defmodule AudioFlow.ReqLLMModelTest do
   use ExUnit.Case, async: false
 
   alias AudioFlow.Adapters.Demo
@@ -8,18 +8,22 @@ defmodule AudioFlow.ChatHTTPModelTest do
   test "streamed model output matches an independent nonstreamed response through a session" do
     input = "What is 2 + 2? Reply with only the number."
     system = "You are a voice assistant. Reply in one short sentence. Use plain text."
+    endpoint = System.fetch_env!("AUDIOFLOW_CHAT_ENDPOINT")
+    model = System.fetch_env!("AUDIOFLOW_LLM")
 
     chat_options = [
-      endpoint: System.fetch_env!("AUDIOFLOW_CHAT_ENDPOINT"),
-      model: System.fetch_env!("AUDIOFLOW_LLM"),
-      system: system,
-      timeout_ms: 60_000,
-      parameters: %{temperature: 0, max_tokens: 64}
+      base_url: String.replace_suffix(endpoint, "/chat/completions", ""),
+      model: %{provider: :openai, id: model},
+      api_key: "local",
+      system_prompt: system,
+      temperature: 0.0,
+      max_tokens: 64,
+      audio_flow: [timeout_ms: 60_000]
     ]
 
     body =
       JSON.encode!(%{
-        model: chat_options[:model],
+        model: model,
         stream: false,
         temperature: 0,
         max_tokens: 64,
@@ -27,7 +31,7 @@ defmodule AudioFlow.ChatHTTPModelTest do
       })
 
     request =
-      Finch.build(:post, chat_options[:endpoint], [{"content-type", "application/json"}], body)
+      Finch.build(:post, endpoint, [{"content-type", "application/json"}], body)
 
     assert {:ok, %Finch.Response{status: 200, body: response}} =
              Finch.request(request, AudioFlow.HTTPClient, receive_timeout: 60_000)
@@ -41,7 +45,7 @@ defmodule AudioFlow.ChatHTTPModelTest do
         :stt,
         {AudioFlow.Adapters.Function, run: fn _, emit -> emit.(input) end}
       )
-      |> Keyword.put(:llm, {AudioFlow.Adapters.ChatHTTP, chat_options})
+      |> Keyword.put(:llm, {AudioFlow.Adapters.ReqLLM, chat_options})
       |> Keyword.put(:timeout_ms, 60_000)
 
     {:ok, session} = AudioFlow.start_session(options)

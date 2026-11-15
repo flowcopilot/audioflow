@@ -79,4 +79,7 @@ See [Local models](../guides/local-models/).
 | `examples/conversation.exs` | Sequential turns with history |
 | `examples/multimodal.exs` | Embeddings and image captions |
 | `examples/video.exs` | Descriptions of sampled video frames |
+| `examples/models.exs` | Shared model services for the other examples |
+| `examples/transcribe.exs` | Captions for a WAV file through any STT adapter |
+| `examples/websocket.exs` | The browser WebSocket demo |
 | `examples/chat` | A LiveView voice and text chat |

@@ -32,11 +32,16 @@ options = Keyword.put(session_options, :llm,
 
 ## Remote workers
 
-The remote node must run AudioFlow and a worker named `MyApp.RemoteLLM`. Erlang
+The remote node must run AudioFlow and a worker named `MyApp.RemoteLLM`. Its
+adapter uses model services on that node. Erlang
 distribution must already connect the nodes. Use compatible code on trusted
 nodes. Inputs and outputs cross the connection; model weights stay in their
 shared services. A worker can use `NxAdapter` or an application adapter for
-ONNX, llama.cpp, or a cloud API.
+ONNX, llama.cpp, or a cloud API. Cloud clients must set their own connection and
+request timeouts. Only connected remote nodes are eligible. Reconnect a node
+before routing to it again. If a node fails while admission is in progress, the
+request ends with an error. Its admission status is unknown, so the router does
+not retry it. All engines use the same adapter interface.
 
 ## Route selection
 
@@ -54,13 +59,18 @@ AudioFlow.Router.put_route(MyApp.Routes, :voice, [{MyApp.RemoteLLM, :"ml@worker"
 The change applies to later adapter calls. Active requests keep their worker.
 An empty worker list disables the route. `:route` can also be a function that
 selects a route key from the adapter input, for example by text length or
-language.
+language. A policy like this can select a model without changing the session
+pipeline.
 
 ## Cancellation
 
 Each output chunk waits for its caller's acknowledgement. Caller exit and
 session cancellation stop the worker task, also on a remote node. Worker exit or
-node loss ends the active request with an error.
+node loss ends the active request with an error. Each worker has a request
+deadline, and the router has a deadline for the complete call. Cleanup can take up
+to one additional second. A hardware batch already submitted to a shared serving
+can still run to completion. Set worker limits and deadlines to match measured
+model capacity and the session timeout.
 
 ## Try it
 
@@ -70,4 +80,5 @@ AUDIOFLOW_DISTRIBUTED_TESTS=1 elixir --sname audioflow_test -S mix test
 ```
 
 The distributed checks start a second local Erlang node. They check remote
-output, cancellation, and node loss.
+output, cancellation, and node loss. These checks use controlled adapters. They do
+not measure network latency or model capacity across machines.

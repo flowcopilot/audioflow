@@ -4,8 +4,7 @@ Use `{AudioFlow.Adapters.ReqLLM, model: model, ...req_llm_options}` for HTTP
 inference. The input is a ReqLLM context, message list or prompt. AudioFlow's
 `:audio_flow` keyword contains execution limits and Jido tools; native ReqLLM
 `:tools` remain at the top level. See the README for examples and migration.
-`llm.req_llm` is the graph node; `llm.chat_http` remains a deprecated migration
-node. The native Nx path does not use ReqLLM.
+`llm.req_llm` is the graph node. The native Nx path does not use ReqLLM.
 Graph execution supplies session and turn context to Jido tools through
 `audio_flow: [tool_context: ...]`, including conversation handoff actions.
 
@@ -67,11 +66,7 @@ tool. OpenAI completion requires a finish reason and `[DONE]`; other providers
 use their terminal event. OpenAI-compatible and Anthropic decoding are tested
 against local TCP fixtures. Live provider credentials were not available.
 
-The deprecated ChatHTTP shim maps the old options to ReqLLM, without retaining
-an HTTP implementation. Its legacy `:parameters` map supports `max_tokens`,
-`max_completion_tokens` and `temperature`; other entries raise an explicit
-migration error instead of silently losing configuration. Use direct ReqLLM
-generation options for those settings. ReqLLM now controls token field choice, usage streaming,
-empty assistant content, tool-result names and argument JSON normalization.
-The tests assert these equivalent wire changes while preserving cancellation,
-size limits, refusal, truncation, tool execution and stream-completeness checks.
+ReqLLM controls token field choice, usage streaming, empty assistant content,
+tool-result names and argument JSON normalization. The tests assert these wire
+differences while preserving cancellation, size limits, refusal, truncation,
+tool execution and stream-completeness checks.

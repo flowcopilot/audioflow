@@ -33,7 +33,7 @@ def main():
         digest = hashlib.file_digest(model_file, "sha256").hexdigest()
     if digest != "fb68d55c2d542ce79e44b12013bfd571e90df8594ab096d757198e851b0c6594":
         raise ValueError(
-            "expected pinned smart-turn-v3.1-cpu.onnx; see docs/input-processing.md"
+            "expected pinned smart-turn-v3.1-cpu.onnx; see https://flowcopilot.github.io/audioflow/docs/features/input-processing/"
         )
     options = ort.SessionOptions()
     options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL

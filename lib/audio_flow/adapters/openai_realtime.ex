@@ -3,7 +3,9 @@ defmodule AudioFlow.Adapters.OpenAIRealtime do
   One committed audio turn over OpenAI's GA Realtime WebSocket protocol.
   `run/3` emits `{:transcript, text}`, `{:text, delta}`, `{:audio, Audio}`.
   Use directly or in Session `:speech_to_speech`, never an STT/LLM/TTS slot.
-  See docs/providers.md for options and integration limits.
+  See
+  https://flowcopilot.github.io/audioflow/docs/features/providers/
+  for options and integration limits.
   """
   @behaviour AudioFlow.Adapter
   alias AudioFlow.Adapters.Providers.Socket

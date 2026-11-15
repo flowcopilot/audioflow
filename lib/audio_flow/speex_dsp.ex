@@ -7,7 +7,8 @@ defmodule AudioFlow.SpeexDSP do
   Pass `{AudioFlow.SpeexDSP, worker: pid}` as VoiceInput's `:preprocessor`.
   A missing reference means silence; cancellation requires synchronized reference
   samples via `VoiceInput.push/3`. Native failure raises rather than silently
-  passing unfiltered audio to VAD. See `docs/input-processing.md`.
+  passing unfiltered audio to VAD. See
+  https://flowcopilot.github.io/audioflow/docs/features/input-processing/.
   """
   alias AudioFlow.Audio
   alias AudioFlow.PacketWorker

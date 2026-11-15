@@ -3,7 +3,9 @@ defmodule AudioFlow.Telephony.WebSocket do
   Twilio Media Streams and Telnyx PCMU WebSock endpoint. Requires `:provider`
   (`:twilio` or `:telnyx`), `:session` options and a 16 kHz `:vad` detector.
   Authenticate the upgrade in the host Plug before calling WebSockAdapter.
-  See `docs/transports.md` for provider configuration and limits.
+  See
+  https://flowcopilot.github.io/audioflow/docs/features/transports/
+  for provider configuration and limits.
   """
   @behaviour WebSock
   alias AudioFlow.Telephony.MuLaw

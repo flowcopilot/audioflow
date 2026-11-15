@@ -5,5 +5,3 @@ disable = ["MD013"]
 [per-file-ignores]
 # Starlight links are site routes, not file paths.
 "site/src/content/docs/**/*.md" = ["MD057"]
-# Brief.md is a pasted research note without a title.
-"Brief.md" = ["MD041"]

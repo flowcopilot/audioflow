@@ -1,8 +1,8 @@
 defmodule AudioFlow.ConversationEvaluationTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.Adapters.ChatHTTP
   alias AudioFlow.Adapters.Demo
   alias AudioFlow.Adapters.Function
+  alias AudioFlow.Adapters.ReqLLM
   alias AudioFlow.Evaluation.Conversation, as: Conversation
   alias AudioFlow.Test.HTTPFixture, as: HTTP
 
@@ -65,8 +65,11 @@ defmodule AudioFlow.ConversationEvaluationTest do
 
     session =
       start(
-        {ChatHTTP,
-         endpoint: endpoint, model: "fixture", tools: tools, tool_context: %{forecast: "sun"}}
+        {ReqLLM,
+         base_url: String.replace_suffix(endpoint, "/chat/completions", ""),
+         model: %{provider: :openai, id: "fixture"},
+         api_key: "local",
+         audio_flow: [tools: tools, tool_context: %{forecast: "sun"}]}
       )
 
     [first, second] =

@@ -93,8 +93,11 @@ defmodule AudioFlow.CrossFeatureAcceptanceTest do
       |> Keyword.put(:history, true)
       |> Keyword.put(
         :llm,
-        {AudioFlow.Adapters.ChatHTTP,
-         endpoint: endpoint, model: "protocol-fixture", tools: [tool]}
+        {AudioFlow.Adapters.ReqLLM,
+         base_url: String.replace_suffix(endpoint, "/chat/completions", ""),
+         model: %{provider: :openai, id: "protocol-fixture"},
+         api_key: "local",
+         audio_flow: [tools: [tool]]}
       )
 
     {:ok, session} = AudioFlow.start_session(options)

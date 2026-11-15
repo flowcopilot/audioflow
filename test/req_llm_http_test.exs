@@ -1,28 +1,19 @@
-defmodule AudioFlow.ChatHTTPTest do
+defmodule AudioFlow.ReqLLMHTTPTest do
   use ExUnit.Case, async: true
-  alias AudioFlow.Adapters.ChatHTTP
   alias AudioFlow.Adapters.Demo
+  alias AudioFlow.Adapters.ReqLLM, as: Bridge
   alias AudioFlow.Test.HTTPFixture, as: HTTP
-
-  test "unsupported legacy parameters require explicit migration rather than being ignored" do
-    assert_raise ArgumentError, ~r/unsupported legacy parameters top_p.*ReqLLM/, fn ->
-      ChatHTTP.run(
-        "Hi",
-        [
-          endpoint: "http://127.0.0.1:1/v1/chat/completions",
-          model: "fixture",
-          parameters: %{top_p: 0.8}
-        ],
-        fn _ -> :ok end
-      )
-    end
-  end
 
   defp server(handler) do
     {child, listener, endpoint} = HTTP.start(self(), handler)
     start_supervised!(child)
     on_exit(fn -> :gen_tcp.close(listener) end)
-    [endpoint: endpoint, model: "fixture-model"]
+
+    [
+      model: %{provider: :openai, id: "fixture-model"},
+      base_url: String.replace_suffix(endpoint, "/chat/completions", ""),
+      api_key: "local"
+    ]
   end
 
   test "text is emitted before EOF and chat roles and credentials reach the endpoint" do
@@ -42,27 +33,26 @@ defmodule AudioFlow.ChatHTTPTest do
     owner = self()
 
     options =
-      options ++
-        [
-          system: "Be brief.",
-          api_key: fn -> "fixture-key" end,
-          parameters: %{temperature: 0, max_completion_tokens: 64, stream: false, n: 9}
-        ]
+      Keyword.merge(options,
+        system_prompt: "Be brief.",
+        api_key: "fixture-key",
+        temperature: 0.0,
+        max_tokens: 64
+      )
+
+    context =
+      ReqLLM.Context.new([
+        ReqLLM.Context.user("First"),
+        ReqLLM.Context.assistant("Answer"),
+        ReqLLM.Context.user("Next")
+      ])
 
     task =
       Task.async(fn ->
-        ChatHTTP.run(
-          [
-            %{role: :user, content: "First"},
-            %{role: :assistant, content: "Answer"},
-            %{role: :user, content: "Next"}
-          ],
-          options,
-          fn text ->
-            send(owner, {:text, text})
-            :ok
-          end
-        )
+        Bridge.run(context, options, fn text ->
+          send(owner, {:text, text})
+          :ok
+        end)
       end)
 
     assert_receive {:http_request, server, request}
@@ -101,7 +91,7 @@ defmodule AudioFlow.ChatHTTPTest do
           HTTP.finish(socket)
         end)
 
-      assert {:error, {:http_status, ^status}} = ChatHTTP.run("Hello", options, fn _ -> :ok end)
+      assert {:error, {:http_status, ^status}} = Bridge.run("Hello", options, fn _ -> :ok end)
       assert_receive {:http_request, _, _}
       refute_receive {:http_request, _, _}, 20
     end
@@ -129,7 +119,7 @@ defmodule AudioFlow.ChatHTTPTest do
         end)
 
       assert {:error, ^expected} =
-               ChatHTTP.run("Hello", options, fn text ->
+               Bridge.run("Hello", options, fn text ->
                  send(owner, {:unverified_tail, text})
                  :ok
                end)
@@ -152,7 +142,9 @@ defmodule AudioFlow.ChatHTTPTest do
           HTTP.finish(socket)
         end)
 
-      assert {:error, ^expected} = ChatHTTP.run("Hello", options ++ limit, fn _ -> :ok end)
+      assert {:error, ^expected} =
+               Bridge.run("Hello", options ++ [audio_flow: limit], fn _ -> :ok end)
+
       assert_receive {:http_request, _, _}
     end
   end
@@ -161,7 +153,7 @@ defmodule AudioFlow.ChatHTTPTest do
     options = server(fn socket, _ -> HTTP.headers(socket) end)
 
     assert {:error, :request_too_large} =
-             ChatHTTP.run("Hello", options ++ [max_request_bytes: 2], fn _ -> :ok end)
+             Bridge.run("Hello", options ++ [audio_flow: [max_request_bytes: 2]], fn _ -> :ok end)
 
     refute_receive {:http_request, _, _}, 20
   end
@@ -180,7 +172,7 @@ defmodule AudioFlow.ChatHTTPTest do
         end
       end)
 
-    session_options = Keyword.put(Demo.options(), :llm, {ChatHTTP, options})
+    session_options = Keyword.put(Demo.options(), :llm, {Bridge, options})
     {:ok, session} = AudioFlow.start_session(session_options)
     on_exit(fn -> if Process.alive?(session), do: AudioFlow.stop_session(session) end)
     audio = %AudioFlow.Audio{data: <<0, 0>>, sample_rate: 16_000}
@@ -211,7 +203,9 @@ defmodule AudioFlow.ChatHTTPTest do
       end)
 
     assert {:error, {:http, _}} =
-             ChatHTTP.run("Hello", options ++ [receive_timeout_ms: 100], fn _ -> :ok end)
+             Bridge.run("Hello", options ++ [audio_flow: [receive_timeout_ms: 100]], fn _ ->
+               :ok
+             end)
 
     assert_receive :connection_closed
   end
@@ -226,7 +220,7 @@ defmodule AudioFlow.ChatHTTPTest do
         send(owner, {:socket_result, :gen_tcp.recv(socket, 0, 5_000)})
       end)
 
-    assert catch_throw(ChatHTTP.run("Hello", options, fn _ -> throw(:stop_consuming) end)) ==
+    assert catch_throw(Bridge.run("Hello", options, fn _ -> throw(:stop_consuming) end)) ==
              :stop_consuming
 
     assert_receive {:socket_result, {:error, :closed}}
@@ -241,6 +235,6 @@ defmodule AudioFlow.ChatHTTPTest do
         )
       end)
 
-    assert {:error, :invalid_content_type} = ChatHTTP.run("Hello", options, fn _ -> :ok end)
+    assert {:error, :invalid_content_type} = Bridge.run("Hello", options, fn _ -> :ok end)
   end
 end

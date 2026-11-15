@@ -181,17 +181,22 @@ defmodule AudioFlow.GraphTest do
   end
 
   test "node options are checked, and defaults and secrets reach the adapter" do
-    options = %{"endpoint" => "http://localhost:1/v1/chat/completions", "model" => 1}
-    graph = update_node(voice(), "llm", &%{&1 | "type" => "llm.chat_http"})
+    options = %{"base_url" => "http://localhost:1/v1", "model" => 1}
+    graph = update_node(voice(), "llm", &%{&1 | "type" => "llm.req_llm"})
     graph = update_node(graph, "llm", &Map.put(&1, "options", options))
     assert errors(graph) == [~s(node "llm": option model must be a string)]
 
-    options = %{options | "model" => "qwen3"} |> Map.put("api_key_env", "KEY")
+    env = "AUDIOFLOW_GRAPH_TEST_KEY_#{System.unique_integer([:positive])}"
+    System.put_env(env, "fixture-key")
+    on_exit(fn -> System.delete_env(env) end)
+
+    options = %{options | "model" => "openai:qwen3"} |> Map.put("api_key_env", env)
     graph = update_node(graph, "llm", &Map.put(&1, "options", options))
     assert {:ok, session} = Graph.session_options(graph, Graph.catalog())
-    assert {AudioFlow.Adapters.ChatHTTP, adapter} = session[:graph].steps["llm"].adapter
-    assert adapter[:timeout_ms] == 30_000
-    assert is_function(adapter[:api_key], 0)
+    assert {AudioFlow.Adapters.ReqLLM, adapter} = session[:graph].steps["llm"].adapter
+    assert adapter[:base_url] == "http://localhost:1/v1"
+    assert adapter[:api_key] == "fixture-key"
+    assert adapter[:audio_flow][:timeout_ms] == 30_000
     assert session[:timeout_ms] == 5_000
 
     graph = update_node(graph, "llm", &put_in(&1, ["options", "token"], "x"))

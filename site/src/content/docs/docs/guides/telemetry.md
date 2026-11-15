@@ -96,3 +96,7 @@ end
 A turn produces a `audio_flow.turn` span with `audio_flow.stt` and
 `audio_flow.llm` children. Each `audio_flow.tts` span is a child of
 `audio_flow.llm`. Stage spans left open by a cancelled turn are not exported.
+
+## References
+
+- [telemetry span](https://hexdocs.pm/telemetry/telemetry.html#span/3)

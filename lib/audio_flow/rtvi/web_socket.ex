@@ -3,7 +3,8 @@ defmodule AudioFlow.RTVI.WebSocket do
   RTVI 2.x control-message subset over WebSock: client-ready, send-text,
   llm-raw-text, bot-tts-audio, bot-interrupted, and errors. This endpoint is
   for custom transports; it does not implement Daily/LiveKit signaling or
-  Pipecat's protobuf WebSocket media framing. See `docs/transports.md`.
+  Pipecat's protobuf WebSocket media framing. See
+  https://flowcopilot.github.io/audioflow/docs/features/transports/.
   """
   @behaviour WebSock
   alias AudioFlow.Transport.Connection

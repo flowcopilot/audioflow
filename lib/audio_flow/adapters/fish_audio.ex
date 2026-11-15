@@ -8,7 +8,9 @@ defmodule AudioFlow.Adapters.FishAudio do
   (a string or zero-argument function), for servers started with `--api-key`.
   Blank reference IDs are omitted. `:receive_timeout_ms` defaults to `:timeout_ms`
   (30 seconds), and can be set independently for slow or cold servers.
-  See `docs/providers.md` for setup and shared HTTP limits.
+  See
+  https://flowcopilot.github.io/audioflow/docs/features/providers/
+  for setup and shared HTTP limits.
   """
   @behaviour AudioFlow.Adapter
   alias AudioFlow.Adapters.Providers.PCMHTTP

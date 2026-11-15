@@ -17,22 +17,30 @@ sink = %Membrane.PortAudio.Sink{latency: :low,
 
 The application selects the sink. A sound device opens only when PCM arrives.
 Each turn gets its own output pipeline. The queue is limited by `:max_bytes`
-(96,000 by default). A full queue blocks the turn worker, while cancellation
-stays available in the session.
+(96,000 by default). One further chunk can wait for capacity. Each chunk must fit
+within that limit. A full queue blocks the turn worker, while cancellation stays
+available in the session. Membrane input prefetch is limited to one buffer; the
+device has its own ring buffer. PCM chunks must keep the same sample rate
+throughout a turn.
 
 ## Drain and flush
 
 Normal completion drains queued output. The playback process sends `:drained`
 after pipeline cleanup. Inference `:done` can arrive before playback finishes.
+PortAudio output is padded to a whole device block and has a final ring-buffer
+drain interval before close.
 Cancellation drops the queue and closes the old pipeline before it
-acknowledges. Old turn references are rejected.
+acknowledges. Old turn references are rejected. A completed inference turn can
+still be cancelled while its audio is queued. Session exit also closes its output
+pipeline.
 
 ## Events
 
 The observer receives `{AudioFlow.Playback, pid, turn_key, event}`. Events
 include `:drained`, `{:first_buffer, %{elapsed_us: us}}`,
-`{:flushed, %{control_us: us}}`, back pressure, and failure. These are not
-microphone-to-speaker measurements. Acoustic interruption latency needs a
+`{:flushed, %{control_us: us}}`, back pressure, and failure. First-buffer time ends at the Membrane source, and flush time ends after pipeline
+cleanup. Neither is a microphone-to-speaker measurement. A device close can drain
+a short native buffer. Acoustic interruption latency needs a
 loopback recording and a common clock.
 
 ## Custom transports
@@ -49,5 +57,17 @@ AUDIOFLOW_ML=1 AUDIOFLOW_MEDIA=1 AUDIOFLOW_PCM=recording.s16le \
   AUDIOFLOW_LLM=Qwen/Qwen3-0.6B mix run examples/media.exs
 ```
 
-This connects a PCM file, resampling, Silero, the session, and PortAudio
-output. It plays sound when run.
+`examples/models.exs` starts shared models, and `examples/local.exs` adds a single
+utterance for inference benchmarks. `examples/media.exs` connects a PCM file,
+resampling, Silero, the session, and PortAudio output. It plays sound when run.
+
+Set `AUDIOFLOW_INPUT_RATE` and `AUDIOFLOW_INPUT_CHANNELS` for other input formats.
+The file example reads at processing speed, so use one utterance for this check.
+A live PortAudio source follows the device clock. The media tests use a controlled
+sink. They verify back pressure, drain, cancellation, pipeline failure, and cleanup
+without opening a sound device.
+
+## References
+
+- [PortAudio plugin](https://hexdocs.pm/membrane_portaudio_plugin/)
+- [Membrane sinks](https://membrane-core.hexdocs.pm/Membrane.Sink.html)

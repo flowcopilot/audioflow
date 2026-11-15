@@ -200,6 +200,10 @@ required export/operator works. Drama 3 needs its own architecture assessment.
 
 ## Direct speech-to-speech calls
 
+These calls send one committed utterance per connection. For an always-on
+OpenAI conversation with the microphone open, use
+[`AudioFlow.Duplex.OpenAIRealtime`](#continuous-openai-realtime-conversation).
+
 `AudioFlow.Adapters.OpenAIRealtime.run/3` and
 `AudioFlow.Adapters.GeminiLive.run/3` accept a committed `AudioFlow.Audio` and
 invoke an arity-one callback with `{:transcript, text}`, `{:text, delta}` and
@@ -280,7 +284,197 @@ explicit typed event ports (transcript, text and audio), routing/validation for
 each, and a dedicated history capability contract. Registering either adapter
 as an existing STT/LLM/TTS node would misrepresent its contract. Use the explicit
 Session mode or direct API today. There is no continuous duplex input, tool
-execution, automatic reconnect, resampling or WebRTC in this mode.
+execution, automatic reconnect, resampling or WebRTC in this mode. For
+continuous input, see `AudioFlow.Duplex` below.
+
+## Local Moshi speech-to-speech
+
+`AudioFlow.Adapters.Moshi` runs one committed turn against a local
+[Kyutai Moshi](https://github.com/kyutai-labs/moshi) server. Moshi is a 7B
+full-duplex model. The 4-bit MLX build needs approximately 5 GB of weights and
+runs on an Apple Silicon laptop. The adapter needs `AUDIOFLOW_MEDIA=1`, because
+it uses `membrane_opus_plugin` for Opus and `membrane_ogg_plugin` for Ogg pages.
+
+Start the server (Python 3.12, approximately 5 GB download on first start):
+
+```sh
+uvx --python 3.12 --from moshi_mlx python -m moshi_mlx.local_web \
+  -q 4 --hf-repo kyutai/moshika-mlx-q4 --no-browser --port 8998
+```
+
+Use the adapter with 24 kHz input:
+
+```elixir
+{:ok, session} = AudioFlow.start_session(
+  speech_to_speech: {AudioFlow.Adapters.Moshi, [endpoint: "ws://127.0.0.1:8998/api/chat"]},
+  timeout_ms: 60_000)
+```
+
+The wire protocol is binary WebSocket messages with a one-byte kind: `0`
+handshake, `1` Ogg Opus audio (24 kHz mono), `2` UTF-8 text tokens. The adapter
+sends the input as 80 ms Ogg pages of four 20 ms Opus packets, then silence. It
+sends one silent frame for each output frame, so the model sets the pace, not
+the wall clock. Output for the input period is dropped.
+
+Moshi has no end-of-turn signal. The reply ends after `:end_silence_ms` (1,600)
+of model output without a text token. The turn fails with `:no_reply` if
+`:max_reply_ms` (20,000) passes without text. The default `:timeout_ms` is
+60,000. Moshi does not transcribe the user, so there is no `:transcript` event.
+
+Limits:
+
+- The server serves one connection at a time. A second turn waits for the lock.
+- Model state continues across connections. The server does not reset context
+  between turns, and the adapter cannot clear it.
+- The first turn after server start is slow (approximately 13 s on an M5) while
+  MLX warms up. Later turns gave the first reply audio approximately 2 s after
+  submit for a 3.2 s question.
+- Moshi speaks English only.
+- The adapter calls the Opus `Native` modules and the Ogg `Page`, `Parser` and
+  `Opus` modules directly, not through Membrane pipeline elements. The
+  `Membrane.Ogg.Muxer` element holds packets until a page has 255 segments
+  (approximately 5 s), which is too slow for a duplex model. These modules are
+  internal to the plugins, so the dependencies are pinned to `~> 0.21.0` and
+  `~> 0.5.2`.
+
+To check a running server, convert a question to raw 24 kHz PCM and run:
+
+```sh
+AUDIOFLOW_MEDIA=1 AUDIOFLOW_HTTP_MODEL_TESTS=1 \
+AUDIOFLOW_MOSHI_PCM=question.s16le mix test test/moshi_test.exs
+```
+
+`AUDIOFLOW_MOSHI_ENDPOINT` overrides the default endpoint.
+
+### Continuous full-duplex Moshi
+
+`AudioFlow.Duplex` keeps one Moshi connection open. Microphone input and model
+output flow at the same time. There is no committed turn, no end-of-turn
+detection, no silence gate, and no output drop while the user speaks. Use it
+for a live conversation. Use `AudioFlow.Adapters.Moshi` for one committed turn.
+
+```elixir
+{:ok, duplex} =
+  AudioFlow.Duplex.start_link(
+    owner: self(),
+    adapter: {AudioFlow.Duplex.Moshi, endpoint: "ws://127.0.0.1:8998/api/chat"})
+
+# Wait for {AudioFlow.Duplex, ^duplex, :ready}, then push 80 ms chunks:
+:ok = AudioFlow.Duplex.push(duplex, %AudioFlow.Audio{data: pcm_3840_bytes, sample_rate: 24_000})
+:ok = AudioFlow.Duplex.stop(duplex)
+```
+
+`start_link/1` returns before the connection opens. The owner receives
+`{AudioFlow.Duplex, pid, event}`, where `event` is `:ready` (after the Moshi
+handshake), `{:audio, %AudioFlow.Audio{}}`, `{:text, token}`,
+`{:error, reason}` or `:closed`. `:closed` comes last, also after an error.
+`push/2` returns `{:error, :not_ready}` before `:ready` and `{:error, :closed}`
+after the session stops. Keep the endpoint in server configuration; the browser
+does not need it.
+
+`start/1` starts an unlinked session with the same API. Use it when the owner
+must also survive an unexpected adapter crash, as the chat UI does. Monitor
+the returned process to detect these crashes. Both start functions monitor
+the owner and close the connection when it exits.
+
+The adapter sends each complete 80 ms frame (3,840 bytes at 24 kHz) as one Ogg
+page at once. A shorter remainder waits for the next push. Moshi answers each
+input frame with one output frame, so the client must push continuous audio,
+silence included, to get continuous output.
+
+Bounds (defaults):
+
+- `:connect_timeout_ms` (15,000) from start to the Moshi handshake.
+- `:idle_timeout_ms` (30,000) without an accepted push.
+- `:max_session_ms` (1,800,000) in total.
+- `:max_chunk_bytes` (48,000) for each push, else `{:error, :too_large}`.
+- `:max_response_bytes` (67,108,864) for all incoming WebSocket bytes in a
+  session, including fragments. The session fails with `:response_too_large`
+  at this bound. Incomplete Ogg packets are limited to 256 KiB.
+- `:max_input_lead_ms` (2,000). For Moshi (adapter input flow `:answered`):
+  pushed audio that model audio has not answered. For OpenAI (`:realtime`):
+  pushed audio ahead of the wall clock since `:ready`, so continuous silence
+  never fills it. A push past it returns `{:error, :overloaded}` and is not
+  sent, for example while MLX warms up.
+- `:max_owner_queue` (250): when the owner mailbox has this many messages, the
+  session fails with `:owner_overloaded`. Output is not buffered or dropped.
+- `:send_timeout_ms` (5,000) for each TCP write.
+
+The session monitors the owner and closes the connection when the owner exits.
+On failure, timeout and `stop/1` it exits with reason `:normal`, so the link
+from `start_link/1` does not stop the owner. The owner must be a local process.
+The Moshi server limits above also apply: one connection at a time, and model
+state continues across connections.
+
+`mix test test/duplex_test.exs` (with `AUDIOFLOW_MEDIA=1`) checks simultaneous
+input and output, frame sizes, the handshake gate, the input and owner bounds,
+timeouts and connection cleanup against a local fixture. With
+`AUDIOFLOW_HTTP_MODEL_TESTS=1` and `AUDIOFLOW_MOSHI_PCM`, it also streams the
+question and then silence in real time to a running server.
+
+### Continuous OpenAI Realtime conversation
+
+`AudioFlow.Duplex.OpenAIRealtime` keeps one authenticated OpenAI Realtime GA
+WebSocket open for a whole conversation. It needs no media build.
+
+```elixir
+{:ok, duplex} =
+  AudioFlow.Duplex.start(
+    owner: self(),
+    adapter:
+      {AudioFlow.Duplex.OpenAIRealtime,
+       model: System.fetch_env!("OPENAI_REALTIME_MODEL"),
+       api_key: fn -> System.fetch_env!("OPENAI_API_KEY") end,
+       voice: "marin"})
+
+# After {AudioFlow.Duplex, ^duplex, :ready}, push 24 kHz PCM continuously,
+# silence included:
+:ok = AudioFlow.Duplex.push(duplex, %AudioFlow.Audio{data: pcm, sample_rate: 24_000})
+```
+
+The adapter sends `session.update` (type `realtime`, `output_modalities`
+`["audio"]`, PCM 24 kHz in and out, the voice, input transcription and
+`server_vad` with `create_response` and `interrupt_response`) after
+`session.created`, and emits `:ready` after `session.updated`. Each push is one
+`input_audio_buffer.append`. The adapter never commits input and never sends
+`response.create`: OpenAI detects each utterance, replies to it and cancels the
+reply when new speech starts. All utterances of one connection share the
+provider conversation; a new connection starts a new one. The API key function
+runs only to connect, so the key is not kept in the session state. Options:
+`:model`, `:api_key`, `:voice` (`"marin"`), `:instructions` (`""`),
+`:transcription_model` (`"gpt-4o-mini-transcribe"`) and `:endpoint`.
+
+The owner also receives:
+
+| Event | Meaning |
+| --- | --- |
+| `{:speech_started, item}` | User speech started. Flush queued reply audio; keep the microphone open. Late audio and text of the interrupted reply are dropped. |
+| `{:transcript, item, text \| :failed}` | Final transcript of the user utterance `item`. |
+| `{:response, id, status}` | Reply `id` was `:created`, or ended `:completed`, `:cancelled`, `:incomplete` or `:failed`. |
+| `{:output, item}` | The next `{:audio, _}` events belong to reply audio `item`. |
+
+After a flush, report the played part of the cut reply with
+`AudioFlow.Duplex.control(duplex, {:played, item, ms})`. If `ms` is less than
+the audio received for `item`, the adapter sends `conversation.item.truncate`
+(`audio_end_ms` capped to the received audio), so the provider history keeps
+only the played audio and its transcript. Only the last interrupted reply is
+accepted, once; other reports return `{:error, :stale}` and leave the call
+open. A rejected truncation also leaves the call open. The played time is
+client playback time: it does not prove acoustic delivery. Without a report,
+the provider history keeps the full reply.
+
+Provider `error` events fail the session with `{:remote_error, code}` (only
+the code or type, never the message). Tool calls fail it with
+`:unsupported_tool_call`, because no tools are configured. All
+`AudioFlow.Duplex` bounds apply; `:max_response_bytes` (64 MiB) is about 17
+minutes of base64 reply audio per session.
+The chat example sets this bound to 256 MiB for OpenAI calls, to allow the
+30-minute call limit to apply before the response byte limit in ordinary use.
+
+`mix test test/duplex_openai_test.exs` checks the handshake order, server VAD
+configuration, several utterances on one socket, continuous silence,
+interruption drops, truncation bounds, provider errors and cleanup against a
+local WebSocket peer, not OpenAI.
 
 ## Bounds, cancellation and errors
 
@@ -307,9 +501,14 @@ samples fail. Limits and timeout options must be positive integers.
 
 ## Protocol references and verification
 
-Wire shapes were checked against official documentation on 2026-11-03:
+Wire shapes were checked against official documentation on 2026-11-03 (OpenAI
+Realtime events again on 2026-11-06):
 
 - [OpenAI Realtime conversations](https://developers.openai.com/api/docs/guides/realtime-conversations)
+- [OpenAI Realtime WebSocket](https://developers.openai.com/api/docs/guides/voice-websockets),
+  [voice activity detection](https://developers.openai.com/api/docs/guides/realtime-vad),
+  [client events](https://developers.openai.com/api/reference/resources/realtime/client-events) and
+  [server events](https://developers.openai.com/api/reference/resources/realtime/server-events)
 - [Gemini Live WebSocket reference](https://ai.google.dev/api/live)
 - [Deepgram pre-recorded utterances](https://developers.deepgram.com/docs/utterances)
 - [Cartesia bytes TTS](https://docs.cartesia.ai/api-reference/tts/bytes)

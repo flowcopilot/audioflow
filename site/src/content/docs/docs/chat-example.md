@@ -8,6 +8,16 @@ tab. Type a message, or record one with the microphone. While you record, the
 user message shows a live transcript. The reply text streams into the
 conversation, and the reply audio plays as it arrives.
 
+The app also exposes server-configured speech providers, languages, redacted
+recordings, playback progress, and provisional pause/resume. Its Linux demo needs
+no model download.
+
+Its always-on modes use `AudioFlow.Duplex` with OpenAI Realtime or a local Moshi
+server. The microphone stays open from Start to Stop, and the model audio plays at
+the same time. OpenAI detects each utterance, replies by voice, and stops the reply
+when you speak. See [Remote speech providers](../features/providers/#continuous-openai-realtime-conversation)
+for the duplex adapters.
+
 The models run on the Apple Silicon GPU through MLX. This example needs an
 Apple Silicon Mac with macOS 26.2 or later.
 
