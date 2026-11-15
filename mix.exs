@@ -60,6 +60,12 @@ defmodule AudioFlow.MixProject do
       {:zoi, "~> 0.18.11"},
       {:telemetry, "~> 1.3"},
       {:websock, "~> 0.5.3"},
+      # FFmpeg resampling and G.711. Ratio 4.0.1 (via membrane_core) has an
+      # optional constraint that predates Decimal 3. Postgrex and Numbers share
+      # Decimal 3; media arithmetic compatibility is tested.
+      {:decimal, "~> 3.2", override: true},
+      {:membrane_ffmpeg_swresample_plugin, "~> 0.21.0"},
+      {:membrane_g711_ffmpeg_plugin, "~> 0.1.6"},
       {:bandit, "~> 1.5", only: [:dev, :test]},
       {:websock_adapter, "~> 0.5", only: [:dev, :test]},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
@@ -74,12 +80,8 @@ defmodule AudioFlow.MixProject do
       if(enabled?("AUDIOFLOW_WEBRTC"), do: [{:ex_webrtc, "~> 0.18.0"}], else: []) ++
       if(enabled?("AUDIOFLOW_MEDIA"),
         do: [
-          # Ratio 4.0.1's optional constraint predates Decimal 3. Postgrex and
-          # Numbers share Decimal 3; media arithmetic compatibility is tested.
-          {:decimal, "~> 3.2", override: true},
           {:membrane_core, "~> 1.3"},
           {:membrane_raw_audio_format, "~> 0.12"},
-          {:membrane_ffmpeg_swresample_plugin, "~> 0.21.0"},
           {:membrane_portaudio_plugin, "~> 0.19.4"},
           {:membrane_file_plugin, "~> 0.17.5"},
           {:membrane_mp4_plugin, "~> 0.36.11"},

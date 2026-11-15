@@ -72,14 +72,15 @@ defmodule AudioFlow.NetworkProtocolTest do
 
       media = %{
         event: "media",
-        media: %{track: "inbound", chunk: "1", payload: Base.encode64(:binary.copy(<<255>>, 768))}
+        media: %{track: "inbound", chunk: "1", payload: Base.encode64(:binary.copy(<<255>>, 800))}
       }
 
       Client.send_json(socket, Map.put(media, stream_key(@provider), "stream-1"))
       assert_receive {:input, %AudioFlow.Audio{sample_rate: 16_000, data: data}}
       assert byte_size(data) == 3072
 
-      for _ <- 1..6 do
+      # The demo reply is 100 ms: five 20 ms packets.
+      for _ <- 1..5 do
         assert {:json, %{"event" => "media", "media" => %{"payload" => payload}} = frame} =
                  Client.recv(socket)
 
@@ -199,7 +200,7 @@ defmodule AudioFlow.NetworkProtocolTest do
       {AudioFlow.Adapters.Function,
        [
          run: fn _, emit ->
-           emit.(%AudioFlow.Audio{sample_rate: 16_000, data: :binary.copy(<<0>>, 1280)})
+           emit.(%AudioFlow.Audio{sample_rate: 16_000, data: :binary.copy(<<0>>, 1600)})
            send(owner, {:speaking, self()})
            Process.sleep(:infinity)
          end
@@ -218,7 +219,7 @@ defmodule AudioFlow.NetworkProtocolTest do
     media = %{
       event: "media",
       streamSid: "stream-1",
-      media: %{chunk: "1", payload: Base.encode64(:binary.copy(<<255>>, 768))}
+      media: %{chunk: "1", payload: Base.encode64(:binary.copy(<<255>>, 800))}
     }
 
     Client.send_json(socket, media)

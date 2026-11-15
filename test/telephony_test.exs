@@ -17,12 +17,15 @@ defmodule AudioFlow.TelephonyTest do
     pcm = for i <- 1..801, into: <<>>, do: <<round(12_000 * :math.sin(i / 5))::little-signed-16>>
 
     for direction <- [:up, :down] do
-      {whole, _} = apply(RateConverter, direction, [pcm, %RateConverter{}])
+      {whole, state} = apply(RateConverter, direction, [pcm, %RateConverter{}])
+      {whole_tail, _} = RateConverter.finish(state)
       <<first::binary-size(318), rest::binary>> = pcm
       {a, state} = apply(RateConverter, direction, [first, %RateConverter{}])
-      {b, _} = apply(RateConverter, direction, [rest, state])
-      assert a <> b == whole
-      assert byte_size(whole) == if(direction == :up, do: 3204, else: 800)
+      {b, state} = apply(RateConverter, direction, [rest, state])
+      {tail, _} = RateConverter.finish(state)
+      assert a <> b <> tail == whole <> whole_tail
+      # The flush can round the duration up by one sample.
+      assert byte_size(whole <> whole_tail) == if(direction == :up, do: 3204, else: 802)
     end
   end
 

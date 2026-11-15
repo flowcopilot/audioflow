@@ -89,6 +89,8 @@ if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
 
       :ok = WebRTC.publish(peer, key, :audio, :binary.copy(<<255>>, 160), pts + 20_000)
       :ok = WebRTC.publish(peer, key, :audio, :binary.copy(<<255>>, 160), pts + 40_000)
+      # The resampler holds 2 ms, so one more packet completes the silent frame.
+      :ok = WebRTC.publish(peer, key, :audio, :binary.copy(<<255>>, 160), pts + 60_000)
     end
 
     defp packet(peer) do
@@ -179,27 +181,31 @@ if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
       assert_receive {Session, ^bridge, {:utterance, :silence}}, 1000
       assert_receive {:input, %Audio{data: input, sample_rate: 16_000}}, 1000
 
-      {expected, up} =
-        RateConverter.up(
-          MuLaw.decode(MuLaw.encode(:binary.copy(<<0x10, 0x27>>, 160))),
-          %RateConverter{}
+      speech = MuLaw.decode(MuLaw.encode(:binary.copy(<<0x10, 0x27>>, 160)))
+      silence = MuLaw.decode(:binary.copy(<<255>>, 160))
+
+      {expected, _} =
+        Enum.map_reduce(
+          [speech, silence, silence, silence],
+          %RateConverter{},
+          &RateConverter.up/2
         )
 
-      {silence, _} = RateConverter.up(MuLaw.decode(:binary.copy(<<255>>, 160)), up)
-      assert input == expected <> silence <> :binary.copy(<<0>>, 640)
+      assert byte_size(input) >= 1280
+      assert input == binary_part(IO.iodata_to_binary(expected), 0, byte_size(input))
       assert_receive {Session, ^bridge, {:session, turn, {:transcript, "actual utterance"}}}
       assert_receive {Session, ^bridge, {:session, ^turn, {:text, "reply text"}}}
       assert_receive {Session, ^bridge, {:session, ^turn, {:audio, %Audio{sample_rate: 16_000}}}}
       assert_receive {Session, ^bridge, {:session, ^turn, {:done, _}}}
       {pcm, down} = RateConverter.down(:binary.copy(<<0x10, 0x27>>, 1600), %RateConverter{})
-      {tail, _} = RateConverter.down(:binary.copy(<<0>>, 60), down)
+      {tail, _} = RateConverter.finish(down)
       expected = MuLaw.encode(pcm <> tail)
       expected = expected <> :binary.copy(<<255>>, rem(160 - rem(byte_size(expected), 160), 160))
       started = System.monotonic_time(:millisecond)
-      packets = for _ <- 1..6, do: packet(peer)
-      assert System.monotonic_time(:millisecond) - started >= 70
+      packets = for _ <- 1..5, do: packet(peer)
+      assert System.monotonic_time(:millisecond) - started >= 50
       assert Enum.map_join(packets, & &1.payload) == expected
-      assert Enum.map(packets, & &1.timestamp) == Enum.to_list(0..800//160)
+      assert Enum.map(packets, & &1.timestamp) == Enum.to_list(0..640//160)
       assert Enum.all?(packets, &(&1.payload_type == 0))
       state = :sys.get_state(bridge)
       assert :sys.get_state(state.session).playback_history.playout.played == 0
@@ -265,17 +271,12 @@ if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
       turn = make_ref()
       :ok = WebRTC.start_turn(peer, turn)
 
-      :ok =
-        WebRTC.publish(
-          peer,
-          turn,
-          :audio,
-          MuLaw.encode(:binary.copy(<<0x10, 0x27>>, 160)),
-          60_000
-        )
+      speech = MuLaw.encode(:binary.copy(<<0x10, 0x27>>, 160))
+      :ok = WebRTC.publish(peer, turn, :audio, speech, 80_000)
+      :ok = WebRTC.publish(peer, turn, :audio, speech, 100_000)
 
-      # Synchronize on the ingress state having consumed the third packet.
-      await(fn -> :sys.get_state(bridge).expected == 4 end)
+      # Synchronize on the ingress state having consumed both speech packets.
+      await(fn -> :sys.get_state(bridge).expected == 6 end)
       assert :sys.get_state(s.transport).key == nil
       assert :queue.is_empty(:sys.get_state(s.transport).queue)
 

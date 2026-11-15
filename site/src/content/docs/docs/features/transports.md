@@ -42,13 +42,14 @@ in the Answer/Dial/streaming_start request. The handler accepts mono PCMU at
 `media` and `clear` envelopes, without a Twilio SID. MP3 playback mode and other
 codecs are unsupported. See [Telnyx's streaming guide](https://developers.telnyx.com/docs/voice/programmable-voice/media-streaming).
 
-Both paths decode Base64 headerless μ-law, interpolate to 16 kHz PCM, and feed
+Both paths decode Base64 headerless μ-law, resample to 16 kHz PCM, and feed
 the configured VAD. Endpoint detection submits an utterance; confirmed speech
 cancels an active reply and clears remote playback. TTS must emit 8 or 16 kHz
 mono s16le PCM. Other rates fail the turn and close the stream with code 1011;
-configure TTS output or an upstream resampler explicitly. Downsampling uses a
-stateful 31-tap FIR, with 15 input samples of delay. On completion the filter
-tail is drained and the last 20 ms packet is padded with μ-law silence. No
+configure TTS output or an upstream resampler explicitly. G.711 and both rate
+conversions use FFmpeg (libswresample), which holds about 2 ms of audio. On
+completion that audio is drained and the last 20 ms packet is padded with μ-law
+silence. No
 wideband recovery or production acoustic-quality claim is made.
 
 Input messages are capped at 100 KB and decoded media at 16 KB. Inbound media
@@ -138,7 +139,7 @@ npm --prefix examples/rtvi-client run typecheck
 npm --prefix examples/rtvi-client test
 ```
 
-Core tests require no native media/ML libraries or provider credentials. Tests
+Core tests require no model downloads or provider credentials. Tests
 exercise G.711 codewords, resampling chunk continuity and stop-band attenuation,
 real loopback WebSocket upgrades for both provider envelopes, PCM session
 input/output, barge-in clear, malformed input and stream lifecycle, plus the
