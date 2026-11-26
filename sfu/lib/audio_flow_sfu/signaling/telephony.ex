@@ -144,7 +144,7 @@ defmodule AudioFlowSFU.Signaling.Telephony do
     decoders =
       Enum.reduce(info.tracks, state.decoders, fn track, decoders ->
         Map.put_new_lazy(decoders, track.sid, fn ->
-          if track.mime_type == "audio/PCMU", do: :pcmu, else: OpusDecoder.create(8000, 1)
+          if track.mime_type == "audio/PCMU", do: :pcmu, else: %{}
         end)
       end)
 
@@ -155,8 +155,26 @@ defmodule AudioFlowSFU.Signaling.Telephony do
     case Map.get(state.decoders, sid) do
       :pcmu -> {payload, state}
       nil -> {<<>>, state}
-      decoder -> {mulaw(OpusDecoder.decode_packet(decoder, payload)), state}
+      decoders -> opus(sid, decoders, payload, state)
     end
+  end
+
+  # The TOC byte says whether a packet is stereo (browsers can send
+  # `stereo=1`); a stereo packet is decoded in stereo and mixed down.
+  defp opus(sid, decoders, <<_::5, stereo::1, _::2, _::binary>> = payload, state) do
+    channels = stereo + 1
+    decoder = Map.get_lazy(decoders, channels, fn -> OpusDecoder.create(8000, channels) end)
+    pcm = OpusDecoder.decode_packet(decoder, payload)
+    pcm = if channels == 2, do: downmix(pcm), else: pcm
+    {mulaw(pcm), put_in(state.decoders[sid], Map.put(decoders, channels, decoder))}
+  end
+
+  defp opus(_sid, _decoders, _payload, state), do: {<<>>, state}
+
+  defp downmix(pcm) do
+    for <<l::little-signed-16, r::little-signed-16 <- pcm>>,
+      into: <<>>,
+      do: <<div(l + r, 2)::little-signed-16>>
   end
 
   defp media(mulaw, %{provider: :twilio} = state) do

@@ -111,6 +111,27 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
       assert_receive {Participant, ^agent, {:session, _, {:done, _}}}, 2000
     end
 
+    test "stereo Opus packets, as browsers send with stereo=1, are mixed down" do
+      {agent, participant} = start()
+      encoder = Encoder.create(48_000, 2, 2048, -1000, 3001)
+
+      tone =
+        for i <- 0..959,
+            into: <<>>,
+            do:
+              <<round(:math.sin(i / 48 * :math.pi()) * 12_000)::little-signed-16>>
+              |> :binary.copy(2)
+
+      frames =
+        for pcm <- List.duplicate(tone, 10) ++ List.duplicate(<<0::30_720>>, 10) do
+          {:ok, packet} = Encoder.encode_packet(encoder, pcm, 960)
+          packet
+        end
+
+      send_user(agent, participant, frames)
+      assert_receive {:heard, %Audio{sample_rate: 16_000}}, 2000
+    end
+
     test "a lost packet becomes silence after the gap timeout and the call goes on" do
       {agent, participant} = start()
       send_user(agent, participant, opus_frames(10, 10), [104])

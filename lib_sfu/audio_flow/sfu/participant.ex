@@ -101,7 +101,7 @@ defmodule AudioFlow.SFU.Participant do
         reorder: Reorder.new(Keyword.get(options, :reorder_window, 32)),
         gap_timeout: Keyword.get(options, :gap_timeout_ms, 200),
         gap: nil,
-        # Set for an Opus source by choose_source/1.
+        # For an Opus source: channel count => decoder, set by choose_source/1.
         decoder: nil,
         resampler: nil,
         up: %RateConverter{}
@@ -203,10 +203,7 @@ defmodule AudioFlow.SFU.Participant do
 
       candidate != nil and candidate.mime_type == "audio/opus" ->
         %{s | source: candidate, reorder: Reorder.new(s.reorder.window)}
-        |> Map.merge(%{
-          decoder: Decoder.create(48_000, 1),
-          resampler: Resampler.new(48_000, 16_000)
-        })
+        |> Map.merge(%{decoder: %{}, resampler: Resampler.new(48_000, 16_000)})
 
       true ->
         %{s | source: candidate, reorder: Reorder.new(s.reorder.window), up: %RateConverter{}}
@@ -237,8 +234,23 @@ defmodule AudioFlow.SFU.Participant do
     {data, %{s | up: up}}
   end
 
-  defp decode(s, payload),
-    do: {Resampler.push(s.resampler, Decoder.decode_packet(s.decoder, payload)), s}
+  # Browsers can send stereo Opus (`stereo=1`). The TOC byte says how many
+  # channels a packet has; a stereo packet is decoded in stereo and mixed down.
+  defp decode(s, <<_::5, stereo::1, _::2, _::binary>> = payload) do
+    channels = stereo + 1
+    decoder = Map.get_lazy(s.decoder, channels, fn -> Decoder.create(48_000, channels) end)
+    pcm = Decoder.decode_packet(decoder, payload)
+    pcm = if channels == 2, do: downmix(pcm), else: pcm
+    {Resampler.push(s.resampler, pcm), %{s | decoder: Map.put(s.decoder, channels, decoder)}}
+  end
+
+  defp decode(s, _payload), do: {<<>>, s}
+
+  defp downmix(pcm) do
+    for <<l::little-signed-16, r::little-signed-16 <- pcm>>,
+      into: <<>>,
+      do: <<div(l + r, 2)::little-signed-16>>
+  end
 
   defp listen(s, <<>>), do: s
 
