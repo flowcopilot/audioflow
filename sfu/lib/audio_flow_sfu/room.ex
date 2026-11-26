@@ -5,10 +5,14 @@ defmodule AudioFlowSFU.Room do
 
   Members get `{AudioFlowSFU.Room, room, event}` messages, where `event` is
   `{:participant_joined, info, pid}`, `{:participant_updated, info, pid}`,
-  `{:participant_left, info}` or `:duplicate_identity` (the member was
-  replaced by a newer join with the same identity).
+  `{:participant_left, info}`, `{:sync, [{info, pid}]}` or
+  `:duplicate_identity` (the member was replaced by a newer join with the
+  same identity).
 
-  The room stops after `:empty_timeout_ms` with no members.
+  The room stops after `:empty_timeout_ms` with no members. If it crashes,
+  its supervisor restarts it empty, and the members join it again with
+  `rejoin/3`. After the last rejoin, the room sends `{:sync, members}` so
+  that each member can drop the members that stopped meanwhile.
   """
   use GenServer, restart: :transient
 
@@ -46,6 +50,16 @@ defmodule AudioFlowSFU.Room do
     :exit, _ when attempts > 1 -> join(name, info, pid, attempts - 1)
   end
 
+  @doc "Adds a member again after a room restart. Other members get no join event."
+  def rejoin(name, info, pid, attempts \\ 2) do
+    room = ensure_started(name)
+    :ok = GenServer.call(room, {:rejoin, info, pid})
+    {:ok, room}
+  catch
+    :exit, _ when attempts > 1 -> rejoin(name, info, pid, attempts - 1)
+    :exit, reason -> {:error, reason}
+  end
+
   def update(room, info), do: GenServer.cast(room, {:update, info, self()})
   def leave(room, sid), do: GenServer.call(room, {:leave, sid})
   def participants(room), do: GenServer.call(room, :participants)
@@ -67,9 +81,11 @@ defmodule AudioFlowSFU.Room do
       members: %{},
       max: Application.fetch_env!(:audio_flow_sfu, :max_participants),
       empty_timeout: Application.fetch_env!(:audio_flow_sfu, :empty_timeout_ms),
-      empty_timer: nil
+      empty_timer: nil,
+      sync_timer: nil
     }
 
+    AudioFlowSFU.Telemetry.room(:start, name)
     {:ok, schedule_empty(state)}
   end
 
@@ -86,6 +102,12 @@ defmodule AudioFlowSFU.Room do
       state = cancel_empty(%{state | members: Map.put(state.members, info.sid, member)})
       {:reply, {:ok, others}, state}
     end
+  end
+
+  def handle_call({:rejoin, info, pid}, _from, state) do
+    member = %{info: info, pid: pid, ref: Process.monitor(pid)}
+    state = cancel_empty(%{state | members: Map.put(state.members, info.sid, member)})
+    {:reply, :ok, schedule_sync(state)}
   end
 
   def handle_call({:leave, sid}, _from, state), do: {:reply, :ok, remove(state, sid)}
@@ -117,7 +139,23 @@ defmodule AudioFlowSFU.Room do
       when map_size(members) == 0,
       do: {:stop, :normal, state}
 
+  def handle_info(:sync, state) do
+    members = for {_, m} <- state.members, do: {m.info, m.pid}
+    broadcast(state, {:sync, members})
+    {:noreply, %{state | sync_timer: nil}}
+  end
+
   def handle_info(_, state), do: {:noreply, state}
+
+  @impl true
+  def terminate(_reason, state), do: AudioFlowSFU.Telemetry.room(:stop, state.name)
+
+  # Members rejoin one by one after a restart. Waits for a quiet moment so
+  # that one member list covers all of them.
+  defp schedule_sync(state) do
+    if state.sync_timer, do: Process.cancel_timer(state.sync_timer)
+    %{state | sync_timer: Process.send_after(self(), :sync, 200)}
+  end
 
   defp replace_identity(state, identity) do
     case Enum.find(state.members, fn {_, m} -> m.info.identity == identity end) do

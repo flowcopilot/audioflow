@@ -3,14 +3,20 @@ defmodule AudioFlowSFU.Signaling.JSON do
   AudioFlow signaling protocol v0: JSON text frames over a WebSocket at
   `/ws?access_token=<jwt>`.
 
-  Server messages: `join` (`participant`, `others`, `ice_servers`), `offer`
+  Server messages: `join` (`participant`, `others`, `ice_servers`,
+  `resume_token`, `resumed`), `offer`
   and `answer` (`sdp`, `tracks`: SDP mid => track SID), `candidate`,
   `connected`, `track_published` (`track`), `participant_joined`,
   `participant_updated`, `participant_left` (`participant`), `pong`,
   `error` (`reason`) and `closed` (`reason`).
 
   Client messages: `answer` and `offer` (`sdp`), `candidate` (`candidate`),
-  `mute` (`track`, `muted`), `ping` and `leave`.
+  `mute` (`track`, `muted`), `ice_restart`, `ping` and `leave`.
+
+  A dropped socket does not end the session. Connect again within the away
+  timeout with `&resume=<resume_token>` to keep the same participant, its
+  tracks and its subscriptions; the server sends the pending offer again.
+  Only `leave` ends the session at once.
 
   The server makes the first offer. On glare (`error` with reason `glare`)
   the client rolls back its offer and answers the server offer.
@@ -23,10 +29,17 @@ defmodule AudioFlowSFU.Signaling.JSON do
 
   @impl true
   def init(%{grants: grants} = options) do
-    case WebRTC.start(grants, owner: self(), ice_servers: Map.get(options, :ice_servers, [])) do
+    result =
+      case options do
+        %{resume: token} when is_binary(token) -> WebRTC.resume(token, grants.identity, self())
+        _ -> WebRTC.start(grants, owner: self(), ice_servers: Map.get(options, :ice_servers, []))
+      end
+
+    case result do
       {:ok, participant, join} ->
         Process.monitor(participant)
-        {:push, frame(Map.put(join, :type, :join)), %{participant: participant}}
+        join = Map.merge(join, %{type: :join, resumed: Map.has_key?(options, :resume)})
+        {:push, frame(join), %{participant: participant}}
 
       {:error, reason} ->
         {:stop, :normal, {1008, to_string(reason)}, %{participant: nil}}
@@ -64,6 +77,9 @@ defmodule AudioFlowSFU.Signaling.JSON do
   defp command("mute", %{"track" => sid, "muted" => muted}, state)
        when is_binary(sid) and is_boolean(muted),
        do: reply(WebRTC.mute(state.participant, sid, muted), state)
+
+  defp command("ice_restart", _, state),
+    do: reply(WebRTC.restart_ice(state.participant), state)
 
   defp command("ping", _, state), do: {:push, frame(%{type: :pong}), state}
 
@@ -109,15 +125,9 @@ defmodule AudioFlowSFU.Signaling.JSON do
 
   defp event(_, state), do: {:ok, state}
 
+  # A closed socket does not leave: the participant waits for a resume.
   @impl true
-  def terminate(_reason, %{participant: pid}) when is_pid(pid) do
-    if Process.alive?(pid), do: WebRTC.leave(pid)
-    :ok
-  catch
-    :exit, _ -> :ok
-  end
-
-  def terminate(_, _), do: :ok
+  def terminate(_reason, _state), do: :ok
 
   defp frame(message), do: {:text, JSON.encode!(message)}
 end

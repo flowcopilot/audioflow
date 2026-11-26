@@ -27,12 +27,12 @@
 
 ## Phase 4: SFU resilience
 
-- [ ] Participants register again after a `Room` crash
-- [ ] Resume token and `:away_timeout_ms` (30 000) on client reconnect
-- [ ] ICE restart offer with `create_offer(pc, ice_restart: true)`
-- [ ] Telemetry events for room, participant and track lifecycle
-- [ ] Tests: `Room` kill keeps RTP flowing on the same peer connection; resume within and after the timeout
-- [ ] Commit: `feat(sfu): keep calls through room crashes and client reconnects`
+- [x] Participants register again after a `Room` crash (`Room.rejoin/3` and a `{:sync, members}` broadcast)
+- [x] Resume token and `:away_timeout_ms` (30 000) on client reconnect; a dropped socket no longer leaves
+- [x] ICE restart offer with `create_offer(pc, ice_restart: true)` (on `failed`, or the `ice_restart` message)
+- [x] Telemetry events for room, participant, track lifecycle and dropped RTP
+- [x] Tests: `Room` kill keeps RTP flowing on the same peer connection; resume within and after the timeout
+- [x] Commit: `feat(sfu): keep calls through room crashes and client reconnects`
 
 ## Phase 5: LiveKit client protocol
 

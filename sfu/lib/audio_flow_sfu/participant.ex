@@ -67,5 +67,7 @@ defmodule AudioFlowSFU.Participant do
     end)
   end
 
+  @doc "Sends an event to the owner. Events for an absent owner are dropped."
+  def notify(nil, _event), do: :ok
   def notify(owner, event), do: send(owner, {__MODULE__, self(), event})
 end

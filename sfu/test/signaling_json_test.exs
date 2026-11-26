@@ -15,8 +15,11 @@ defmodule AudioFlowSFU.Signaling.JSONTest do
     %{port: port}
   end
 
-  defp path(identity, room \\ "json-room"),
-    do: "/ws?access_token=" <> Token.generate("key", "secret", identity, room)
+  # Each test uses its own room: an away participant stays in its room.
+  defp path(identity) do
+    room = "json-#{inspect(self())}"
+    "/ws?access_token=" <> Token.generate("key", "secret", identity, room)
+  end
 
   defp recv_type(socket, type) do
     case WS.recv(socket, 5000) do
@@ -58,6 +61,26 @@ defmodule AudioFlowSFU.Signaling.JSONTest do
 
     WS.send_json(socket, %{type: "leave"})
     assert {:close, <<1000::16, _::binary>>} = recv_until_close(socket)
+  end
+
+  test "a dropped socket resumes the same participant with the resume token", %{port: port} do
+    socket = WS.connect(port, path("carol"))
+    %{"participant" => %{"sid" => sid}, "resume_token" => token} = recv_type(socket, "join")
+    offer = recv_type(socket, "offer")
+    :gen_tcp.close(socket)
+
+    socket = WS.connect(port, path("carol") <> "&resume=" <> token)
+
+    assert %{"resumed" => true, "participant" => %{"sid" => ^sid}, "resume_token" => ^token} =
+             recv_type(socket, "join")
+
+    # The answer was never sent, so the server sends the same offer again.
+    assert recv_type(socket, "offer")["sdp"] == offer["sdp"]
+
+    other = WS.connect(port, path("mallory"))
+    _ = recv_type(other, "join")
+    refused = WS.connect(port, path("mallory") <> "&resume=" <> token)
+    assert {:close, <<1008::16, "identity_mismatch">>} = recv_until_close(refused)
   end
 
   # Moves ICE candidates both ways until the server reports `connected`.

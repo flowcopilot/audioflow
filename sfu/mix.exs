@@ -25,7 +25,9 @@ defmodule AudioFlowSFU.MixProject do
         port: nil,
         ice_servers: [],
         max_participants: 100,
-        empty_timeout_ms: 30_000
+        empty_timeout_ms: 30_000,
+        # How long a participant waits for its owner or connection to return.
+        away_timeout_ms: 30_000
       ]
     ]
   end

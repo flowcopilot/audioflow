@@ -19,6 +19,12 @@ defmodule AudioFlowSFU.Router do
           ice_servers: Application.fetch_env!(:audio_flow_sfu, :ice_servers)
         }
 
+        options =
+          case conn.query_params["resume"] do
+            token when is_binary(token) and token != "" -> Map.put(options, :resume, token)
+            _ -> options
+          end
+
         conn
         |> WebSockAdapter.upgrade(Signaling.JSON, options,
           timeout: 60_000,
