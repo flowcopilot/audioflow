@@ -24,7 +24,7 @@ defmodule AudioFlowUI.MixProject do
   defp deps do
     [
       {:audio_flow, path: ".."},
-      {:sake, "~> 0.4.4"},
+      {:sake, "~> 0.6.1"},
       live_shadcn(:live_base),
       live_shadcn(:live_shadcn),
       live_shadcn(:live_ai_elements),
