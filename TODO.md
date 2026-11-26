@@ -49,12 +49,12 @@
 
 ## Phase 6: Native agent participants in the SFU
 
-- [ ] `AudioFlowSFU.join_native/4` and `AudioFlowSFU.publish/3`
-- [ ] Versioned RTP messages to the agent with `[:nosuspend]` and drop telemetry
-- [ ] `away` state on agent `DOWN`/`nodedown`; no leave shown to JSON or LiveKit clients; rejoin with the resume token
-- [ ] Agents shown as `ParticipantInfo.kind = AGENT` to LiveKit clients
-- [ ] Distributed `:peer` tests for join, publish, subscribe, away and rejoin
-- [ ] Commit: `feat(sfu): add BEAM-native agent participants`
+- [x] `AudioFlowSFU.Native.join/4` and `publish_track/3` (callable with `:erpc`); agents send `{:audio_flow_sfu, 1, {:rtp, track_sid, rtp}}`
+- [x] Versioned plain-term RTP and event messages to the agent with `[:nosuspend]` and drop telemetry
+- [x] `away` state on agent `DOWN`/`nodedown`; no leave shown to JSON or LiveKit clients; rejoin with the resume token
+- [x] Agents shown as `ParticipantInfo.kind = AGENT` to LiveKit clients
+- [x] Distributed `:peer` tests for join, publish, subscribe, away and rejoin (`test_helper.exs` starts distribution)
+- [x] Commit: `feat(sfu): add BEAM-native agent participants`
 
 ## Phase 7: Release project and hot-upgradable SFU
 

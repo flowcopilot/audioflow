@@ -323,13 +323,16 @@ Findings from the compatibility tests:
 
 ### Phase 6: Native agent participants in the SFU
 
-- Add `AudioFlowSFU.join_native(room, identity, pid, opts)`. It returns
-  `{:ok, %{participant: ref, resume_token: binary, tracks: [...]}}` and starts
-  `Participant.Native`, which monitors the agent PID.
-- Native publish: `AudioFlowSFU.publish(participant, track_id, packet)` (cast).
-  Native subscribe: the participant sends
-  `{:audio_flow_sfu, 1, participant, {:rtp, track_id, packet}}` to the agent
-  PID with `[:nosuspend]` and counts drops in telemetry.
+- Add `AudioFlowSFU.Native.join(room, identity, pid, opts)`. It returns
+  `{:ok, %{participant: pid, info: info, others: [info], resume_token: binary}}`
+  and starts `Participant.Native`, which monitors the agent PID.
+- Native publish: `Native.publish_track/3`, then
+  `send(participant, {:audio_flow_sfu, 1, {:rtp, track_sid, rtp}})`. Native
+  subscribe: the participant sends
+  `{:audio_flow_sfu, 1, participant, {:rtp, track_sid, rtp}}` to the agent
+  PID with `[:nosuspend]` and counts drops in telemetry. `rtp` is a plain map
+  (`sequence_number`, `timestamp`, `marker`, `payload`), so the agent node
+  needs no SFU or `ex_rtp` code.
 - When the agent goes down, the participant becomes `away`. Other members get
   an away event (JSON) or a `ParticipantUpdate` with unchanged state
   (LiveKit, so that SDKs do not show a leave). Its track stays published and
