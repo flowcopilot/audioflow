@@ -11,8 +11,10 @@ defmodule AudioFlow.Calls.Call do
   same agent with the same track.
 
   A save that fails with `:stale` means another node took the call: this
-  process stops at once with `{:shutdown, :lease_lost}`. When no member
-  other than agents is left in the room, the call ends (`status: :ended`).
+  process stops at once with `{:shutdown, :lease_lost}`. When the last member
+  other than agents leaves the room, the call ends (`status: :ended`). It
+  also ends when the room has had no such member for `:empty_timeout_ms`
+  (60 000), for example a call whose user never joined.
 
   After the call moves to this node, `:interrupted_turn` decides what happens
   to the user input of a turn that the old node did not finish: `:drop`
@@ -64,6 +66,8 @@ defmodule AudioFlow.Calls.Call do
       interrupted_turn: Keyword.get(options, :interrupted_turn, :drop),
       retry_window_ms: Keyword.get(options, :retry_window_ms, 10_000),
       resume_input: Keyword.get(options, :resume_input),
+      empty_timeout: Keyword.get(options, :empty_timeout_ms, 60_000),
+      empty_timer: nil,
       # A call that had an SFU participant before moves here from another node.
       moved?: call.resume_token != nil,
       participant: nil,
@@ -148,7 +152,7 @@ defmodule AudioFlow.Calls.Call do
   @impl true
   def handle_info({Participant, pid, {:joined, join}}, %{participant: pid} = state) do
     members = Map.new(join.others, &{&1.sid, &1})
-    state = %{state | members: members}
+    state = watch_empty(%{state | members: members})
 
     changes =
       if join.resume_token == state.call.resume_token,
@@ -181,14 +185,19 @@ defmodule AudioFlow.Calls.Call do
 
   def handle_info({Participant, pid, {event, info}}, %{participant: pid} = state)
       when event in [:participant_joined, :participant_updated],
-      do: {:noreply, %{state | members: Map.put(state.members, info.sid, info)}}
+      do: {:noreply, watch_empty(%{state | members: Map.put(state.members, info.sid, info)})}
+
+  def handle_info({:empty, token}, %{empty_timer: {_, token}} = state),
+    do: finish(state, :room_empty)
 
   def handle_info({Participant, pid, {:participant_left, info}}, %{participant: pid} = state) do
     state = %{state | members: Map.delete(state.members, info.sid)}
+    if users?(state), do: {:noreply, state}, else: finish(state, :room_empty)
+  end
 
-    if Enum.any?(Map.values(state.members), &(&1.kind != :agent)),
-      do: {:noreply, state},
-      else: finish(state, :room_empty)
+  def handle_info({Participant, pid, {:error, reason}}, %{participant: pid} = state) do
+    Logger.warning("call #{state.call.id}: #{inspect(reason)}")
+    {:noreply, state}
   end
 
   def handle_info({Participant, pid, {:closed, reason}}, %{participant: pid} = state),
@@ -208,6 +217,28 @@ defmodule AudioFlow.Calls.Call do
   end
 
   def terminate(_, _), do: :ok
+
+  defp users?(state), do: Enum.any?(Map.values(state.members), &(&1.kind != :agent))
+
+  # Ends the call if no user joins in time; a user cancels the wait.
+  defp watch_empty(state) do
+    case {users?(state), state.empty_timer} do
+      {true, {timer, _}} ->
+        Process.cancel_timer(timer)
+        %{state | empty_timer: nil}
+
+      {false, nil} ->
+        token = make_ref()
+
+        %{
+          state
+          | empty_timer: {Process.send_after(self(), {:empty, token}, state.empty_timeout), token}
+        }
+
+      _ ->
+        state
+    end
+  end
 
   # After a move: the interrupted input to retry, else the resume input.
   defp moved_input(%{moved?: false}, changes), do: {nil, changes}

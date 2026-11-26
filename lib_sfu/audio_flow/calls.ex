@@ -36,6 +36,11 @@ defmodule AudioFlow.Calls do
       default: 10_000,
       doc: "Interrupted input older than this is dropped."
     ],
+    empty_timeout_ms: [
+      type: :pos_integer,
+      default: 60_000,
+      doc: "A call whose room has had no member other than agents for this long ends."
+    ],
     resume_input: [
       type: {:or, [:string, nil]},
       default: nil,

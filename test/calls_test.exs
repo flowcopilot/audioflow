@@ -17,7 +17,7 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
       {:ok, pid} = CallStore.Memory.start_link()
       store = {CallStore.Memory, pid}
 
-      {:ok, call} =
+      {:ok, _} =
         CallStore.create(store, %{
           room: "room",
           agent: "Elixir.AudioFlow.Test.CallAgent",
@@ -103,6 +103,25 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
 
       speak(agent, participant, 100)
       assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :lease_lost}}, 3000
+    end
+
+    test "a call whose room has no user ends after the empty timeout", %{store: store} do
+      {:ok, _} =
+        CallStore.create(store, %{
+          room: "empty",
+          agent: "Elixir.AudioFlow.Test.CallAgent",
+          metadata: %{"test" => self(), "others" => []}
+        })
+
+      {:ok, [call]} = CallStore.claim(store, "node-a", 60_000, 10)
+      Process.flag(:trap_exit, true)
+
+      {:ok, pid} =
+        Call.start_link(store: store, call: call, owner: "node-a", empty_timeout_ms: 100)
+
+      ref = Process.monitor(pid)
+      assert_receive {:DOWN, ^ref, :process, ^pid, {:shutdown, :room_empty}}, 2000
+      assert {:ok, %{status: :ended}} = CallStore.get(store, call.id)
     end
 
     test "a call ends when the last user leaves", %{store: store, call: call} do
