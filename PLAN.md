@@ -235,8 +235,10 @@ the two releases, `appup.exs`, and `scripts/upgrade_test.sh`.
 - Add `@vsn 1` and an explicit `code_change/3` to `AudioFlow.Session`,
   `AudioFlow.Worker`, `AudioFlow.Duplex`, `AudioFlow.WebRTC`,
   `AudioFlow.WebRTC.Session` and `AudioFlow.WebRTC.Transport`.
-- Add `{:forecastle, "~> 1.2", runtime: false}`, `appup: "appup.exs"` and
-  the `:appup` compiler to `mix.exs`. Add `appup.exs` for 0.1.0.
+- Add `{:castle, "~> 1.3", runtime: false}` (it brings Forecastle, as the
+  Forecastle README asks), `appup: "appup.exs"` and the `:appup` compiler to
+  `mix.exs`. Add `appup.exs` for 0.1.0. Forecastle installs dependency appups
+  from `ebin` into the release, so the library can ship its own appup.
 - Add `test/hot_upgrade_test.exs`. It suspends a live session in the middle
   of a turn (`:sys.suspend/1`), loads a changed module, calls
   `:sys.change_code/4` and `:sys.resume/1`, and checks that the turn
@@ -449,6 +451,4 @@ the two releases, `appup.exs`, and `scripts/upgrade_test.sh`.
 ## Open Questions
 
 - Does `Membrane.Opus.Decoder.Native` expose packet loss concealment or FEC?
-- Can AudioFlow, as a library, ship `appup.exs` through Forecastle, or must
-  each host release write appups for `:audio_flow`?
 - Which `livekit/protocol` commit and SDK versions do we pin first?

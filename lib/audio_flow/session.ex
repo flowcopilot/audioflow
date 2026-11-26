@@ -60,6 +60,13 @@ defmodule AudioFlow.Session do
   @doc "Session resource limits:\n\n" <> NimbleOptions.docs(@limits_schema)
   def start_link(options), do: GenServer.start_link(__MODULE__, options)
 
+  # State version for hot code upgrades. Bump it when the state shape changes,
+  # and migrate the old state in code_change/3 (see the hot-upgrades guide).
+  @vsn 1
+
+  @impl true
+  def code_change(_old_vsn, state, _extra), do: {:ok, state}
+
   @impl true
   def init(options) do
     Process.flag(:trap_exit, true)

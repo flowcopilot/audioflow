@@ -10,11 +10,11 @@
 
 ## Phase 2: Hot-upgrade-safe AudioFlow processes
 
-- [ ] `@vsn 1` and `code_change/3` in `Session`, `Worker`, `Duplex`, `WebRTC`, `WebRTC.Session`, `WebRTC.Transport`
-- [ ] Forecastle appup compiler and `appup.exs` in the root `mix.exs`
-- [ ] `test/hot_upgrade_test.exs`: change code of a live session in the middle of a turn
-- [ ] `site/src/content/docs/docs/guides/hot-upgrades.md`
-- [ ] Commit: `feat(upgrade): make session processes hot-upgradable`
+- [x] `@vsn 1` and `code_change/3` in `Session`, `Worker`, `Duplex`, `WebRTC`, `WebRTC.Session`, `WebRTC.Transport`
+- [x] Forecastle appup compiler and `appup.exs` in the root `mix.exs` (through `{:castle, runtime: false}`)
+- [x] `test/hot_upgrade_test.exs`: change code of a live session in the middle of a turn
+- [x] `site/src/content/docs/docs/guides/hot-upgrades.md`
+- [x] Commit: `feat(upgrade): make session processes hot-upgradable`
 
 ## Phase 3: SFU audio rooms with JSON signaling
 

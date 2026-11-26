@@ -46,6 +46,7 @@ export default defineConfig({
             'docs/guides/output',
             'docs/guides/websocket',
             'docs/guides/telemetry',
+            'docs/guides/hot-upgrades',
           ],
         },
         {

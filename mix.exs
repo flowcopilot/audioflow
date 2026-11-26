@@ -11,6 +11,9 @@ defmodule AudioFlow.MixProject do
       deps: deps(),
       aliases: aliases(),
       elixirc_options: [warnings_as_errors: true],
+      # Forecastle compiles appup.exs into ebin for host releases that hot-upgrade.
+      appup: "appup.exs",
+      compilers: Mix.compilers() ++ [:appup],
       dialyzer: [plt_add_apps: [:mix, :ex_unit]],
       start_permanent: Mix.env() == :prod
     ]
@@ -59,6 +62,7 @@ defmodule AudioFlow.MixProject do
       {:jido, "~> 2.4.0"},
       {:zoi, "~> 0.18.11"},
       {:telemetry, "~> 1.3"},
+      {:castle, "~> 1.3", runtime: false},
       {:websock, "~> 0.5.3"},
       # FFmpeg resampling and G.711. Ratio 4.0.1 (via membrane_core) has an
       # optional constraint that predates Decimal 3. Postgrex and Numbers share

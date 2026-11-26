@@ -63,6 +63,13 @@ defmodule AudioFlow.Worker do
     end
   end
 
+  # State version for hot code upgrades. Bump it when the state shape changes,
+  # and migrate the old state in code_change/3 (see the hot-upgrades guide).
+  @vsn 1
+
+  @impl GenServer
+  def code_change(_old_vsn, state, _extra), do: {:ok, state}
+
   @impl GenServer
   def init(options) do
     Process.flag(:trap_exit, true)
