@@ -75,6 +75,16 @@ jobs:
     timeout-minutes: 30
     env:
       AUDIOFLOW_SFU: '1'
+      AUDIOFLOW_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/audioflow_test
+    services:
+      postgres:
+        image: postgres:17@sha256:87c8b42f423b45d5247e6aa8fdb2e7762fec164c68a50fe3eb07e7bfcaf4dbcf
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: audioflow_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -84,7 +94,9 @@ jobs:
           otp-version: '29.1.2'
           elixir-version: '1.20.4'
       - run: mix deps.get
-      - run: mix test test/sfu_participant_test.exs test/rtp_reorder_test.exs
+      - run: >-
+          mix test test/sfu_participant_test.exs test/rtp_reorder_test.exs
+          test/calls_test.exs test/call_store_test.exs test/session_restore_test.exs
       - run: mix deps.get
         working-directory: releases
       - run: mix test

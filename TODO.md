@@ -77,12 +77,12 @@
 
 ## Phase 9: Durable call state
 
-- [ ] `AudioFlow.Agent` behaviour
-- [ ] `AudioFlow.CallStore` behaviour, `CallStore.Memory`, `CallStore.Postgres`, `schema_sql/0`
-- [ ] `AudioFlow.Session` `:restore` and `:on_commit`; `History.restore/2`, `History.snapshot/1`
-- [ ] `AudioFlow.Calls.Call` with `version`-checked snapshot writes
-- [ ] Tests: store contract for both stores; restored session gives the same LLM prompt
-- [ ] Commit: `feat(calls): persist call state after each turn`
+- [x] `AudioFlow.Agent` behaviour
+- [x] `AudioFlow.CallStore` behaviour, `CallStore.Memory`, `CallStore.Postgres`, `schema_sql/1`
+- [x] `AudioFlow.Session` `:restore` and `:on_commit`; `History.restore/2`, `History.snapshot/1`
+- [x] `AudioFlow.Calls.Call` (in `lib_sfu`) with `version`-checked snapshot writes and the saved resume token
+- [x] Tests: store contract for both stores (Postgres with `AUDIOFLOW_POSTGRES_URL`, concurrent claims); restored session gives the same LLM prompt; restored conversation state
+- [x] Commit: `feat(calls): persist call state after each turn`
 
 ## Phase 10: Rejoin, leases and drain
 

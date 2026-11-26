@@ -161,9 +161,10 @@ AudioFlow (root project):
   `session_options(call)` and optional `participant_options(call)`.
 - `lib/audio_flow/call_store.ex` with `call_store/memory.ex` (ETS) and
   `call_store/postgres.ex` (Postgrex, already a dependency).
-- `lib/audio_flow/calls.ex`, `lib/audio_flow/calls/call.ex`,
-  `lib/audio_flow/calls/claimer.ex`. They start from `AudioFlow.Application`
-  only when `:audio_flow, :calls` is configured.
+- `lib_sfu/audio_flow/calls.ex`, `lib_sfu/audio_flow/calls/call.ex`,
+  `lib_sfu/audio_flow/calls/claimer.ex`. They are in `lib_sfu` because a call
+  runs an SFU participant. They start from `AudioFlow.Application` only when
+  `:audio_flow, :calls` is configured.
 - `lib/audio_flow/session.ex`: new options `:restore`
   (`%{history: turns, conversation_state: atom, turns: n}`) and `:on_commit`
   (a one-argument function that gets a snapshot after each committed turn).
@@ -379,16 +380,17 @@ Findings from the compatibility tests:
 ### Phase 9: Durable call state
 
 - Add `AudioFlow.Agent`, `AudioFlow.CallStore`, `CallStore.Memory` and
-  `CallStore.Postgres`. Add `CallStore.Postgres.schema_sql/0` and document
+  `CallStore.Postgres`. Add `CallStore.Postgres.schema_sql/1` and document
   the `audio_flow_calls` table: `id uuid`, `room text`, `agent text`,
   `metadata jsonb`, `history jsonb`, `conversation_state text`, `turns int`,
-  `pending_input jsonb`, `resume_token bytea`, `status text`,
+  `pending_input jsonb`, `resume_token text`, `status text`,
   `lease_owner text`, `lease_expires_at timestamptz`, `version bigint`,
   `updated_at timestamptz`.
 - Add `:restore` and `:on_commit` to `AudioFlow.Session`, and
   `History.restore/2` and `History.snapshot/1`. `:on_commit` runs after the
-  history and conversation transition are committed. Its failure is an
-  event and does not fail the turn.
+  history and conversation transition are committed. It runs in the session
+  process, so `Calls.Call` passes a function that only sends a message. An
+  exception in it is logged and does not fail the turn.
 - Add `AudioFlow.Calls.Call`. It starts the session from
   `agent.session_options(call)`, joins the room, and writes snapshots with a
   `version` check.
