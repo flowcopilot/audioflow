@@ -3,8 +3,19 @@ erlang = "29.1.2"
 elixir = "1.20.4-otp-29"
 # examples/chat: asset build and model downloads.
 # Kokoro also needs espeak-ng, which mise does not provide: brew install espeak-ng
+# Also the LiveKit SDK checks (sfu/compat, examples/durable-call); they get
+# Chromium with `npx playwright install chromium-headless-shell`.
 node = "24.22.2"
+# Python for sfu/compat/python and Smart Turn; uv installs Python itself.
 uv = "0.13.6"
+# sfu/: ex_sctp (WebRTC data channels) is a Rust NIF.
+rust = "1.100.0"
+# sfu/scripts/gen_livekit_proto.sh, with protoc-gen-elixir from
+# `mix escript.install hex protobuf 0.17.1`.
+protoc = "36.2"
+# Call store tests (AUDIOFLOW_POSTGRES_URL) and examples/durable-call. The CI
+# service uses PostgreSQL 17 too.
+postgres = "17.12"
 # Git hooks and linters (see hk.pkl).
 hk = "2.11.0"
 gitleaks = "latest"
