@@ -19,6 +19,7 @@ defmodule AudioFlow.WebRTC.Session do
   """
   use GenServer
   alias AudioFlow.Audio
+  alias AudioFlow.RTP.Reorder
   alias AudioFlow.Telephony.MuLaw
   alias AudioFlow.Telephony.RateConverter
   alias AudioFlow.VoiceInput
@@ -83,11 +84,9 @@ defmodule AudioFlow.WebRTC.Session do
        voice: voice,
        up: %RateConverter{},
        track: nil,
-       expected: nil,
        timestamp: nil,
        ssrc: nil,
-       reorder: %{},
-       window: window,
+       reorder: Reorder.new(window),
        timeout: timeout,
        gap: nil
      }}
@@ -149,22 +148,9 @@ defmodule AudioFlow.WebRTC.Session do
   def handle_info(_, s), do: {:noreply, s}
 
   defp reorder(packet, s) do
-    expected = s.expected || packet.sequence_number
-    distance = rem(packet.sequence_number - expected + 65_536, 65_536)
-
-    cond do
-      distance >= 32_768 or Map.has_key?(s.reorder, packet.sequence_number) ->
-        {:noreply, s}
-
-      distance > s.window ->
-        fail(:rtp_reorder_limit, s)
-
-      true ->
-        drain(%{
-          s
-          | expected: expected,
-            reorder: Map.put(s.reorder, packet.sequence_number, packet)
-        })
+    case Reorder.push(s.reorder, packet) do
+      {:ok, packets, reorder} -> play(packets, %{s | reorder: reorder})
+      {:error, reason} -> fail(reason, s)
     end
   end
 
@@ -188,39 +174,23 @@ defmodule AudioFlow.WebRTC.Session do
     end
   end
 
-  defp drain(s) do
-    case Map.pop(s.reorder, s.expected) do
-      {nil, _} ->
-        {:noreply, schedule_gap(s)}
+  defp play([], s), do: {:noreply, schedule_gap(s)}
 
-      {packet, rest} ->
-        play_packet(s, packet, rest)
-    end
-  end
-
-  defp play_packet(%{timestamp: last} = s, %{timestamp: timestamp}, _rest)
+  defp play([%{timestamp: timestamp} | _], %{timestamp: last} = s)
        when last != nil and timestamp != rem(last + 160, 4_294_967_296),
        do: fail(:rtp_timestamp_gap, s)
 
-  defp play_packet(s, packet, rest) do
+  defp play([packet | rest], s) do
     {data, up} = RateConverter.up(MuLaw.decode(packet.payload), s.up)
     {events, voice} = VoiceInput.push(s.voice, %Audio{data: data, sample_rate: 16_000})
     Enum.each(events, &handle_voice_event(s, &1))
-
-    drain(%{
-      s
-      | reorder: rest,
-        expected: rem(s.expected + 1, 65_536),
-        timestamp: packet.timestamp,
-        up: up,
-        voice: voice
-    })
+    play(rest, %{s | timestamp: packet.timestamp, up: up, voice: voice})
   end
 
   # Waits for a missing packet while later packets are buffered.
   defp schedule_gap(s) do
     cond do
-      map_size(s.reorder) == 0 ->
+      not Reorder.waiting?(s.reorder) ->
         if s.gap, do: Process.cancel_timer(elem(s.gap, 0))
         %{s | gap: nil}
 
