@@ -45,7 +45,7 @@ docs · — not applicable.
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | Type | OSS library (Elixir) | OSS framework (Python) + cloud | OSS framework (Py/Node) + cloud | Model API + SDK | Hosted platform | Hosted platform | Hosted platform | OSS framework + Agora | Model (open weights) + hosted | Hosted platform | Hosted API |
 | License | Not stated in repo | BSD-2 | Apache-2.0 | — (SDK OSS) | Proprietary | Proprietary | Proprietary | Apache-2.0 + restrictions | Open weights; hosted proprietary | Proprietary | Proprietary |
-| WebRTC | ❌ | ✅ Daily, LiveKit, SmallWebRTC | ✅ native | ✅ | ✅ web SDK | ✅ web call | ✅ | ✅ Agora RTC | ◐ unverified | ✅ web SDK | ◐ browser SDK |
+| WebRTC | ✅ own BEAM SFU; LiveKit client SDKs connect | ✅ Daily, LiveKit, SmallWebRTC | ✅ native | ✅ | ✅ web SDK | ✅ web call | ✅ | ✅ Agora RTC | ◐ unverified | ✅ web SDK | ◐ browser SDK |
 | WebSocket | ✅ raw PCM (`AudioFlow.WebSocket`) | ✅ | ✅ (backend) | ✅ | ✅ | ✅ custom LLM | ✅ | ✅ | ◐ | ◐ | ✅ |
 | SIP / PSTN | ❌ | ✅ Twilio, Telnyx, Plivo, Exotel, Vonage, Genesys… | ✅ SIP trunks + numbers | ✅ SIP | ✅ | ✅ | ✅ | ✅ SIP ext. | ✅ | ✅ | ✅ |
 | Turn detection | Silero VAD + endpoint rules | VAD + Smart Turn (audio ML) | VAD + semantic turn model | server_vad + semantic_vad | ✅ configurable | ✅ managed | ✅ proprietary model | TEN VAD + Turn Detection | Model-native | ✅ managed | ✅ endpointing |
@@ -59,7 +59,7 @@ docs · — not applicable.
 | Multilingual | ◐ Whisper multilingual; TTS English only | ✅ (Smart Turn 23 langs) | ✅ | ✅ | ✅ | ✅ | ✅ 31–70+ | ✅ | ✅ 26 langs | ✅ 40+ | ✅ |
 | Observability | ◐ turn metrics, benchmark CSV | ✅ OpenTelemetry, Sentry, Whisker | ✅ insights, OTel, recordings | ✅ tracing | ✅ logs, recording, boards | ✅ analytics, QA | ✅ analysis, search | ◐ | ✅ transcripts, recordings | ✅ | ◐ |
 | Eval / simulation | ◐ benchmark only | ◐ unverified | ✅ unit tests, simulations | ◐ | ✅ simulations, evals | ✅ simulation tests, A/B | ✅ tests, experiments | ❌ | ❌ | ✅ evaluations | ❌ |
-| Hosting / scaling | Self-host BEAM; distributed workers | Pipecat Cloud / Enterprise (K8s) | LiveKit Cloud / self-host / K8s | OpenAI | Hosted | Hosted | Hosted | Self-host | Hosted | Hosted / on-prem | Hosted |
+| Hosting / scaling | Self-host BEAM; distributed workers; durable calls (agent restarts keep the call); hot upgrades | Pipecat Cloud / Enterprise (K8s) | LiveKit Cloud / self-host / K8s | OpenAI | Hosted | Hosted | Hosted | Self-host | Hosted | Hosted / on-prem | Hosted |
 | HIPAA / SOC 2 | ❌ (no hosted service) | ❌ on Cloud intro page | ✅ BAA (Scale+), SOC 2 II | — | ✅ HIPAA add-on, SOC 2 II | ✅ SOC 2, HIPAA BAA | ✅ BAA (Enterprise) | ❌ | ❌ | ✅ SOC 2 II, HIPAA, PCI | ❌ |
 | PII redaction | ❌ | ❌ | ✅ | ❌ | ◐ tool encryption | ◐ privacy settings | ◐ retention | ❌ | ❌ | ❌ | ❌ |
 | Client SDKs | ❌ (LiveView example) | ✅ JS, React, RN, iOS, Android, C++ | ✅ web, mobile | ✅ JS/Py | ✅ web | ✅ web, iOS, Android, RN, Flutter | ✅ React, Swift, Kotlin, RN, Unity | ◐ | ✅ | ✅ web | ✅ browser |
@@ -165,7 +165,7 @@ Daily is a transport (see §3).
 
 ### High
 
-1. **No real-time network transport (WebRTC or streaming WebSocket).**
+1. **No real-time network transport (WebRTC or streaming WebSocket).** *Addressed: the AudioFlow SFU (`sfu/`) accepts LiveKit client SDKs, the JSON protocol and Twilio/Telnyx streams.*
    - *Competitors:* Pipecat offers Daily, LiveKit, SmallWebRTC, and WebSocket ([services](https://docs.pipecat.ai/server/services/supported-services)). LiveKit is WebRTC-native ([intro](https://docs.livekit.io/agents/)). OpenAI Realtime offers WebRTC and WebSocket ([guide](https://developers.openai.com/api/docs/guides/realtime)).
    - *AudioFlow today:* input is a PCM file or PortAudio (`lib_media/audio_flow/input_pipeline.ex`, `lib_media/audio_flow/pcm_file_source.ex`). Output is a PortAudio sink (`lib_media/audio_flow/playback.ex`). The chat example sends Base64 PCM over LiveView `pushEvent` (`examples/chat/assets/js/audio.js`).
    - *Suggestion:* add a transport on `membrane_webrtc_plugin` (`Live.Capture` and `Live.Player`) and a raw PCM WebSocket transport.
@@ -243,6 +243,8 @@ Daily is a transport (see §3).
 - **Controlled, reproducible benchmark against Pipecat.** It uses the same models and records hashes, p50/p95, and capacity rules (`scripts/COMPARISON.md`, `site/src/content/docs/docs/validation/pipecat-comparison.md`). No competitor publishes a comparison like this.
 - **Typed graph editor with an MCP endpoint for coding agents.** Coding agents can list, save, validate, and run graphs (`ui/README.md`). Vapi, Retell, and ElevenLabs expose MCP to manage agents ([Vapi](https://docs.vapi.ai/llms.txt), [Retell](https://docs.retellai.com/llms.txt), [ElevenLabs](https://elevenlabs.io/docs/agents-platform/overview)). AudioFlow's version is local, typed, and self-hosted.
 - **Video frame input as a first-class turn type** with demand-driven Membrane decoding and image captioning (`lib_media/audio_flow/video.ex`, `site/src/content/docs/docs/guides/video.md`). Most hosted voice platforms list no vision input (§2).
+- **Durable calls on the BEAM.** Client media ends in the AudioFlow SFU, a separate hot-upgradable release, and agents join rooms over Erlang distribution. When an agent node is deployed, restarted or killed, another node claims the call with a lease, restores the history and takes back the same participant; the user stays connected (`site/src/content/docs/docs/features/durable-calls.md`, `examples/durable-call`). This is the Cloudflare Realtime and Octoroom pattern, self-hosted, with LiveKit client SDK compatibility.
+- **Hot code upgrades.** The SFU and AudioFlow processes upgrade in place with Castle relups; a test installs a new SFU version during a live call (`releases/scripts/upgrade_test.sh`).
 - **No per-minute platform fee.** AudioFlow is self-hosted. Vapi charges $0.05/min ([pricing](https://vapi.ai/pricing)), ElevenLabs $0.08/min ([pricing](https://elevenlabs.io/pricing/agents)), and LiveKit $0.01/agent-min ([pricing](https://livekit.com/pricing)).
 
 ## 6. Claims I could not verify from a primary source

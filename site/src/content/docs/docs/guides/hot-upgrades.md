@@ -12,7 +12,8 @@ build-time part, Forecastle.
 
 A hot upgrade only helps when the node keeps running. A crash, a host reboot
 or a change of the Erlang VM still stops the calls on that node. For those
-cases, see durable calls, which keep the call state outside the node.
+cases, see [durable calls](../../features/durable-calls/), which keep the
+media in the SFU and the call state in a store.
 
 ## What AudioFlow provides
 

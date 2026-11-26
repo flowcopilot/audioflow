@@ -1,0 +1,13 @@
+{
+  "name": "audioflow-durable-call-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "serve": "node serve.mjs",
+    "smoke": "node smoke.mjs"
+  },
+  "devDependencies": {
+    "livekit-client": "2.24.0",
+    "playwright": "1.65.0"
+  }
+}

@@ -441,9 +441,12 @@ Findings from the compatibility tests:
 
 ### Phase 12: Example and documentation
 
-- Add `examples/durable-call/` with a `livekit-client` browser page, the
-  `audio_flow_dev` release, and a script that kills and restarts the agent
-  node during the call.
+- Add `examples/durable-call/` with a `livekit-client` browser page, an SFU
+  node, agent nodes on PostgreSQL, and `run.sh`. With `SMOKE=1`, a headless
+  Chromium talks to the agent while the script kills agent node A with
+  `kill -9` and starts node B.
+- A call also ends when its room has had no user for `:empty_timeout_ms`
+  (60 000), so calls whose users never joined do not stay claimed.
 - Add `site/src/content/docs/docs/features/durable-calls.md` and
   `site/src/content/docs/docs/features/sfu.md` (both protocols, tokens,
   LiveKit SDK compatibility table). Update `transports.md` and the README.

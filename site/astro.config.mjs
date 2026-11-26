@@ -54,6 +54,8 @@ export default defineConfig({
           items: [
             'docs/features/providers',
             'docs/features/transports',
+            'docs/features/sfu',
+            'docs/features/durable-calls',
             'docs/features/webrtc-avatars',
             'docs/features/input-processing',
             'docs/features/interruption',

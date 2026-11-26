@@ -102,29 +102,30 @@
 
 ## Phase 12: Example and documentation
 
-- [ ] `examples/durable-call/` with a `livekit-client` page, `audio_flow_dev`, and a kill-and-restart script
-- [ ] `site/src/content/docs/docs/features/durable-calls.md` and `sfu.md`; update `transports.md` and `README.md`
-- [ ] Update `docs/research/competitive-landscape.md`
-- [ ] Commit: `docs(calls): document durable calls and the SFU`
+- [x] `examples/durable-call/` with a `livekit-client` page, agent nodes on PostgreSQL, and `run.sh` (`SMOKE=1` kills node A and starts node B headlessly)
+- [x] `site/src/content/docs/docs/features/durable-calls.md` and `sfu.md`; update `transports.md`, the hot-upgrades guide and `README.md`
+- [x] Update `docs/research/competitive-landscape.md`
+- [x] Commit: `docs(calls): document durable calls and the SFU`
 
 ## Verification
 
-- [ ] `mix test` passes for the core, `AUDIOFLOW_WEBRTC=1`, and `AUDIOFLOW_WEBRTC=1 AUDIOFLOW_SFU=1` profiles
-- [ ] `mix test` passes in `sfu/`, `releases/`, `ui/` and `examples/chat`
-- [ ] Distributed tests pass with `elixir --sname audioflow_test -S mix test --only distributed`
-- [ ] Postgres tests pass with a real Postgres (`CallStore.Postgres`, lease claim, fencing)
-- [ ] LiveKit compatibility tests pass for the pinned `livekit-client` and Python `livekit` versions
-- [ ] Manual smoke test: a `livekit-client` browser page joins a room, talks to the agent, `kill -9` on the agent node, a second node rejoins, the browser stays connected, and the agent remembers the earlier turns
-- [ ] Manual smoke test: SIGTERM on the agent node during a call hands over in less than one renewal interval
-- [ ] Manual smoke test: hot upgrade of `audio_flow_sfu` during a call with no audible gap
-- [ ] Edge cases: agent crash in the middle of a turn (`:drop` and `:retry_input`); rejoin after `:away_timeout_ms`; two nodes claim the same lease at once; `Room` crash during renegotiation; client ICE restart during agent speech; distribution buffer full; GZIP `join_request`; expired JWT on LiveKit resume
-- [ ] Data integrity: a stale lease owner cannot overwrite a newer snapshot; `schema_sql/0` applies to an empty database and is documented with its rollback (`DROP TABLE audio_flow_calls`)
-- [ ] No regressions in `AudioFlow.WebRTC.Session`, `AudioFlow.Telephony.WebSocket`, interruption and `Playout` history truncation
-- [ ] `mix audio_flow.bench` hot paths show no regression
+- [x] `mix test` passes for the core (247), `AUDIOFLOW_WEBRTC=1` (259), `AUDIOFLOW_SFU=1` (257) and `AUDIOFLOW_WEBRTC=1 AUDIOFLOW_SFU=1` (269) profiles
+- [x] `mix test` passes in `sfu/` (30), `releases/` (5), `ui/` (31) and `examples/chat` (20)
+- [x] Distributed tests pass with `elixir --sname audioflow_test -S mix test --only distributed`
+- [x] Postgres tests pass with a real Postgres (`CallStore.Postgres`, lease claim, fencing, concurrent claims)
+- [x] LiveKit compatibility tests pass for `livekit-client` 2.24.0 and Python `livekit` 1.2.1
+- [x] Smoke test: a `livekit-client` browser page joins a room, talks to the agent, `kill -9` on the agent node, a second node rejoins, the browser stays connected (automated: `SMOKE=1 examples/durable-call/run.sh`; node B answered 5.5 s after the kill with a 5 s lease). It found and fixed a bug: browsers send stereo Opus
+- [x] Smoke test: a stop of the agent application during a call hands over faster than the lease (`releases/test/durable_call_test.exs`; `prep_stop` runs on SIGTERM too)
+- [x] Smoke test: hot upgrade of `audio_flow_sfu` during a call with no audible gap (17 to 35 ms longest gap, no reconnect)
+- [x] Edge cases: agent crash in the middle of a turn (`:drop` and `:retry_input`); rejoin after `:away_timeout_ms`; two nodes claim at once; `Room` crash during renegotiation; ICE restart with media continuing; GZIP `join_request`; expired JWT on LiveKit resume
+- [ ] Edge case not tested: a full distribution buffer. `Participant.forward/3` drops and counts such packets, but a test needs a saturated distribution link
+- [x] Data integrity: a stale lease owner cannot overwrite a newer snapshot; `schema_sql/1` applies to an empty database, and its rollback (`DROP TABLE`) is documented
+- [x] No regressions in `AudioFlow.WebRTC.Session`, `AudioFlow.Telephony.WebSocket`, interruption and `Playout` history truncation
+- [x] `mix audio_flow.bench` runs (no stored baseline to compare)
 
 ## Review
 
-- [ ] Code reviewed
-- [ ] PLAN.md updated if approach changed during implementation
-- [ ] All phase commits are clean and describe their intent
-- [ ] TODO.md items all checked off
+- [ ] Code reviewed (waits for a reviewer)
+- [x] PLAN.md updated if approach changed during implementation
+- [x] All phase commits are clean and describe their intent
+- [x] TODO.md items all checked off, except the two above

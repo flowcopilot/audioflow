@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>AudioFlow durable call</title>
+<script src="node_modules/livekit-client/dist/livekit-client.umd.js"></script>
+<style>
+  body { font: 16px system-ui, sans-serif; margin: 2rem; max-width: 40rem; }
+  #log { white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 14px; }
+</style>
+<h1>AudioFlow durable call</h1>
+<p>Speak, and the agent answers with a tone. Stop the agent node during the
+call: the call stays connected, and another node takes the agent over.</p>
+<button id="start">Start</button>
+<div id="log"></div>
+<script>
+  const { Room, RoomEvent } = LivekitClient;
+  const params = new URLSearchParams(location.search);
+  const log = (line) => (document.getElementById("log").textContent += line + "\n");
+  window.events = [];
+  window.agentBytes = async () => {
+    let bytes = 0;
+    for (const track of window.agentTracks ?? []) {
+      (await track.receiver.getStats()).forEach((r) => {
+        if (r.type === "inbound-rtp") bytes += r.bytesReceived;
+      });
+    }
+    return bytes;
+  };
+
+  window.start = async () => {
+    const room = new Room();
+    window.agentTracks = [];
+    const note = (event) => { window.events.push(event); log(JSON.stringify(event)); };
+    room.on(RoomEvent.TrackSubscribed, (track, _pub, p) => {
+      track.attach();
+      window.agentTracks.push(track);
+      note({ type: "subscribed", identity: p.identity });
+    });
+    room.on(RoomEvent.ParticipantConnected, (p) => note({ type: "joined", identity: p.identity }));
+    room.on(RoomEvent.ParticipantDisconnected, (p) => note({ type: "left", identity: p.identity }));
+    room.on(RoomEvent.Disconnected, (reason) => note({ type: "disconnected", reason }));
+    await room.connect(params.get("url"), params.get("token"));
+    await room.localParticipant.setMicrophoneEnabled(true);
+    note({ type: "connected", sid: room.localParticipant.sid });
+  };
+
+  document.getElementById("start").onclick = () => window.start();
+</script>

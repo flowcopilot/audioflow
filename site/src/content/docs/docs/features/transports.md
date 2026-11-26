@@ -9,6 +9,11 @@ and RTVI endpoints reuse its session ownership, output acknowledgements,
 stale-turn rejection and VAD path. Optional WebRTC uses a
 separate PCM Session bridge; see [the WebRTC guide](../webrtc-avatars/).
 
+These endpoints end the media on the agent node, so a restart of that node
+ends the call. For calls that survive deploys and crashes, connect users and
+phone calls to the [AudioFlow SFU](../sfu/) and run agents as
+[durable calls](../durable-calls/).
+
 ## Telephony WebSockets
 
 Mount `AudioFlow.Telephony.WebSocket` in an application-owned Plug:
