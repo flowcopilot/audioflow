@@ -116,6 +116,22 @@ defmodule AudioFlowReleases.DurableCallTest do
     assert_receive {:prompt, ^node_b, ["hello"]}, 5000
   end
 
+  test "by default, the input of a turn that a crash interrupted is dropped",
+       %{store: store, room: room, user: user} do
+    {peer_a, node_a} = agent_node("agent_a", store)
+    call = create_call(store, room, %{"block_on" => node_a})
+    sid = agent_joined(user)
+
+    speak(user)
+    assert_receive {:prompt, ^node_a, ["hello"]}, 5000
+    :peer.stop(peer_a)
+
+    {_peer_b, node_b} = agent_node("agent_b", store)
+    await_state(user, sid, :active, @lease_ms + 5_000)
+    refute_receive {:prompt, ^node_b, _}, 1_000
+    assert {:ok, %{history: [], pending_input: nil}} = CallStore.get(store, call.id)
+  end
+
   test "retry_input submits the input of a turn that a crash interrupted",
        %{store: store, room: room, user: user} do
     {peer_a, node_a} = agent_node("agent_a", store, interrupted_turn: :retry_input)

@@ -6,7 +6,13 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
     # test sends SFU messages to the agent itself. `join: [test: pid]` names the
     # test process; `others:` sets the room members.
 
-    def join(_room, identity, agent, options) do
+    def join(room, identity, agent, options) do
+      if Keyword.get(options, :resume_token) == "expired",
+        do: {:error, :unknown_session},
+        else: start(room, identity, agent, options)
+    end
+
+    defp start(_room, identity, agent, options) do
       test = Keyword.fetch!(options, :test)
       tracks = Keyword.get(options, :tracks, [])
       participant = spawn(fn -> relay(test) end)

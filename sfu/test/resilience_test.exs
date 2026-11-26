@@ -42,6 +42,20 @@ defmodule AudioFlowSFU.ResilienceTest do
     refute_received {:client, ^bob, {:participant_left, _}}
   end
 
+  test "a room crash during a renegotiation does not stop the new track" do
+    name = room()
+    {:ok, bob} = TestClient.start(name, "bob", can_publish: false)
+    connected(bob)
+    {:ok, alice} = TestClient.start(name, "alice")
+    connected(alice)
+    assert_receive {:client, ^alice, {:track_published, %{sid: track}}}, 5000
+
+    # Bob's offer for Alice's track is on its way; the room crashes now.
+    Process.exit(Room.whereis(name), :kill)
+    await_offer(bob, &(track in Map.values(&1)))
+    assert_forwarded(alice, bob)
+  end
+
   test "a member that stops while the room is down is removed by the sync" do
     name = room()
     {alice, bob} = pair(name)

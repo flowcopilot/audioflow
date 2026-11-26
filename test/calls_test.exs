@@ -94,6 +94,15 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
                      2000
     end
 
+    test "a call whose SFU participant timed out joins as a new participant",
+         %{store: store, call: call} do
+      {:ok, call} =
+        CallStore.save(store, call.id, "node-a", call.version, %{resume_token: "expired"})
+
+      {_pid, _participant, _agent} = start(store, call)
+      await_saved(store, call.id, &(&1.resume_token == "token"))
+    end
+
     test "a call that lost its lease stops at its next save", %{store: store, call: call} do
       {pid, participant, agent} = start(store, call)
       await_saved(store, call.id, &(&1.resume_token == "token"))

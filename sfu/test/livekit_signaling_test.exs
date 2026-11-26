@@ -106,6 +106,9 @@ defmodule AudioFlowSFU.Signaling.LiveKitTest do
                     {:update, %{participants: [%{identity: "bob", state: :DISCONNECTED}]}}},
                    300
 
+    expired = Token.generate("key", "secret", "bob", room, ttl_s: -1)
+    assert WS.refused(port, "/rtc/v1?access_token=#{expired}") =~ "401"
+
     {:ok, gone} = Client.start(port, room, "carol", reconnect: "PA_unknown")
     assert_receive {:livekit, ^gone, {:leave, %{action: :RECONNECT}}}, 5000
   end
