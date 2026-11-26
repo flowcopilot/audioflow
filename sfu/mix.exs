@@ -10,6 +10,9 @@ defmodule AudioFlowSFU.MixProject do
       elixir: "~> 1.18",
       elixirc_paths: if(Mix.env() == :test, do: ["lib", "test/support"], else: ["lib"]),
       elixirc_options: [warnings_as_errors: true],
+      # Forecastle compiles appup.exs into ebin for hot upgrades.
+      appup: "appup.exs",
+      compilers: Mix.compilers() ++ [:appup],
       deps: deps()
     ]
   end
@@ -42,7 +45,8 @@ defmodule AudioFlowSFU.MixProject do
       {:joken, "~> 2.8"},
       # LiveKit signal protocol messages (lib/audio_flow_sfu/livekit/proto).
       {:protobuf, "~> 0.17.1"},
-      {:telemetry, "~> 1.3"}
+      {:telemetry, "~> 1.3"},
+      {:castle, "~> 1.3", runtime: false}
     ]
   end
 end

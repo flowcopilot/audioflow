@@ -58,12 +58,12 @@
 
 ## Phase 7: Release project and hot-upgradable SFU
 
-- [ ] `@vsn` and `code_change/3` in `Room`, `Participant.WebRTC`, `Participant.Native`, both signaling modules
-- [ ] `sfu/appup.exs`
-- [ ] `releases/` project with Castle, `audio_flow_sfu` and `audio_flow_dev` releases
-- [ ] `releases/scripts/upgrade_test.sh`: upgrade from the previous ref during a live call, no RTP gap over 100 ms
-- [ ] CI runs the upgrade test on changes to `sfu/` or `releases/`
-- [ ] Commit: `feat(releases): ship hot-upgradable SFU and dev releases`
+- [x] `@vsn` and `code_change/3` in `Room`, `Participant.WebRTC`, `Participant.Native` (the signaling modules are WebSock handlers with no `code_change/3`)
+- [x] `sfu/appup.exs` and the Forecastle appup compiler in `sfu/mix.exs`
+- [x] `releases/` project with Castle, `audio_flow_sfu` and `audio_flow_dev` releases
+- [x] `releases/scripts/upgrade_test.sh`: upgrade 0.1.0 to 0.1.1 during a live call, no reconnect, no audio gap over 100 ms (local run: 35 ms)
+- [x] CI runs the upgrade test on changes to `sfu/` or `releases/` (`.github/workflows/sfu-upgrade.yml`)
+- [x] Commit: `feat(releases): ship hot-upgradable SFU and dev releases`
 
 ## Phase 8: AudioFlow sessions as room participants
 

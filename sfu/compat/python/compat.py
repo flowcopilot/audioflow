@@ -19,7 +19,7 @@ from livekit import rtc
 URL = os.environ.get("SFU_URL", "ws://127.0.0.1:7880")
 KEY = os.environ.get("API_KEY", "devkey")
 SECRET = os.environ.get("API_SECRET", "devsecret")
-ROOM = f"py-compat-{int(time.time() * 1000)}"
+ROOM = os.environ.get("ROOM", f"py-compat-{int(time.time() * 1000)}")
 RATE = 48_000
 
 

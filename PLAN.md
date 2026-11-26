@@ -349,11 +349,13 @@ Findings from the compatibility tests:
 - Create `releases/` with path dependencies on `..` and `../sfu`, Castle,
   and the `audio_flow_sfu` and `audio_flow_dev` releases
   (`Castle.customize/1`, `upgrade_from:` set from a CI variable).
-- Add `releases/scripts/upgrade_test.sh`. It builds `audio_flow_sfu` from the
-  previous git ref (`ref:` baseline), starts it, connects a test client,
-  builds the current release with a relup, installs it with Castle, and
-  checks that the same peer connection keeps receiving RTP with no gap over
-  100 ms.
+- Add `releases/scripts/upgrade_test.sh`. It builds `audio_flow_sfu` 0.1.0
+  from the tree and a 0.1.1 candidate that migrates the `Room` state (`@vsn
+  2`), with a relup from the 0.1.0 tarball. It starts 0.1.0, holds a LiveKit
+  Python SDK call, installs 0.1.1 with Castle, and fails on a reconnect, an
+  audio gap over 100 ms, or a room state that was not migrated.
+- The SFU reads `AUDIOFLOW_SFU_*` environment variables when it starts, so
+  releases need no `runtime.exs`.
 - Run the script in CI on pull requests that change `sfu/` or `releases/`.
 
 **Commit:** `feat(releases): ship hot-upgradable SFU and dev releases`
