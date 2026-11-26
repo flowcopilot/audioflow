@@ -18,12 +18,12 @@
 
 ## Phase 3: SFU audio rooms with JSON signaling
 
-- [ ] Create the `sfu/` Mix project (`:audio_flow_sfu`) with `ex_webrtc`, `bandit`, `websock_adapter`, `joken`
-- [ ] `AudioFlowSFU.Room`, `Participant.WebRTC`, `Signaling.JSON`, `Token` (LiveKit JWT claims)
-- [ ] Opus and PCMU audio forwarding with `PeerConnection.send_rtp/4`
-- [ ] Tests: two test peers exchange Opus RTP; bad and expired tokens rejected; `:max_participants` enforced
-- [ ] CI job for `sfu/`; `sfu/**` and `releases/**` excluded from root `mix-format` in `hk.pkl`
-- [ ] Commit: `feat(sfu): add audio rooms with JSON signaling`
+- [x] Create the `sfu/` Mix project (`:audio_flow_sfu`) with `ex_webrtc`, `ex_sctp`, `bandit`, `websock_adapter`, `joken`
+- [x] `AudioFlowSFU.Room`, `Participant.WebRTC`, `Signaling.JSON`, `Token` (LiveKit JWT claims)
+- [x] Opus and PCMU audio forwarding with `PeerConnection.send_rtp/4`
+- [x] Tests: two test peers exchange Opus RTP; bad and expired tokens rejected; `:max_participants` enforced
+- [x] CI job for `sfu/`; `sfu/**` and `releases/**` excluded from root `mix-format` in `hk.pkl`
+- [x] Commit: `feat(sfu): add audio rooms with JSON signaling`
 
 ## Phase 4: SFU resilience
 

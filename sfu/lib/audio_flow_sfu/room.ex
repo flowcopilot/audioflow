@@ -1,0 +1,166 @@
+defmodule AudioFlowSFU.Room do
+  @moduledoc """
+  Membership of one room. Media does not pass through this process: each
+  participant forwards RTP to its subscribers directly.
+
+  Members get `{AudioFlowSFU.Room, room, event}` messages, where `event` is
+  `{:participant_joined, info, pid}`, `{:participant_updated, info, pid}`,
+  `{:participant_left, info}` or `:duplicate_identity` (the member was
+  replaced by a newer join with the same identity).
+
+  The room stops after `:empty_timeout_ms` with no members.
+  """
+  use GenServer, restart: :transient
+
+  @vsn 1
+
+  def child_spec(name) do
+    %{id: {__MODULE__, name}, start: {__MODULE__, :start_link, [name]}, restart: :transient}
+  end
+
+  def start_link(name), do: GenServer.start_link(__MODULE__, name, name: via(name))
+
+  def via(name), do: {:via, Registry, {AudioFlowSFU.Registry, {:room, name}}}
+
+  @doc "Returns the room process, if it runs."
+  def whereis(name) do
+    case Registry.lookup(AudioFlowSFU.Registry, {:room, name}) do
+      [{pid, _}] -> pid
+      [] -> nil
+    end
+  end
+
+  @doc """
+  Adds a member. Starts the room when needed. Returns the room PID and the
+  other members as `{info, pid}` pairs.
+  """
+  def join(name, info, pid, attempts \\ 2) do
+    room = ensure_started(name)
+
+    case GenServer.call(room, {:join, info, pid}) do
+      {:ok, others} -> {:ok, room, others}
+      {:error, _} = error -> error
+    end
+  catch
+    # The room stopped between lookup and call (empty timeout).
+    :exit, _ when attempts > 1 -> join(name, info, pid, attempts - 1)
+  end
+
+  def update(room, info), do: GenServer.cast(room, {:update, info, self()})
+  def leave(room, sid), do: GenServer.call(room, {:leave, sid})
+  def participants(room), do: GenServer.call(room, :participants)
+
+  defp ensure_started(name) do
+    case DynamicSupervisor.start_child(AudioFlowSFU.Rooms, {__MODULE__, name}) do
+      {:ok, pid} -> pid
+      {:error, {:already_started, pid}} -> pid
+    end
+  end
+
+  @impl true
+  def code_change(_old_vsn, state, _extra), do: {:ok, state}
+
+  @impl true
+  def init(name) do
+    state = %{
+      name: name,
+      members: %{},
+      max: Application.fetch_env!(:audio_flow_sfu, :max_participants),
+      empty_timeout: Application.fetch_env!(:audio_flow_sfu, :empty_timeout_ms),
+      empty_timer: nil
+    }
+
+    {:ok, schedule_empty(state)}
+  end
+
+  @impl true
+  def handle_call({:join, info, pid}, _from, state) do
+    state = replace_identity(state, info.identity)
+
+    if map_size(state.members) >= state.max do
+      {:reply, {:error, :room_full}, state}
+    else
+      others = for {_, m} <- state.members, do: {m.info, m.pid}
+      broadcast(state, {:participant_joined, info, pid})
+      member = %{info: info, pid: pid, ref: Process.monitor(pid)}
+      state = cancel_empty(%{state | members: Map.put(state.members, info.sid, member)})
+      {:reply, {:ok, others}, state}
+    end
+  end
+
+  def handle_call({:leave, sid}, _from, state), do: {:reply, :ok, remove(state, sid)}
+
+  def handle_call(:participants, _from, state),
+    do: {:reply, for({_, m} <- state.members, do: m.info), state}
+
+  @impl true
+  def handle_cast({:update, %{sid: sid} = info, pid}, state) do
+    case state.members do
+      %{^sid => %{pid: ^pid} = member} ->
+        broadcast(state, {:participant_updated, info, pid}, sid)
+        {:noreply, %{state | members: Map.put(state.members, sid, %{member | info: info})}}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  @impl true
+  def handle_info({:DOWN, ref, :process, _, _}, state) do
+    case Enum.find(state.members, fn {_, m} -> m.ref == ref end) do
+      {sid, _} -> {:noreply, remove(state, sid)}
+      nil -> {:noreply, state}
+    end
+  end
+
+  def handle_info({:empty, token}, %{empty_timer: {_, token}, members: members} = state)
+      when map_size(members) == 0,
+      do: {:stop, :normal, state}
+
+  def handle_info(_, state), do: {:noreply, state}
+
+  defp replace_identity(state, identity) do
+    case Enum.find(state.members, fn {_, m} -> m.info.identity == identity end) do
+      {sid, member} ->
+        send(member.pid, {__MODULE__, state.name, :duplicate_identity})
+        remove(state, sid)
+
+      nil ->
+        state
+    end
+  end
+
+  defp remove(state, sid) do
+    case Map.pop(state.members, sid) do
+      {nil, _} ->
+        state
+
+      {member, members} ->
+        Process.demonitor(member.ref, [:flush])
+        state = %{state | members: members}
+        broadcast(state, {:participant_left, member.info})
+        schedule_empty(state)
+    end
+  end
+
+  defp broadcast(state, event, except \\ nil) do
+    for {sid, m} <- state.members, sid != except, do: send(m.pid, {__MODULE__, state.name, event})
+    :ok
+  end
+
+  defp schedule_empty(%{members: members} = state) when map_size(members) > 0, do: state
+
+  defp schedule_empty(state) do
+    state = cancel_empty(state)
+    token = make_ref()
+    timer = Process.send_after(self(), {:empty, token}, state.empty_timeout)
+    %{state | empty_timer: {timer, token}}
+  end
+
+  defp cancel_empty(%{empty_timer: nil} = state), do: state
+
+  defp cancel_empty(%{empty_timer: {timer, _}} = state) do
+    Process.cancel_timer(timer)
+    %{state | empty_timer: nil}
+  end
+end

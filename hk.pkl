@@ -31,10 +31,10 @@ steps = new Mapping<String, Step | Group> {
   // ── tier 3: formatters ──
   ["ruff-format"] = (Builtins.ruff_format) { depends = List("ruff") }
   ["rumdl-format"] = (Builtins.rumdl_format) { depends = List("rumdl") }
-  // ui/ and examples/chat are separate Mix projects with their own formatter
+  // ui/, sfu/, releases/ and examples/chat are separate Mix projects with their own formatter
   // plugins, which need those projects' deps.
   ["mix-format"] = (Builtins.mix_fmt) {
-    exclude = List("deps/**/*", "ui/**", "examples/chat/**")
+    exclude = List("deps/**/*", "ui/**", "examples/chat/**", "sfu/**", "releases/**")
   }
 
   // ── tier 4: whole-repo hygiene ──

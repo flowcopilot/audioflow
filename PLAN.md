@@ -250,7 +250,9 @@ the two releases, `appup.exs`, and `scripts/upgrade_test.sh`.
 ### Phase 3: SFU audio rooms with JSON signaling
 
 - Create `sfu/` (`mix.exs`, `.formatter.exs`, `README.md`) with
-  `ex_webrtc ~> 0.18.0`, `bandit`, `websock_adapter` and `joken`.
+  `ex_webrtc ~> 0.18.0`, `ex_sctp` (data channels, a Rust NIF), `bandit`,
+  `websock_adapter` and `joken`. Each offer has a `_reliable` data channel,
+  so a client with no tracks yet still has a media section and connects.
 - Add `Room`, `Participant.WebRTC`, `Signaling.JSON` and `Token`.
   Negotiate Opus and PCMU only.
 - Forward each published audio track to each subscriber with
