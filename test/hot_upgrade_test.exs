@@ -50,13 +50,17 @@ defmodule AudioFlow.HotUpgradeTest do
     {:ok, session} = AudioFlow.start_session(Keyword.put(options, :owner, test))
     {:ok, turn} = AudioFlow.submit(session, %Audio{data: <<0, 0>>, sample_rate: 16_000})
     assert_receive {:blocked, task}
+    task_ref = Process.monitor(task)
 
     upgrade(session, AudioFlow.Session)
     send(task, :go)
     assert_receive {AudioFlow, ^session, ^turn, {:done, _}}, 1000
 
-    # The turn task ran old code and has exited, so the old version can go.
-    assert :code.soft_purge(AudioFlow.Session)
+    # The turn task ran the old code and has exited; the session runs the new
+    # code. (A global :code.soft_purge/1 would also see processes that other
+    # test modules leave behind.)
+    assert_receive {:DOWN, ^task_ref, :process, ^task, _}
+    refute :erlang.check_process_code(session, AudioFlow.Session)
 
     {:ok, next} = AudioFlow.submit(session, %Audio{data: <<0, 0>>, sample_rate: 16_000})
     assert_receive {:prompt, [%{content: "u1"}, %{content: "reply"}, %{content: "u1"}]}
@@ -78,10 +82,12 @@ defmodule AudioFlow.HotUpgradeTest do
       end)
 
     assert_receive {:blocked, task}
+    task_ref = Process.monitor(task)
     upgrade(worker, Worker)
     send(task, :go)
     assert_receive {:out, "in"}, 1000
     assert :ok = Task.await(caller)
-    assert :code.soft_purge(Worker)
+    assert_receive {:DOWN, ^task_ref, :process, ^task, _}
+    refute :erlang.check_process_code(worker, Worker)
   end
 end
