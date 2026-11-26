@@ -20,9 +20,30 @@ This application does not depend on `:audio_flow`. Run it as its own release.
 
 ## Signaling
 
-`AudioFlowSFU.Signaling.JSON` is the AudioFlow protocol v0 at
-`/ws?access_token=<jwt>`. The server makes the first offer. See the module
-documentation for the messages.
+- `AudioFlowSFU.Signaling.JSON` is the AudioFlow protocol v0 at
+  `/ws?access_token=<jwt>`. The server makes the first offer. See the module
+  documentation for the messages.
+- `AudioFlowSFU.Signaling.LiveKit` is the LiveKit client protocol v1 at
+  `/rtc/v1` (one peer connection, protobuf messages). LiveKit client SDKs
+  connect with a LiveKit URL and token. The server reports protocol 17, so
+  clients open data channels in-band. The two-connection path `/rtc` is not
+  supported.
+
+A dropped signaling socket does not end the session. The participant waits
+for `away_timeout_ms` (30 s) for a resume: `&resume=<token>` in the JSON
+protocol, or a LiveKit reconnect with the participant SID.
+
+## LiveKit SDK compatibility
+
+| SDK | Version | Result |
+| --- | --- | --- |
+| `livekit-client` (JavaScript, headless Chromium) | 2.24.0 | join, publish, subscribe, audio, signal resume, leave |
+| `livekit` (Python, Rust core) | 1.2.1 | join, publish, subscribe, audio |
+
+Run `compat/run.sh` to check them. It starts the SFU on port 7880. It needs
+Node.js, `uv` and network access for Chromium and the SDK packages.
+`scripts/gen_livekit_proto.sh` generates the protocol modules from
+livekit/protocol v1.54.2.
 
 ## Configuration
 

@@ -208,7 +208,9 @@ the two releases, `appup.exs`, and `scripts/upgrade_test.sh`.
 
 ### Out of scope (later plans)
 
-- LiveKit `/rtc` dual peer connection path, unless a tested SDK needs it.
+- LiveKit `/rtc` dual peer connection path (no tested SDK needs it).
+- LiveKit `UpdateSubscription` (manual subscription), `TrackSubscribed`,
+  `SpeakersChanged` and data packets.
 - LiveKit server APIs: Twirp `RoomService`, Egress, Ingress, SIP service,
   the agent worker protocol, data tracks and the data blob store.
 - Video, simulcast, SVC and congestion control.
@@ -307,6 +309,15 @@ the two releases, `appup.exs`, and `scripts/upgrade_test.sh`.
   - `sfu/compat/python/`: the same test with the Python `livekit` rtc SDK
     (pinned version), run with `uv`. If this SDK needs `/rtc` dual peer
     connections, record that and add the `/rtc` path to the plan.
+
+Findings from the compatibility tests:
+
+- Browsers change the Opus `fmtp` between offers (`stereo=1`). The server
+  Opus codec has no `fmtp`, so `ex_webrtc` matches any Opus parameters.
+- `ex_webrtc` unselects a sender codec when a new remote description changes
+  its parameters, so the participant sets the codec again after each exchange.
+- The Rust-based SDKs send the token as `Authorization: Bearer`.
+- Both SDKs use `/rtc/v1` with one peer connection.
 
 **Commit:** `feat(sfu): accept LiveKit client SDKs`
 
@@ -453,4 +464,3 @@ the two releases, `appup.exs`, and `scripts/upgrade_test.sh`.
 ## Open Questions
 
 - Does `Membrane.Opus.Decoder.Native` expose packet loss concealment or FEC?
-- Which `livekit/protocol` commit and SDK versions do we pin first?

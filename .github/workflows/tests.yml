@@ -68,6 +68,32 @@ jobs:
       - run: mix format --check-formatted
       - run: mix test
 
+  # LiveKit client SDKs against the SFU: livekit-client in headless
+  # Chromium and the Python SDK.
+  sfu-livekit-compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: sfu
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: '29.1.2'
+          elixir-version: '1.20.4'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      # The version in mise.toml.
+      - run: python3 -m pip install --user uv==0.13.6
+      - run: mix deps.get
+      - run: mix compile
+      - run: npx --prefix compat/js playwright install-deps chromium-headless-shell || true
+      - run: compat/run.sh
+
   apps:
     runs-on: ubuntu-latest
     timeout-minutes: 30

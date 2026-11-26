@@ -1,0 +1,12 @@
+{
+  "name": "audioflow-sfu-livekit-js-compat",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node compat.mjs"
+  },
+  "devDependencies": {
+    "livekit-client": "2.24.0",
+    "playwright": "1.65.0"
+  }
+}

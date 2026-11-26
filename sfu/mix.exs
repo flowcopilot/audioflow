@@ -40,6 +40,8 @@ defmodule AudioFlowSFU.MixProject do
       {:bandit, "~> 1.5"},
       {:websock_adapter, "~> 0.5"},
       {:joken, "~> 2.8"},
+      # LiveKit signal protocol messages (lib/audio_flow_sfu/livekit/proto).
+      {:protobuf, "~> 0.17.1"},
       {:telemetry, "~> 1.3"}
     ]
   end

@@ -2,15 +2,23 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   @moduledoc """
   One client with one `ExWebRTC.PeerConnection` for publish and subscribe.
 
-  The server makes the first offer. It has one receive-only audio transceiver
-  when the client may publish, and one send-only transceiver for each
-  subscribed track. Later changes renegotiate with a new server offer. A
-  client offer is accepted only while no server offer waits for an answer;
-  otherwise it gets `{:error, :glare}` and the client must roll back.
+  The `:negotiation` option selects who offers:
+
+  - `:server` (AudioFlow JSON protocol). The server makes the first offer.
+    It has one receive-only audio transceiver when the client may publish,
+    and one send-only transceiver for each subscribed track. Later changes
+    renegotiate with a new server offer. A client offer is accepted only
+    while no server offer waits for an answer; otherwise it gets
+    `{:error, :glare}` and the client must roll back.
+  - `:client` (LiveKit protocol v1, one peer connection). The client makes
+    every offer. The server sends subscribed tracks on the client's
+    receive-only audio sections. When it needs more sections, or a changed
+    mapping, it sends `{:media_sections, count}` and the client offers again.
 
   Events for the owner (`{AudioFlowSFU.Participant, pid, event}`):
   `{:offer, sdp_json, mids}` (`mids` maps each SDP mid to a track SID),
   `{:candidate, json}`, `:connected`, `{:track_published, track}`,
+  `{:media_sections, count}` (client negotiation only),
   `{:participant_joined, info}`, `{:participant_updated, info}`,
   `{:participant_left, info}`, and `{:closed, reason}` before it stops.
 
@@ -35,18 +43,20 @@ defmodule AudioFlowSFU.Participant.WebRTC do
 
   @vsn 1
 
+  # No fmtp: ex_webrtc then accepts any Opus parameters (browsers add
+  # `stereo=1` or `usedtx=1`), and the client's own fmtp governs what it sends.
   @opus %RTPCodecParameters{
     payload_type: 111,
     mime_type: "audio/opus",
     clock_rate: 48_000,
-    channels: 2,
-    sdp_fmtp_line: %ExSDP.Attribute.FMTP{pt: 111, minptime: 10, useinbandfec: true}
+    channels: 2
   }
   @pcmu %RTPCodecParameters{payload_type: 0, mime_type: "audio/PCMU", clock_rate: 8000}
 
   @doc """
   Starts and joins a participant for verified `grants`. Options: `:owner`
-  (required), `:ice_servers`, `:auto_subscribe` (true), `:away_timeout_ms`.
+  (required), `:ice_servers`, `:auto_subscribe` (true), `:away_timeout_ms`,
+  `:negotiation` (`:server` or `:client`).
   Returns the participant PID and
   `%{participant: info, others: [info], ice_servers: list, resume_token: binary}`.
   """
@@ -68,8 +78,18 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   Gives a running participant to a new owner. The identity must match the
   token of the new connection. Returns the same result as `start/2`.
   """
-  def resume(resume_token, identity, owner) do
-    case Registry.lookup(AudioFlowSFU.Registry, {:resume, resume_token}) do
+  def resume(resume_token, identity, owner),
+    do: resume_key({:resume, resume_token}, identity, owner)
+
+  @doc """
+  Resumes by participant SID, as a LiveKit client reconnect does. The token
+  of the new connection must have the same identity.
+  """
+  def resume_participant(sid, identity, owner),
+    do: resume_key({:participant, sid}, identity, owner)
+
+  defp resume_key(key, identity, owner) do
+    case Registry.lookup(AudioFlowSFU.Registry, key) do
       [{pid, _}] ->
         case GenServer.call(pid, {:resume, identity, owner}) do
           {:ok, join} -> {:ok, pid, join}
@@ -92,6 +112,14 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   def answer(pid, json), do: GenServer.call(pid, {:answer, json})
   def candidate(pid, json), do: GenServer.call(pid, {:candidate, json})
   def mute(pid, track_sid, muted?), do: GenServer.call(pid, {:mute, track_sid, muted?})
+
+  @doc """
+  Announces a track that the client will send (LiveKit `AddTrackRequest`).
+  `cid` is the client track ID in the SDP `msid`. Returns the track info.
+  """
+  def add_track(pid, cid, name, muted? \\ false),
+    do: GenServer.call(pid, {:add_track, cid, name, muted?})
+
   def leave(pid), do: GenServer.call(pid, :leave)
 
   @impl true
@@ -113,6 +141,8 @@ defmodule AudioFlowSFU.Participant.WebRTC do
     info = Participant.info(grants)
     resume_token = Base.url_encode64(:crypto.strong_rand_bytes(24), padding: false)
     {:ok, _} = Registry.register(AudioFlowSFU.Registry, {:resume, resume_token}, nil)
+    {:ok, _} = Registry.register(AudioFlowSFU.Registry, {:participant, info.sid}, nil)
+    negotiation = Keyword.get(options, :negotiation, :server)
 
     case Room.join(grants.room, info, self()) do
       {:ok, room, others} ->
@@ -141,8 +171,16 @@ defmodule AudioFlowSFU.Participant.WebRTC do
           subscribers: %{},
           # Track SID => %{publisher, publisher_sid, track, sender, mime_type, ready}.
           subscriptions: %{},
+          negotiation: negotiation,
           negotiating: false,
           renegotiate: false,
+          # Client negotiation: SDP mid => client track ID from `msid`.
+          remote_msids: %{},
+          # Client negotiation: announced tracks, client track ID => track info.
+          pending_tracks: %{},
+          # Client negotiation: a request for a new client offer is open. The
+          # first client offer comes on its own after the join.
+          sections_requested: negotiation == :client,
           ice_restart: false,
           # The last server offer, sent again to a resumed owner.
           pending_offer: nil,
@@ -150,12 +188,14 @@ defmodule AudioFlowSFU.Participant.WebRTC do
           members: Map.new(others, fn {info, pid} -> {info.sid, {info, pid}} end)
         }
 
-        if grants.can_publish,
-          do: {:ok, _} = PeerConnection.add_transceiver(pc, :audio, direction: :recvonly)
+        if negotiation == :server do
+          if grants.can_publish,
+            do: {:ok, _} = PeerConnection.add_transceiver(pc, :audio, direction: :recvonly)
 
-        # The data channel keeps one media section in every offer, so a client
-        # with nothing to send or receive yet still connects.
-        {:ok, _} = PeerConnection.create_data_channel(pc, "_reliable")
+          # The data channel keeps one media section in every offer, so a
+          # client with nothing to send or receive yet still connects.
+          {:ok, _} = PeerConnection.create_data_channel(pc, "_reliable")
+        end
 
         {:ok, state, {:continue, :subscribe}}
 
@@ -173,6 +213,9 @@ defmodule AudioFlowSFU.Participant.WebRTC do
     {:noreply, negotiate(state)}
   end
 
+  # Client negotiation checks after each client offer whether a subscription
+  # still has no section.
+  def handle_continue(:next, %{negotiation: :client} = state), do: {:noreply, negotiate(state)}
   def handle_continue(:next, %{renegotiate: true} = state), do: {:noreply, negotiate(state)}
   def handle_continue(:next, state), do: {:noreply, state}
 
@@ -195,8 +238,21 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   def handle_call({:resume, _, _}, _from, state),
     do: {:reply, {:error, :identity_mismatch}, state}
 
+  def handle_call(:restart_ice, _from, %{negotiation: :client} = state),
+    do: {:reply, {:error, :client_negotiates}, state}
+
   def handle_call(:restart_ice, _from, state),
     do: {:reply, :ok, negotiate(%{state | ice_restart: true})}
+
+  def handle_call({:add_track, cid, name, muted?}, _from, state)
+      when is_binary(cid) and is_binary(name) do
+    if state.grants.can_publish do
+      track = %{Participant.track(@opus.mime_type, name) | muted: muted?}
+      {:reply, {:ok, track}, %{state | pending_tracks: Map.put(state.pending_tracks, cid, track)}}
+    else
+      {:reply, {:error, :not_allowed}, state}
+    end
+  end
 
   def handle_call({:offer, json}, _from, %{negotiating: true} = state) when is_map(json),
     do: {:reply, {:error, :glare}, state}
@@ -204,6 +260,7 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   def handle_call({:offer, json}, _from, state) do
     with {:ok, offer} <- description(json, "offer"),
          :ok <- PeerConnection.set_remote_description(state.pc, offer),
+         state = client_offer(state, offer),
          {:ok, answer} <- PeerConnection.create_answer(state.pc),
          :ok <- PeerConnection.set_local_description(state.pc, answer) do
       state = ready_subscriptions(state)
@@ -290,7 +347,12 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   # participant waits.
   def handle_info({:ex_webrtc, pc, {:connection_state_change, :failed}}, %{pc: pc} = state) do
     state = %{state | connection: :failed}
-    state = if state.owner, do: negotiate(%{state | ice_restart: true}), else: state
+
+    state =
+      if state.owner && state.negotiation == :server,
+        do: negotiate(%{state | ice_restart: true}),
+        else: state
+
     {:noreply, health(state)}
   end
 
@@ -408,6 +470,19 @@ defmodule AudioFlowSFU.Participant.WebRTC do
 
   ## Negotiation
 
+  # Client negotiation: asks for a new client offer when a subscription has
+  # no media section yet, or a section changed its track.
+  defp negotiate(%{negotiation: :client} = state) do
+    missing = Enum.count(state.subscriptions, fn {_, sub} -> sub.transceiver == nil end)
+
+    if (missing > 0 or state.renegotiate) and not state.sections_requested do
+      Participant.notify(state.owner, {:media_sections, missing})
+      %{state | sections_requested: true, renegotiate: false}
+    else
+      state
+    end
+  end
+
   # The client answered or offered: send the next server offer if a change
   # waited for the exchange to finish.
   defp negotiate(%{negotiating: true} = state), do: %{state | renegotiate: true}
@@ -422,6 +497,50 @@ defmodule AudioFlowSFU.Participant.WebRTC do
     else
       _ -> %{state | renegotiate: true}
     end
+  end
+
+  # Client negotiation: records the client track IDs and puts pending
+  # subscriptions on the free receive-only audio sections of the offer.
+  defp client_offer(%{negotiation: :server} = state, _offer), do: state
+
+  defp client_offer(state, offer) do
+    media =
+      for m <- ExSDP.parse!(offer.sdp).media, {:mid, mid} = ExSDP.get_attribute(m, :mid) do
+        msid = List.first(ExSDP.get_attributes(m, ExSDP.Attribute.MSID))
+        direction = Enum.find(m.attributes, &(&1 in [:sendonly, :recvonly, :sendrecv, :inactive]))
+        {mid, %{type: m.type, direction: direction, cid: msid && msid.app_data}}
+      end
+      |> Map.new()
+
+    used =
+      for {_, %{transceiver: id}} <- state.subscriptions, id != nil, into: MapSet.new(), do: id
+
+    free =
+      for tr <- PeerConnection.get_transceivers(state.pc),
+          match?(%{type: :audio, direction: :recvonly}, media[tr.mid]),
+          tr.id not in used,
+          do: tr
+
+    {subscriptions, _} =
+      Enum.reduce(state.subscriptions, {state.subscriptions, free}, fn
+        {sid, %{transceiver: nil} = sub}, {subs, [tr | rest]} ->
+          :ok = PeerConnection.set_transceiver_direction(state.pc, tr.id, :sendonly)
+          :ok = PeerConnection.replace_track(state.pc, tr.sender.id, sub.track)
+          sub = %{sub | transceiver: tr.id, sender: tr.sender.id}
+          {Map.put(subs, sid, sub), rest}
+
+        _, acc ->
+          acc
+      end)
+
+    remote_msids = for {mid, %{cid: cid}} <- media, cid != nil, into: %{}, do: {mid, cid}
+
+    %{
+      state
+      | subscriptions: subscriptions,
+        remote_msids: remote_msids,
+        sections_requested: false
+    }
   end
 
   defp description(%{"type" => type, "sdp" => sdp} = json, type)
@@ -447,12 +566,21 @@ defmodule AudioFlowSFU.Participant.WebRTC do
 
   defp publish(state, track) do
     mime = receive_mime(state.pc, track.id)
-    published = Participant.track(mime)
+    {announced, pending} = Map.pop(state.pending_tracks, client_track_id(state, track.id))
+    published = %{(announced || Participant.track(mime)) | mime_type: mime}
+    state = %{state | pending_tracks: pending}
     Participant.notify(state.owner, {:track_published, published})
     Telemetry.track(:publish, published, state.info, state.grants.room)
 
     state = %{state | published: Map.put(state.published, track.id, published.sid)}
     update_info(state, %{state.info | tracks: state.info.tracks ++ [published]})
+  end
+
+  defp client_track_id(state, track_id) do
+    PeerConnection.get_transceivers(state.pc)
+    |> Enum.find_value(fn tr ->
+      if tr.receiver.track.id == track_id, do: Map.get(state.remote_msids, tr.mid)
+    end)
   end
 
   defp receive_mime(pc, track_id) do
@@ -463,6 +591,7 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   end
 
   defp update_info(state, info) do
+    info = %{info | version: info.version + 1}
     Room.update(state.room, info)
     %{state | info: info}
   end
@@ -499,15 +628,28 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   end
 
   defp subscribe(state, info, track, pid) do
-    out = MediaStreamTrack.new(:audio, [info.sid])
-    {:ok, sender} = PeerConnection.add_track(state.pc, out)
+    # LiveKit clients read "<participant SID>|<track SID>" from the stream ID.
+    out = MediaStreamTrack.new(:audio, ["#{info.sid}|#{track.sid}"])
     Participant.subscribe(pid, track.sid)
+
+    # Server negotiation adds a transceiver now; client negotiation waits for
+    # a free section in the next client offer.
+    {sender, transceiver} =
+      case state.negotiation do
+        :server ->
+          {:ok, sender} = PeerConnection.add_track(state.pc, out)
+          {sender.id, :added}
+
+        :client ->
+          {nil, nil}
+      end
 
     sub = %{
       publisher: pid,
       publisher_sid: info.sid,
       track: out,
-      sender: sender.id,
+      sender: sender,
+      transceiver: transceiver,
       mime_type: track.mime_type,
       ready: false
     }
@@ -518,8 +660,23 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   defp unsubscribe(state, sid) do
     {sub, subscriptions} = Map.pop(state.subscriptions, sid)
     Participant.unsubscribe(sub.publisher, sid)
-    PeerConnection.remove_track(state.pc, sub.sender)
-    %{state | subscriptions: subscriptions}
+    state = %{state | subscriptions: subscriptions}
+
+    case {state.negotiation, sub.transceiver} do
+      {:server, _} ->
+        PeerConnection.remove_track(state.pc, sub.sender)
+        state
+
+      {:client, nil} ->
+        state
+
+      # The section becomes free for a later subscription. The client must
+      # offer again to learn that it is inactive.
+      {:client, transceiver} ->
+        PeerConnection.replace_track(state.pc, sub.sender, nil)
+        PeerConnection.set_transceiver_direction(state.pc, transceiver, :inactive)
+        %{state | renegotiate: true}
+    end
   end
 
   # Settles membership after a room restart: members that left while the
@@ -564,15 +721,15 @@ defmodule AudioFlowSFU.Participant.WebRTC do
     end)
   end
 
-  # After an exchange, each negotiated send-only transceiver can carry RTP
-  # with the publisher's codec.
+  # After each exchange, every negotiated send-only transceiver gets the
+  # publisher's codec again: ex_webrtc unselects a sender codec when a new
+  # remote description changes its parameters (for example `stereo=1`).
   defp ready_subscriptions(state) do
     transceivers = PeerConnection.get_transceivers(state.pc)
 
     subscriptions =
-      Map.new(state.subscriptions, fn
-        {sid, %{ready: false} = sub} -> {sid, ready(state.pc, sub, transceivers)}
-        entry -> entry
+      Map.new(state.subscriptions, fn {sid, sub} ->
+        {sid, ready(state.pc, sub, transceivers)}
       end)
 
     %{state | subscriptions: subscriptions}

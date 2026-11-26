@@ -3,7 +3,8 @@ defmodule AudioFlowSFU.Participant do
   Shared participant model and the messages between participant processes.
 
   Participant info is a map with `:sid`, `:identity`, `:name`, `:metadata`,
-  `:kind`, `:state` (`:active` or `:away`) and `:tracks`. A track is a map
+  `:kind`, `:state` (`:active` or `:away`), `:joined_at`, `:version`,
+  `:permission` and `:tracks`. A track is a map
   with `:sid`, `:type` (`:audio`), `:source`, `:name`, `:mime_type` and
   `:muted`. The signaling modules encode these maps on the wire.
 
@@ -33,6 +34,13 @@ defmodule AudioFlowSFU.Participant do
       kind: grants.kind,
       state: :active,
       joined_at: System.system_time(:second),
+      # Increases with each change; LiveKit clients ignore older versions.
+      version: 1,
+      permission: %{
+        can_publish: grants.can_publish,
+        can_subscribe: grants.can_subscribe,
+        can_publish_data: grants.can_publish_data
+      },
       tracks: []
     }
   end
