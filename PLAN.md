@@ -402,16 +402,23 @@ Findings from the compatibility tests:
 
 ### Phase 10: Rejoin, leases and drain
 
-- Add `AudioFlow.Calls.Claimer` (`lease_ms` default 10 000). It renews local
-  leases and claims expired ones. A claimed call restarts its `Call` process
+- Add `AudioFlow.Calls` (a supervisor with the options) and
+  `AudioFlow.Calls.Claimer` (`lease_ms` default 10 000). It renews local
+  leases, stops calls whose lease another node took, and claims expired ones.
+  `AudioFlow.Agent.module/1` accepts only names of modules on the code path. A claimed call restarts its `Call` process
   with `:restore` and rejoins with the stored resume token.
 - Add `:interrupted_turn` (`:drop` default, `:retry_input`),
-  `:retry_window_ms`, and an optional `:resume_prompt` text.
-- Add `prep_stop/1` drain in `AudioFlow.Application` with `:drain_timeout_ms`.
-- Tests: kill an agent `:peer` node in the middle of a call. A second node
-  claims it within `lease_ms + 2 s`, the client peer connection stays the
-  same, and the next turn uses the stored history. A drained stop hands over
-  in less than one renewal interval. A stale owner write fails on `version`.
+  `:retry_window_ms`, and an optional `:resume_input` text that the session
+  gets as user input after a move (for example, an instruction to say that
+  the agent is back).
+- Add `prep_stop/1` drain in `AudioFlow.Application` with `:drain_timeout_ms`,
+  and `AudioFlow.idle?/1` to wait for a running turn.
+- Tests in `releases/test/durable_call_test.exs` (agents on `:peer` nodes):
+  kill an agent node in the middle of a call. A second node claims it within
+  `lease_ms + 3 s`, the user connection stays the same, and the next turn
+  uses the stored history. A drained stop hands over faster than the lease.
+  An interrupted input is retried. A stale owner write fails on `version`
+  (`test/calls_test.exs`).
 
 **Commit:** `feat(calls): rejoin calls after node restarts and drain on deploy`
 

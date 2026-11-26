@@ -14,14 +14,19 @@ defmodule AudioFlow.Agent do
   @callback session_options(call :: map()) :: keyword()
   @callback participant_options(call :: map()) :: keyword()
 
-  @doc "The agent module of a call record. Only loaded modules are accepted."
+  @doc """
+  The agent module of a call record. The name must be a module on the code
+  path that implements this behaviour; a name from storage never creates
+  other atoms.
+  """
   def module(%{agent: name}) when is_binary(name) do
-    module = String.to_existing_atom(name)
-
-    if Code.ensure_loaded?(module) and function_exported?(module, :session_options, 1),
-      do: {:ok, module},
-      else: {:error, {:unknown_agent, name}}
-  rescue
-    ArgumentError -> {:error, {:unknown_agent, name}}
+    with true <- String.starts_with?(name, "Elixir."),
+         path when is_list(path) <- :code.where_is_file(String.to_charlist(name <> ".beam")),
+         module = String.to_atom(name),
+         true <- Code.ensure_loaded?(module) and function_exported?(module, :session_options, 1) do
+      {:ok, module}
+    else
+      _ -> {:error, {:unknown_agent, name}}
+    end
   end
 end

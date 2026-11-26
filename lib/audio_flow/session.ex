@@ -230,6 +230,9 @@ defmodule AudioFlow.Session do
 
   def handle_call(:clear_history, _from, state), do: {:reply, {:error, :busy}, state}
 
+  def handle_call(:idle?, _from, state),
+    do: {:reply, state.active == nil and state.candidate == nil, state}
+
   def handle_call(:conversation_state, _from, state) do
     {:reply,
      if(state.conversation,

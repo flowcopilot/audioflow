@@ -86,11 +86,11 @@
 
 ## Phase 10: Rejoin, leases and drain
 
-- [ ] `AudioFlow.Calls.Claimer` (`lease_ms` 10 000, renew, claim with `FOR UPDATE SKIP LOCKED`)
-- [ ] `:interrupted_turn` (`:drop`, `:retry_input`), `:retry_window_ms`, `:resume_prompt`
-- [ ] `AudioFlow.Application.prep_stop/1` drain with `:drain_timeout_ms`
-- [ ] Tests: agent node kill and claim within `lease_ms + 2 s`; drain handover; stale `version` write fails
-- [ ] Commit: `feat(calls): rejoin calls after node restarts and drain on deploy`
+- [x] `AudioFlow.Calls` and `AudioFlow.Calls.Claimer` (`lease_ms` 10 000, renew every third, claim with `FOR UPDATE SKIP LOCKED`, stop calls whose lease another node took)
+- [x] `:interrupted_turn` (`:drop`, `:retry_input`), `:retry_window_ms`, `:resume_input` (renamed from `:resume_prompt`: text submitted as user input after a move)
+- [x] `AudioFlow.Application.prep_stop/1` drain with `:drain_timeout_ms`; `AudioFlow.idle?/1`
+- [x] Tests (`releases/test/durable_call_test.exs`): agent node kill and claim within `lease_ms + 3 s` with history; drain handover faster than the lease; retry of an interrupted input. Stale `version` writes: `test/calls_test.exs`
+- [x] Commit: `feat(calls): rejoin calls after node restarts and drain on deploy`
 
 ## Phase 11: Telephony participants in rooms
 
