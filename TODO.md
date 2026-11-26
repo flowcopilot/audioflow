@@ -67,13 +67,13 @@
 
 ## Phase 8: AudioFlow sessions as room participants
 
-- [ ] Check whether `Membrane.Opus.Decoder.Native` has packet loss concealment; record the result in `PLAN.md`
-- [ ] `AUDIOFLOW_SFU=1` flag, `lib_sfu`, `_sfu` build profile, `membrane_opus_plugin`
-- [ ] `AudioFlow.SFU.Participant` (reorder, Opus decode, resample, VoiceInput, session)
-- [ ] `AudioFlow.SFU.Transport` (`AudioFlow.Output`, `AudioFlow.PausableOutput`, paced Opus RTP)
-- [ ] Lost packets use concealment or silence; the call does not end
-- [ ] Tests: WebRTC test client and `livekit-client` get the demo reply through the room
-- [ ] Commit: `feat(sfu): run AudioFlow sessions as room participants`
+- [x] Check whether `Membrane.Opus.Decoder.Native` has packet loss concealment (it does not: `decode_packet/2` needs a packet)
+- [x] `AUDIOFLOW_SFU=1` flag, `lib_sfu`, `_sfu` build profile, `membrane_opus_plugin`
+- [x] `AudioFlow.SFU.Participant` (reorder, Opus or PCMU decode, resample, VoiceInput, session)
+- [x] `AudioFlow.SFU.Transport` (`AudioFlow.Output`, paced 20 ms Opus RTP maps; no `PausableOutput`, as for `WebRTC.Transport`)
+- [x] Lost packets become 20 ms of silence after the gap timeout; the call does not end
+- [x] Tests: stub-SFU unit tests (`test/sfu_participant_test.exs`) and a real call in `releases/test/agent_call_test.exs` (the livekit-client run with an agent is in the Phase 12 example)
+- [x] Commit: `feat(sfu): run AudioFlow sessions as room participants`
 
 ## Phase 9: Durable call state
 

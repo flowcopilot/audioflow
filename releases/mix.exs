@@ -5,7 +5,10 @@ defmodule AudioFlowReleases.MixProject do
   #   audio_flow_sfu  the SFU alone, the production artifact
   #   audio_flow_dev  the SFU and AudioFlow on one node, for development only
   #                   (an agent restart there also stops the SFU). Build it
-  #                   with AUDIOFLOW_DEV_RELEASE=1, which adds :audio_flow.
+  #                   with AUDIOFLOW_SFU=1, which adds :audio_flow with its
+  #                   room participant (lib_sfu).
+  # The tests in test/ run calls across the SFU and AudioFlow agents; they
+  # also need AUDIOFLOW_SFU=1.
   # Set CASTLE_UPGRADE_FROM to a comma-separated list of baselines, such as
   # "tar:artifacts/audio_flow_sfu-0.1.0.tar.gz", to add a relup.
   def project do
@@ -16,18 +19,25 @@ defmodule AudioFlowReleases.MixProject do
       appup: "appup.exs",
       compilers: Mix.compilers() ++ [:appup],
       deps: deps(),
+      elixirc_paths: elixirc_paths(Mix.env()),
       releases: releases()
     ]
   end
 
   def application, do: [extra_applications: [:logger]]
 
+  # The tests reuse the SFU test clients.
+  defp elixirc_paths(:test),
+    do: ["lib", "test/support", Path.expand("../sfu/test/support", __DIR__)]
+
+  defp elixirc_paths(_), do: ["lib"]
+
   defp deps do
     [
       {:audio_flow_sfu, path: "../sfu"},
       {:castle, "~> 1.3"}
     ] ++
-      if(System.get_env("AUDIOFLOW_DEV_RELEASE") == "1",
+      if(System.get_env("AUDIOFLOW_SFU") == "1",
         do: [{:audio_flow, path: ".."}],
         else: []
       )

@@ -68,6 +68,28 @@ jobs:
       - run: mix format --check-formatted
       - run: mix test
 
+  # Calls across the SFU and AudioFlow agents (releases/test), and the
+  # AudioFlow room participant with a stub SFU.
+  agent-calls:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AUDIOFLOW_SFU: '1'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: '29.1.2'
+          elixir-version: '1.20.4'
+      - run: mix deps.get
+      - run: mix test test/sfu_participant_test.exs test/rtp_reorder_test.exs
+      - run: mix deps.get
+        working-directory: releases
+      - run: mix test
+        working-directory: releases
+
   # LiveKit client SDKs against the SFU: livekit-client in headless
   # Chromium and the Python SDK.
   sfu-livekit-compat:

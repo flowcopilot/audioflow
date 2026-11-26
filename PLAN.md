@@ -364,14 +364,15 @@ Findings from the compatibility tests:
 
 - Add the `AUDIOFLOW_SFU=1` flag and `lib_sfu` to `mix.exs`, with a `_sfu`
   build profile suffix and `membrane_opus_plugin`.
-- Add `AudioFlow.SFU.Participant` and `AudioFlow.SFU.Transport`. Opus packet
-  loss uses decoder packet loss concealment if
-  `Membrane.Opus.Decoder.Native` supports it. If not, insert silence for each
-  lost 20 ms frame. The call does not end, unlike `AudioFlow.WebRTC.Session`.
+- Add `AudioFlow.SFU.Participant` and `AudioFlow.SFU.Transport`.
+  `Membrane.Opus.Decoder.Native` has no packet loss concealment, so each lost
+  20 ms frame becomes silence. The call does not end, unlike
+  `AudioFlow.WebRTC.Session`.
 - Speech start cancels output (as in `WebRTC.Session.handle_voice_event/2`).
-- Tests: an SFU on a `:peer` node, a WebRTC test client that publishes an
-  Opus fixture, and an AudioFlow session with the demo adapters that answers
-  through the room. Repeat with the `livekit-client` compatibility test.
+- Tests: a stub SFU in `test/support/sfu_stub.ex` for the agent side, and a
+  real call in `releases/test/agent_call_test.exs`: the SFU, a WebRTC test
+  client that publishes Opus, and an AudioFlow agent that answers through
+  the room. The `releases/` tests reuse the SFU test clients.
 
 **Commit:** `feat(sfu): run AudioFlow sessions as room participants`
 
@@ -467,5 +468,3 @@ Findings from the compatibility tests:
   `audio_flow_dev` runs both on one node for development and is not durable.
 
 ## Open Questions
-
-- Does `Membrane.Opus.Decoder.Native` expose packet loss concealment or FEC?
