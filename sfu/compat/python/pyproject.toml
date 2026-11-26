@@ -6,3 +6,5 @@ dependencies = ["livekit==1.2.1", "numpy>=2"]
 
 [tool.uv]
 package = false
+# Resolve only releases at least two weeks old.
+exclude-newer = "14 days"
