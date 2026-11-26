@@ -45,6 +45,8 @@ defmodule AudioFlowSFU.MixProject do
       {:joken, "~> 2.8"},
       # LiveKit signal protocol messages (lib/audio_flow_sfu/livekit/proto).
       {:protobuf, "~> 0.17.1"},
+      # Decodes agent Opus to 8 kHz for phone calls (Signaling.Telephony).
+      {:membrane_opus_plugin, "~> 0.21.0"},
       {:telemetry, "~> 1.3"},
       {:castle, "~> 1.3", runtime: false}
     ]

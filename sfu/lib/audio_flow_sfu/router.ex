@@ -1,7 +1,8 @@
 defmodule AudioFlowSFU.Router do
   @moduledoc """
-  HTTP endpoint: `/ws` for the AudioFlow JSON signaling protocol, and
-  `/rtc/v1` for LiveKit client SDKs.
+  HTTP endpoint: `/ws` for the AudioFlow JSON signaling protocol, `/rtc/v1`
+  for LiveKit client SDKs, and `/telephony/twilio` and `/telephony/telnyx`
+  for phone media streams.
   """
   use Plug.Router
 
@@ -38,6 +39,24 @@ defmodule AudioFlowSFU.Router do
       {:error, reason} ->
         send_resp(conn, 401, Atom.to_string(reason))
     end
+  end
+
+  # Twilio and Telnyx Media Streams. The token is checked at the start message.
+  get "/telephony/:provider" when provider in ["twilio", "telnyx"] do
+    conn = fetch_query_params(conn)
+
+    options = %{
+      provider: String.to_existing_atom(provider),
+      token: conn.query_params["access_token"],
+      keys: Application.fetch_env!(:audio_flow_sfu, :api_keys)
+    }
+
+    conn
+    |> WebSockAdapter.upgrade(Signaling.Telephony, options,
+      timeout: 60_000,
+      max_frame_size: 131_072
+    )
+    |> halt()
   end
 
   # LiveKit client protocol v1. Clients fall back to /rtc (two peer

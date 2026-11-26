@@ -94,10 +94,11 @@
 
 ## Phase 11: Telephony participants in rooms
 
-- [ ] `AudioFlowSFU.Participant.Telephony` for Twilio and Telnyx Media Streams
-- [ ] `AudioFlow.SFU.Participant` accepts PCMU tracks
-- [ ] Test: phone call stays connected during an agent node restart
-- [ ] Commit: `feat(sfu): bridge telephony media streams into rooms`
+- [x] Decide: copy the telephony codec into `sfu/` or make a shared package (copied: a pure Elixir μ-law encoder; Opus is decoded at 8 kHz with `membrane_opus_plugin`)
+- [x] `AudioFlowSFU.Signaling.Telephony` for Twilio and Telnyx Media Streams, as a native participant of kind `:sip`
+- [x] `AudioFlow.SFU.Participant` accepts PCMU tracks
+- [x] Test: phone call and agent hear each other; the phone call stays connected while the agent stops and a new one resumes
+- [x] Commit: `feat(sfu): bridge telephony media streams into rooms`
 
 ## Phase 12: Example and documentation
 

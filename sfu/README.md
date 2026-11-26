@@ -28,6 +28,13 @@ This application does not depend on `:audio_flow`. Run it as its own release.
   connect with a LiveKit URL and token. The server reports protocol 17, so
   clients open data channels in-band. The two-connection path `/rtc` is not
   supported.
+- `AudioFlowSFU.Signaling.Telephony` takes Twilio and Telnyx Media Streams
+  at `/telephony/twilio` and `/telephony/telnyx`. The phone call joins as a
+  participant of kind `sip` with a PCMU track. Opus from the other members is
+  decoded at 8 kHz and sent back as μ-law. Twilio passes the token as the
+  `access_token` custom parameter of `<Stream>`.
+- `AudioFlowSFU.Native` lets BEAM processes, such as AudioFlow agents on
+  other nodes, join rooms over Erlang distribution.
 
 A dropped signaling socket does not end the session. The participant waits
 for `away_timeout_ms` (30 s) for a resume: `&resume=<token>` in the JSON

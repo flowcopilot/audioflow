@@ -186,8 +186,8 @@ SFU (`sfu/`, app `:audio_flow_sfu`):
   `PeerConnection.create_offer(pc, ice_restart: true)`, in-band data
   channels).
 - `AudioFlowSFU.Participant.Native` (agent participants over distribution).
-- `AudioFlowSFU.Participant.Telephony` (Twilio and Telnyx Media Streams as a
-  PCMU track).
+- `AudioFlowSFU.Signaling.Telephony` (Twilio and Telnyx Media Streams as a
+  native participant with a PCMU track).
 - `AudioFlowSFU.Signaling.JSON` (WebSock: `join`, `offer`, `answer`,
   `candidate`, `resume`, `leave`, room events).
 - `AudioFlowSFU.Signaling.LiveKit` (WebSock at `/rtc/v1`, `SignalRequest` and
@@ -424,13 +424,18 @@ Findings from the compatibility tests:
 
 ### Phase 11: Telephony participants in rooms
 
-- Add `AudioFlowSFU.Participant.Telephony`. It ends Twilio and Telnyx Media
-  Streams WebSockets in the SFU and publishes PCMU as a track. Copy the
-  framing and μ-law rules from `AudioFlow.Telephony.WebSocket` and
-  `AudioFlow.Telephony.MuLaw`, because the SFU does not depend on AudioFlow.
+- Add `AudioFlowSFU.Signaling.Telephony` at `/telephony/twilio` and
+  `/telephony/telnyx`. The socket process joins with `AudioFlowSFU.Native` as
+  a participant of kind `:sip` and publishes the caller's μ-law as a PCMU
+  track. It decodes the Opus of other members at 8 kHz
+  (`membrane_opus_plugin`) and sends μ-law back with a small pure Elixir
+  G.711 encoder, because the SFU does not depend on AudioFlow. Twilio does
+  not allow query parameters in a stream URL, so the token can also come as
+  the `access_token` custom parameter of the `start` message.
 - `AudioFlow.SFU.Participant` accepts PCMU tracks with
   `AudioFlow.Telephony.MuLaw` and `AudioFlow.Telephony.RateConverter`.
-- Tests: a phone call stays connected while the agent node restarts.
+- Tests: a phone call and an agent hear each other, and the phone call stays
+  connected while the agent stops and a new one resumes.
 
 **Commit:** `feat(sfu): bridge telephony media streams into rooms`
 
