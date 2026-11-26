@@ -33,11 +33,19 @@ defmodule AudioFlow.Session do
   Audio from nodes without targets goes to the `:output` transport. Context limits count UTF-8 text
   bytes, not tokens. Failed turns do not change saved history. Cancelled turns
   retain only complete reply chunks covered by explicit playback acknowledgements.
+  Durable calls: `:restore` takes `%{history: [{user, assistant}],
+  conversation_state: name, turns: count}` from an earlier session, and
+  `:on_commit` is a one-argument function that gets the same map each time the
+  saved history or conversation state changes (a completed turn, the heard
+  part of a cancelled turn, a cleared history or a transition between turns).
+  It runs in the session process, so it must return quickly; send the
+  snapshot to another process. An exception in it is logged and ignored.
   The session stops when its owner exits. Interrupted turns cannot deliver
   further output. Cancellation stops the caller task, but an inference engine
   may still finish a batch already submitted to shared hardware.
   """
   use GenServer, restart: :temporary
+  require Logger
   alias AudioFlow.Adapter
   alias AudioFlow.Audio
   alias AudioFlow.Graph.Conversation
@@ -60,6 +68,13 @@ defmodule AudioFlow.Session do
   @doc "Session resource limits:\n\n" <> NimbleOptions.docs(@limits_schema)
   def start_link(options), do: GenServer.start_link(__MODULE__, options)
 
+  # State version for hot code upgrades. Bump it when the state shape changes,
+  # and migrate the old state in code_change/3 (see the hot-upgrades guide).
+  @vsn 1
+
+  @impl true
+  def code_change(_old_vsn, state, _extra), do: {:ok, state}
+
   @impl true
   def init(options) do
     Process.flag(:trap_exit, true)
@@ -74,7 +89,7 @@ defmodule AudioFlow.Session do
     telemetry = %{session: self(), owner: owner, graph?: graph != nil}
 
     {:ok,
-     %{
+     restore(Keyword.get(options, :restore), %{
        telemetry: telemetry,
        telemetry_started: Telemetry.session_start(telemetry),
        turns: 0,
@@ -85,6 +100,7 @@ defmodule AudioFlow.Session do
        conversation: Keyword.get(options, :conversation),
        limits: limits,
        history: History.new(Keyword.get(options, :history, false)),
+       on_commit: Keyword.get(options, :on_commit),
        output: Keyword.get(options, :output),
        output_turn: nil,
        playback_history: nil,
@@ -92,7 +108,7 @@ defmodule AudioFlow.Session do
        held: nil,
        pending_result: nil,
        active: nil
-     }}
+     })}
   end
 
   defp validate_speech!(speech, graph, options) do
@@ -208,9 +224,14 @@ defmodule AudioFlow.Session do
     do: {:reply, {:error, :stale_control}, state}
 
   def handle_call(:clear_history, _from, %{active: nil, candidate: nil} = state),
-    do: {:reply, :ok, %{state | history: History.clear(state.history), playback_history: nil}}
+    do:
+      {:reply, :ok,
+       commit(state, %{state | history: History.clear(state.history), playback_history: nil})}
 
   def handle_call(:clear_history, _from, state), do: {:reply, {:error, :busy}, state}
+
+  def handle_call(:idle?, _from, state),
+    do: {:reply, state.active == nil and state.candidate == nil, state}
 
   def handle_call(:conversation_state, _from, state) do
     {:reply,
@@ -225,12 +246,12 @@ defmodule AudioFlow.Session do
 
     case flow && Conversation.transition(flow, event) do
       {:ok, next} ->
-        state =
+        new =
           if state.active,
             do: put_in(state.active.conversation, next),
             else: %{state | conversation: next, graph: Conversation.plan(next)}
 
-        {:reply, :ok, state}
+        {:reply, :ok, commit(state, new)}
 
       nil ->
         {:reply, {:error, :no_conversation}, state}
@@ -284,16 +305,16 @@ defmodule AudioFlow.Session do
   def handle_call({:speech_checkpoint, _}, _from, state),
     do: {:reply, {:error, :stale_turn}, state}
 
-  def handle_call(:cancel, _from, %{active: nil} = state) do
-    state = clear_candidate(state)
+  def handle_call(:cancel, _from, %{active: nil} = old) do
+    state = clear_candidate(old)
     state = retain_heard(state, state.playback_history)
-    {:reply, flush_output(state), %{state | playback_history: nil}}
+    {:reply, flush_output(state), commit(old, %{state | playback_history: nil})}
   end
 
-  def handle_call(:cancel, _from, state) do
-    state = clear_candidate(state)
+  def handle_call(:cancel, _from, old) do
+    state = clear_candidate(old)
     kill(state.active)
-    state = retain_heard(state, state.active)
+    state = commit(old, retain_heard(state, state.active))
     result = flush_output(state)
 
     event =
@@ -388,7 +409,7 @@ defmodule AudioFlow.Session do
 
     result = finish_output(state, result)
     finish_turn(state, turn_event(state, result))
-    {:noreply, after_turn(state, result)}
+    {:noreply, commit(state, after_turn(state, result))}
   end
 
   def handle_info({:DOWN, ref, :process, _, _}, %{owner_ref: ref} = state),
@@ -837,6 +858,55 @@ defmodule AudioFlow.Session do
     if state.candidate, do: Process.cancel_timer(state.candidate.timer)
     if state.held, do: GenServer.reply(elem(state.held, 1), {:error, :stale_turn})
     %{state | candidate: nil, held: nil, pending_result: nil}
+  end
+
+  ## Durable state
+
+  defp snapshot(state) do
+    %{
+      history: History.snapshot(state.history),
+      conversation_state: state.conversation && state.conversation.current,
+      turns: state.turns
+    }
+  end
+
+  defp restore(nil, state), do: state
+
+  defp restore(%{} = saved, state) do
+    history = History.restore(state.history, Map.get(saved, :history, []))
+    conversation = restore_conversation(state.conversation, Map.get(saved, :conversation_state))
+    graph = if conversation, do: Conversation.plan(conversation), else: state.graph
+    turns = Map.get(saved, :turns, 0)
+    %{state | history: history, conversation: conversation, graph: graph, turns: turns}
+  end
+
+  # Only a state of this conversation can be restored.
+  defp restore_conversation(nil, _name), do: nil
+  defp restore_conversation(flow, nil), do: flow
+
+  defp restore_conversation(flow, name) do
+    case Enum.find(Map.keys(flow.states), &(to_string(&1) == to_string(name))) do
+      nil -> raise ArgumentError, "unknown conversation state #{inspect(name)}"
+      state -> %{flow | current: state}
+    end
+  end
+
+  # Calls :on_commit when the saved history or conversation state changed.
+  defp commit(_old, %{on_commit: nil} = new), do: new
+
+  defp commit(old, new) do
+    before = Map.delete(snapshot(old), :turns)
+    snapshot = snapshot(new)
+
+    if Map.delete(snapshot, :turns) != before do
+      try do
+        new.on_commit.(snapshot)
+      rescue
+        error -> Logger.warning("Session on_commit failed: #{Exception.message(error)}")
+      end
+    end
+
+    new
   end
 
   defp retain_heard(state, nil), do: state

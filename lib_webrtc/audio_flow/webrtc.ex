@@ -32,6 +32,13 @@ defmodule AudioFlow.WebRTC do
 
   def stop(pid), do: GenServer.stop(pid)
 
+  # State version for hot code upgrades. Bump it when the state shape changes,
+  # and migrate the old state in code_change/3 (see the hot-upgrades guide).
+  @vsn 1
+
+  @impl true
+  def code_change(_old_vsn, state, _extra), do: {:ok, state}
+
   @impl true
   def init(opts) do
     Process.flag(:trap_exit, true)

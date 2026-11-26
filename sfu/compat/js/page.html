@@ -1,0 +1,38 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>LiveKit client compatibility</title>
+<script src="/livekit-client.umd.js"></script>
+<script>
+  const { Room, RoomEvent } = LivekitClient;
+  window.events = [];
+
+  window.join = async (url, token, publish) => {
+    const room = new Room();
+    const log = (event) => window.events.push(event);
+    room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+      window.remoteTrack = track;
+      log({ type: "subscribed", identity: participant.identity, track: publication.trackSid });
+    });
+    room.on(RoomEvent.ParticipantConnected, (p) => log({ type: "joined", identity: p.identity }));
+    room.on(RoomEvent.ParticipantDisconnected, (p) => log({ type: "left", identity: p.identity }));
+    room.on(RoomEvent.Reconnecting, () => log({ type: "reconnecting" }));
+    room.on(RoomEvent.SignalReconnecting, () => log({ type: "signal-reconnecting" }));
+    room.on(RoomEvent.Reconnected, () => log({ type: "reconnected" }));
+    room.on(RoomEvent.Disconnected, (reason) => log({ type: "disconnected", reason }));
+    await room.connect(url, token);
+    if (publish) await room.localParticipant.setMicrophoneEnabled(true);
+    window.room = room;
+    return { sid: room.localParticipant.sid };
+  };
+
+  window.bytesReceived = async () => {
+    if (!window.remoteTrack) return 0;
+    let bytes = 0;
+    (await window.remoteTrack.receiver.getStats()).forEach((report) => {
+      if (report.type === "inbound-rtp") bytes = report.bytesReceived;
+    });
+    return bytes;
+  };
+
+  window.simulate = (scenario) => window.room.simulateScenario(scenario);
+</script>

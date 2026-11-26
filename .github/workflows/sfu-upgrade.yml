@@ -1,0 +1,38 @@
+name: SFU hot upgrade
+
+# Installs a new audio_flow_sfu release with Castle during a live call and
+# fails on a reconnect or an audio gap over 100 ms.
+on:
+  pull_request:
+    paths:
+      - 'sfu/**'
+      - 'releases/**'
+      - '.github/workflows/sfu-upgrade.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'sfu/**'
+      - 'releases/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sfu-upgrade-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  upgrade:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          otp-version: '29.1.2'
+          elixir-version: '1.20.4'
+      # The version in mise.toml.
+      - run: python3 -m pip install --user uv==0.13.6
+      - run: releases/scripts/upgrade_test.sh

@@ -39,6 +39,7 @@ variables:
 | `AUDIOFLOW_ML=1` | Bumblebee, EXLA, Transmuter models | `lib_ml` |
 | `AUDIOFLOW_MEDIA=1` | Membrane audio and video | `lib_media` |
 | `AUDIOFLOW_WEBRTC=1` | ExWebRTC media output and the PCM bridge | `lib_webrtc` |
+| `AUDIOFLOW_SFU=1` | Agents as SFU room participants, and durable calls | `lib_sfu` |
 
 Core, ML, media, and combined ML/media builds use separate `_build` directories.
 Changing a feature flag does not remove modules used by another build profile.
@@ -75,11 +76,14 @@ Guides:
 - [Output transport](https://flowcopilot.github.io/audioflow/docs/guides/output/): playing reply audio, and flushing it when the user interrupts.
 - [WebSocket transport](https://flowcopilot.github.io/audioflow/docs/guides/websocket/): streaming PCM and events between a browser and a session.
 - [Telemetry](https://flowcopilot.github.io/audioflow/docs/guides/telemetry/): session, turn, and stage spans, with an OpenTelemetry bridge.
+- [Hot upgrades](https://flowcopilot.github.io/audioflow/docs/guides/hot-upgrades/): upgrading a running node with Castle without dropping calls.
 
 Features:
 
 - [Remote speech providers](https://flowcopilot.github.io/audioflow/docs/features/providers/): Deepgram, Cartesia, ElevenLabs, Fish Audio, OpenAI Realtime, and Gemini Live adapters.
 - [Network transports](https://flowcopilot.github.io/audioflow/docs/features/transports/): raw PCM WebSocket, Twilio and Telnyx telephony, and the Pipecat RTVI client.
+- [AudioFlow SFU](https://flowcopilot.github.io/audioflow/docs/features/sfu/): a BEAM SFU with LiveKit client SDK support, telephony and hot upgrades.
+- [Durable calls](https://flowcopilot.github.io/audioflow/docs/features/durable-calls/): calls that stay connected when an agent node is deployed, restarted or lost.
 - [Input processing](https://flowcopilot.github.io/audioflow/docs/features/input-processing/): server-side denoising, echo cancellation, and Smart Turn endpoints.
 - [WebRTC and avatars](https://flowcopilot.github.io/audioflow/docs/features/webrtc-avatars/): optional encoded WebRTC media and LiveAvatar publishing.
 - [Conversations and retrieval](https://flowcopilot.github.io/audioflow/docs/features/conversation-and-retrieval/): conversation states, Jido handoffs, and pgvector retrieval graphs.
@@ -99,6 +103,9 @@ Validation:
 - [examples/](examples/): runnable scripts. Most need `AUDIOFLOW_ML=1` or `AUDIOFLOW_MEDIA=1`.
 - [examples/chat](examples/chat/README.md): browser voice and text chat, with always-on OpenAI Realtime and Moshi modes.
 - [examples/network](examples/network/README.md): optional WebRTC audio and video output, and the PCM Session bridge.
+- [examples/durable-call](examples/durable-call/README.md): a browser call that survives `kill -9` of the agent node.
+- [sfu](sfu/README.md): the AudioFlow SFU, a separate Mix project and release.
+- [releases](releases/README.md): hot-upgradable releases, and calls across the SFU and agent nodes.
 - [examples/avatar](examples/avatar/README.md): standalone viewer for LiveAvatar publications. It subscribes only when configured with an account.
 - [ui](ui/README.md): local dashboard with a canvas editor for node graphs, and an MCP endpoint for coding agents. A session runs an `AudioFlow.Graph` with the `:graph` option.
 - [scripts/COMPARISON.md](scripts/COMPARISON.md): the method for the AudioFlow and Pipecat comparison.

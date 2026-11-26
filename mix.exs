@@ -11,6 +11,9 @@ defmodule AudioFlow.MixProject do
       deps: deps(),
       aliases: aliases(),
       elixirc_options: [warnings_as_errors: true],
+      # Forecastle compiles appup.exs into ebin for host releases that hot-upgrade.
+      appup: "appup.exs",
+      compilers: Mix.compilers() ++ [:appup],
       dialyzer: [plt_add_apps: [:mix, :ex_unit]],
       start_permanent: Mix.env() == :prod
     ]
@@ -34,7 +37,8 @@ defmodule AudioFlow.MixProject do
       if(Mix.env() == :test, do: ["test/support"], else: []) ++
       if(enabled?("AUDIOFLOW_ML"), do: ["lib_ml"], else: []) ++
       if(enabled?("AUDIOFLOW_MEDIA"), do: ["lib_media"], else: []) ++
-      if(enabled?("AUDIOFLOW_WEBRTC"), do: ["lib_webrtc"], else: [])
+      if(enabled?("AUDIOFLOW_WEBRTC"), do: ["lib_webrtc"], else: []) ++
+      if(enabled?("AUDIOFLOW_SFU"), do: ["lib_sfu"], else: [])
   end
 
   defp deps do
@@ -59,6 +63,7 @@ defmodule AudioFlow.MixProject do
       {:jido, "~> 2.4.0"},
       {:zoi, "~> 0.18.11"},
       {:telemetry, "~> 1.3"},
+      {:castle, "~> 1.3", runtime: false},
       {:websock, "~> 0.5.3"},
       # FFmpeg resampling and G.711. Ratio 4.0.1 (via membrane_core) has an
       # optional constraint that predates Decimal 3. Postgrex and Numbers share
@@ -78,6 +83,7 @@ defmodule AudioFlow.MixProject do
     ] ++
       ml ++
       if(enabled?("AUDIOFLOW_WEBRTC"), do: [{:ex_webrtc, "~> 0.18.0"}], else: []) ++
+      sfu_deps() ++
       if(enabled?("AUDIOFLOW_MEDIA"),
         do: [
           {:membrane_core, "~> 1.3"},
@@ -96,6 +102,14 @@ defmodule AudioFlow.MixProject do
       )
   end
 
+  # Room participants on the AudioFlow SFU encode and decode Opus. The media
+  # profile already has the Opus plugin.
+  defp sfu_deps do
+    if enabled?("AUDIOFLOW_SFU") and not enabled?("AUDIOFLOW_MEDIA"),
+      do: [{:membrane_opus_plugin, "~> 0.21.0"}],
+      else: []
+  end
+
   defp enabled?(name), do: System.get_env(name) == "1"
 
   defp profile do
@@ -107,6 +121,8 @@ defmodule AudioFlow.MixProject do
         {true, true} -> "ml_media"
       end
 
-    base <> if(enabled?("AUDIOFLOW_WEBRTC"), do: "_webrtc", else: "")
+    base <>
+      if(enabled?("AUDIOFLOW_WEBRTC"), do: "_webrtc", else: "") <>
+      if(enabled?("AUDIOFLOW_SFU"), do: "_sfu", else: "")
   end
 end

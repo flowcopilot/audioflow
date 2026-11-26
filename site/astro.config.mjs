@@ -46,6 +46,7 @@ export default defineConfig({
             'docs/guides/output',
             'docs/guides/websocket',
             'docs/guides/telemetry',
+            'docs/guides/hot-upgrades',
           ],
         },
         {
@@ -53,6 +54,8 @@ export default defineConfig({
           items: [
             'docs/features/providers',
             'docs/features/transports',
+            'docs/features/sfu',
+            'docs/features/durable-calls',
             'docs/features/webrtc-avatars',
             'docs/features/input-processing',
             'docs/features/interruption',

@@ -69,6 +69,25 @@ defmodule AudioFlow.History do
     commit(%{context | reply: [reply], reply_bytes: byte_size(reply)})
   end
 
+  @doc "The saved turns as `{user, assistant}` pairs, oldest first."
+  def snapshot(nil), do: []
+  def snapshot(history), do: history.turns
+
+  @doc "Replaces the saved turns, applying this history's limits."
+  def restore(nil, []), do: nil
+  def restore(nil, _turns), do: raise(ArgumentError, "restored history needs :history enabled")
+
+  def restore(history, turns) when is_list(turns) do
+    turns =
+      Enum.map(turns, fn
+        {user, assistant} when is_binary(user) and is_binary(assistant) -> {user, assistant}
+        [user, assistant] when is_binary(user) and is_binary(assistant) -> {user, assistant}
+        other -> raise ArgumentError, "invalid history turn #{inspect(other)}"
+      end)
+
+    %{history | turns: retain(turns, history.max_turns, history.max_bytes)}
+  end
+
   def clear(nil), do: nil
   def clear(history), do: %{history | turns: []}
 

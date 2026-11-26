@@ -21,6 +21,9 @@ defmodule AudioFlow do
   def submit(session, %AudioFlow.Text{} = text), do: GenServer.call(session, {:submit, text})
   def cancel(session), do: GenServer.call(session, :cancel)
 
+  @doc "True when the session has no turn and no pending interruption."
+  def idle?(session), do: GenServer.call(session, :idle?)
+
   @doc "Transcribe long PCM audio with an STT adapter. See `AudioFlow.Transcription`."
   defdelegate transcribe(audio, stt, options \\ []), to: AudioFlow.Transcription
 
