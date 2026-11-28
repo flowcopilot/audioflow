@@ -119,6 +119,27 @@ defmodule AudioFlowSFU.ResilienceTest do
     assert {:error, :unknown_session} = TestClient.resume(bob)
   end
 
+  test "a participant that never connects closes after the connect timeout" do
+    {:ok, participant, _} =
+      WebRTC.start(TestClient.grants(room(), "idle"), owner: self(), connect_timeout_ms: 100)
+
+    ref = Process.monitor(participant)
+    assert_receive {AudioFlowSFU.Participant, ^participant, {:closed, :connect_timeout}}, 2000
+    assert_receive {:DOWN, ^ref, :process, ^participant, :normal}, 1000
+  end
+
+  test "an offer without an answer is sent again, then the participant closes" do
+    {:ok, participant, _} =
+      WebRTC.start(TestClient.grants(room(), "silent"), owner: self(), answer_timeout_ms: 100)
+
+    ref = Process.monitor(participant)
+    assert_receive {AudioFlowSFU.Participant, ^participant, {:offer, sdp, mids}}, 2000
+    assert_receive {AudioFlowSFU.Participant, ^participant, {:offer, ^sdp, ^mids}}, 2000
+    assert_receive {AudioFlowSFU.Participant, ^participant, {:offer, ^sdp, ^mids}}, 2000
+    assert_receive {AudioFlowSFU.Participant, ^participant, {:closed, :answer_timeout}}, 2000
+    assert_receive {:DOWN, ^ref, :process, ^participant, :normal}, 1000
+  end
+
   test "a resume with another identity is refused" do
     {:ok, bob} = TestClient.start(room(), "bob", can_publish: false)
     %{resume_token: token} = TestClient.join_info(bob)

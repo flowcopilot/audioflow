@@ -64,8 +64,17 @@ config :audio_flow_sfu,
   port: 7880,
   ice_servers: [%{urls: "stun:stun.l.google.com:19302"}],
   max_participants: 100,
-  empty_timeout_ms: 30_000
+  empty_timeout_ms: 30_000,
+  away_timeout_ms: 30_000,
+  connect_timeout_ms: 30_000,
+  answer_timeout_ms: 10_000
 ```
+
+A WebRTC participant closes with `:connect_timeout` when its connection is
+not up `connect_timeout_ms` after the join. A server offer that gets no
+answer within `answer_timeout_ms` is sent again, twice at most (ex_webrtc
+cannot roll back an offer), and then the participant closes with
+`:answer_timeout`.
 
 ## Build and test
 

@@ -30,7 +30,11 @@ defmodule AudioFlowSFU.MixProject do
         max_participants: 100,
         empty_timeout_ms: 30_000,
         # How long a participant waits for its owner or connection to return.
-        away_timeout_ms: 30_000
+        away_timeout_ms: 30_000,
+        # A WebRTC participant closes when its connection is not up by then.
+        connect_timeout_ms: 30_000,
+        # How long a server offer waits for its answer, per attempt.
+        answer_timeout_ms: 10_000
       ]
     ]
   end
