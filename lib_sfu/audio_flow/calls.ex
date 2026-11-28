@@ -36,6 +36,12 @@ defmodule AudioFlow.Calls do
       default: 10_000,
       doc: "Interrupted input older than this is dropped."
     ],
+    leave_grace_ms: [
+      type: :non_neg_integer,
+      default: 5_000,
+      doc:
+        "A call whose last user left ends after this time, unless a user joins again. A page reload leaves and joins again."
+    ],
     empty_timeout_ms: [
       type: :pos_integer,
       default: 60_000,

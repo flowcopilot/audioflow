@@ -2,7 +2,9 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
   defmodule AudioFlow.Test.CallAgent do
     @moduledoc false
     # An AudioFlow.Agent for call tests. The call metadata carries the test
-    # process ("test") for the stub SFU and the members ("others").
+    # process ("test") for the stub SFU and the members ("others"). With
+    # "hold", a turn waits in the LLM for `:go` and reports `{:llm_blocked, pid}`.
+    # "join_delay" (ms) delays the SFU join.
     @behaviour AudioFlow.Agent
     alias AudioFlow.Adapters.Function
     alias AudioFlow.Audio
@@ -28,6 +30,15 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
           {Function,
            run: fn messages, emit ->
              send(test, {:prompt, messages})
+
+             if call.metadata["hold"] do
+               send(test, {:llm_blocked, self()})
+
+               receive do
+                 :go -> :ok
+               end
+             end
+
              emit.("reply #{length(messages)}")
            end},
         tts:
@@ -44,7 +55,11 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
         vad: {Detector, []},
         voice_input: [min_speech_ms: 20, min_silence_ms: 60, pre_roll_ms: 0],
         gap_timeout_ms: 50,
-        join: [test: call.metadata["test"], others: call.metadata["others"] || []]
+        join: [
+          test: call.metadata["test"],
+          others: call.metadata["others"] || [],
+          delay: call.metadata["join_delay"]
+        ]
       ]
     end
   end

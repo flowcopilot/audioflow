@@ -4,7 +4,8 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
     # A stand-in for the SFU side of AudioFlowSFU.Native in AudioFlow tests.
     # The fake participant relays agent messages to the test process, and the
     # test sends SFU messages to the agent itself. `join: [test: pid]` names the
-    # test process; `others:` sets the room members.
+    # test process; `others:` sets the room members; `delay:` (ms) makes the
+    # join slow.
 
     def join(room, identity, agent, options) do
       if Keyword.get(options, :resume_token) == "expired",
@@ -13,6 +14,7 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
     end
 
     defp start(_room, identity, agent, options) do
+      if delay = Keyword.get(options, :delay), do: Process.sleep(delay)
       test = Keyword.fetch!(options, :test)
       tracks = Keyword.get(options, :tracks, [])
       participant = spawn(fn -> relay(test) end)

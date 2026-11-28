@@ -63,7 +63,7 @@ a call when a user joins a room, for example from your token endpoint:
 
 | Event | Result |
 | --- | --- |
-| Deploy (SIGTERM) | `prep_stop` drains: running turns finish (up to `:drain_timeout_ms`), the agent participant waits as away, and the lease ends at once. Another node claims the call at its next renewal, in about `lease_ms / 3`. |
+| Deploy (SIGTERM) | `prep_stop` drains: running turns finish (up to `:drain_timeout_ms`), the call saves its last commit, the agent participant waits as away, and the lease ends at once. The node renews its leases during the drain, so a long turn does not lose its call, and it claims no new calls. Another node claims the call at its next renewal, in about `lease_ms / 3`. |
 | Crash or `kill -9` | The SFU keeps the agent participant away for 30 s. Another node claims the call when the lease expires, after at most `lease_ms`. |
 | Network split | The old owner cannot renew its lease. Its next save fails on the version check, and it stops. |
 | Hot upgrade | No handover. See [hot upgrades](../../guides/hot-upgrades/). |
@@ -75,8 +75,27 @@ submits the interrupted user input again as text, if it is newer than
 optional text that the session gets as user input after a move, for example
 an instruction to say that the agent is back.
 
-A call ends when the last user leaves the room, or when no user has been in
-the room for `:empty_timeout_ms` (60 s).
+A call ends when the last user has left the room for `:leave_grace_ms` (5 s),
+or when no user has been in the room for `:empty_timeout_ms` (60 s). The
+grace period keeps the call when a user reloads the page: the SFU reports
+that the user left before it reports that the user joined again.
+
+## Store errors
+
+A save that finds another version or lease owner returns `:stale`, and the
+call stops: another node holds it. Any other store error, for example a
+database that is down, does not stop the call. The call keeps its newest
+snapshot and tries again with a growing delay (100 ms up to 5 s). A node that
+cannot reach the store for longer than a lease loses its calls to other
+nodes, as in a network split. If a call cannot start (for example, its agent
+module is missing on this node), it keeps its lease until the lease expires,
+so the next claim comes after about `lease_ms`. A drain that cannot end a
+lease logs an error, and the lease then expires on its own.
+
+A save sends only the fields that changed, and new history entries are
+appended to the stored history, so a long call does not write its whole
+history after each turn. With PostgreSQL, leases and the age of retried input
+use the database clock, so clock skew between nodes does not change them.
 
 ## Check it
 
