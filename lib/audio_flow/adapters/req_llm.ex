@@ -19,6 +19,12 @@ defmodule AudioFlow.Adapters.ReqLLM do
   turn process: output callbacks apply backpressure and killing the turn closes
   its checked-out socket. There are no producer queues or helper processes.
   Redirects, retries, cache replay and non-HTTP transports are not executed.
+
+  `:timeout_ms` bounds the time that the adapter waits for the provider. In the
+  locked Finch version (0.24, HTTP/1) the budget shrinks only while Finch waits
+  for data, so time in the output callback (back pressure, speech synthesis)
+  does not count. `:receive_timeout_ms` bounds the wait for each chunk. The
+  Session deadline bounds the whole turn.
   """
   @behaviour AudioFlow.Adapter
   alias AudioFlow.Adapters.Options, as: AdapterOptions

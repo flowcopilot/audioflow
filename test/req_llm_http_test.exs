@@ -16,6 +16,33 @@ defmodule AudioFlow.ReqLLMHTTPTest do
     ]
   end
 
+  test "timeout_ms bounds the wait for the provider, not the time in the output callback" do
+    options =
+      server(fn socket, _ ->
+        HTTP.headers(socket)
+
+        HTTP.chunk(
+          socket,
+          HTTP.event("One. ") <>
+            HTTP.event("Two. ") <> HTTP.event("Three.", "stop") <> HTTP.done()
+        )
+
+        HTTP.finish(socket)
+      end)
+
+    owner = self()
+
+    # Each sentence takes longer to consume than the whole timeout.
+    assert :ok =
+             Bridge.run("Hello", options ++ [audio_flow: [timeout_ms: 100]], fn text ->
+               send(owner, {:text, text})
+               Process.sleep(150)
+               :ok
+             end)
+
+    for text <- ["One. ", "Two. ", "Three."], do: assert_receive({:text, ^text})
+  end
+
   test "text is emitted before EOF and chat roles and credentials reach the endpoint" do
     options =
       server(fn socket, _ ->
