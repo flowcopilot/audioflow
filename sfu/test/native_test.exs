@@ -101,6 +101,44 @@ defmodule AudioFlowSFU.NativeTest do
     refute_received {:client, ^bob, {:participant_left, %{sid: ^sid}}}
   end
 
+  test "a resumed agent that restarts its RTP numbers stays continuous for subscribers" do
+    name = room()
+    agent = TestAgent.start(self())
+    {:ok, join} = Native.join(name, "agent", agent)
+    {:ok, track} = Native.publish_track(join.participant)
+    send(join.participant, {AudioFlowSFU.Participant, :subscribe, track.sid, self()})
+
+    send_rtp = fn participant, sequence_number, timestamp ->
+      rtp = %{
+        sequence_number: sequence_number,
+        timestamp: timestamp,
+        marker: false,
+        payload: <<1>>
+      }
+
+      send(participant, {:audio_flow_sfu, 1, {:rtp, track.sid, rtp}})
+
+      assert_receive {AudioFlowSFU.Participant, :rtp, sid, packet}, 1000
+      assert sid == track.sid
+      packet
+    end
+
+    for n <- 0..4, do: send_rtp.(join.participant, 40_000 + n, 900_000 + n * 960)
+    last = send_rtp.(join.participant, 40_005, 900_000 + 5 * 960)
+
+    # The new agent transport starts at other, lower numbers.
+    Process.exit(agent, :kill)
+    agent = TestAgent.start(self())
+    {:ok, _} = Native.join(name, "agent", agent, resume_token: join.resume_token)
+    first = send_rtp.(join.participant, 123, 55_000)
+    second = send_rtp.(join.participant, 124, 55_960)
+
+    assert first.sequence_number == rem(last.sequence_number + 1, 65_536)
+    assert first.timestamp > last.timestamp
+    assert second.sequence_number == rem(first.sequence_number + 1, 65_536)
+    assert second.timestamp - first.timestamp == 960
+  end
+
   test "an away agent that is not resumed leaves after the timeout" do
     name = room()
     {:ok, bob} = TestClient.start(name, "bob", can_publish: false)
