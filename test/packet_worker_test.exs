@@ -49,8 +49,10 @@ defmodule AudioFlow.PacketWorkerTest do
   end
 
   test "a hung program is replaced inside the same worker process", %{worker: worker, log: log} do
-    assert {:error, :timeout} = PacketWorker.request(worker, "hang", 100)
-    assert {:error, :timeout} = PacketWorker.request(worker, "echo blocked", 100)
+    # The deadlines leave time for the worker to send each request on a loaded machine.
+    # A request that expires before it is sent never reaches the program.
+    assert {:error, :timeout} = PacketWorker.request(worker, "hang", 500)
+    assert {:error, :timeout} = PacketWorker.request(worker, "echo blocked", 500)
     assert {:ok, "echo recovered"} = PacketWorker.request(worker, "echo recovered", 5000)
     assert Process.alive?(worker)
     # One replacement is the normal case. A very slow start-up can make the program of
