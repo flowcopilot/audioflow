@@ -222,13 +222,13 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
 
     test "output packets leave on absolute 20 ms deadlines" do
       {transport, key} = output()
-      started = System.monotonic_time(:millisecond)
-      :ok = Transport.push(transport, key, frames(25))
-      packets(25)
+      deadline = System.monotonic_time(:millisecond) + 50
+      :sys.replace_state(transport, &%{&1 | next_at: deadline})
+      :ok = Transport.push(transport, key, frames(10))
+      packets(10)
 
       # Each tick moves the deadline by exactly 20 ms, whatever its own delay.
-      # A deadline taken from the time of the tick would have drifted by now.
-      assert (:sys.get_state(transport).next_at - started - 500) in 0..10
+      assert :sys.get_state(transport).next_at == deadline + 200
     end
 
     test "a talkspurt after silence skips the idle time and sets the marker" do

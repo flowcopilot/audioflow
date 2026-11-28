@@ -19,6 +19,16 @@ if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
       assert_receive {WebRTC, ^b, {:media, {:rtp, _, nil, packet}}}, 3000
       assert packet.payload == pcmu
       assert packet.timestamp == 160
+      assert packet.marker
+
+      # The next packet continues the talkspurt. A pause of 60 ms starts a new one.
+      assert :ok = WebRTC.publish(a, key, :audio, pcmu, 40_000)
+      assert_receive {WebRTC, ^b, {:media, {:rtp, _, nil, continued}}}, 3000
+      refute continued.marker
+      assert :ok = WebRTC.publish(a, key, :audio, pcmu, 100_000)
+      assert_receive {WebRTC, ^b, {:media, {:rtp, _, nil, resumed}}}, 3000
+      assert resumed.marker
+      assert resumed.timestamp == 800
 
       {:ok, %{frames: [%{data: frame} | _]}} =
         IVF.read("examples/network/assets/test-pattern.ivf")

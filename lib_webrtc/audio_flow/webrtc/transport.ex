@@ -2,9 +2,16 @@ defmodule AudioFlow.WebRTC.Transport do
   @moduledoc """
   Bounded, paced PCMU output for a WebRTC peer. Implements `AudioFlow.Output`.
   Accepts mono PCM16LE at 8 or 16 kHz, preserving resampler state across chunks.
-  Queue overflow fails the turn rather than growing latency without bound.
-  `finish/2` drains (including a padded final packet); `flush/2` discards pending
-  media. Sent RTP cannot be recalled and never implies remote playout.
+  Packets leave on absolute 20 ms deadlines. After silence the presentation
+  time skips the idle time, which moves the RTP timestamp, and the peer marks
+  the first packet of the new talkspurt.
+
+  `push/3` applies back pressure: while `:max_queue_packets` (default 100, 2 s)
+  are queued, a push waits until enough audio has left, and `flush/2`, a new
+  turn or a stop release it with `{:error, :stale_turn}`. A push into an empty
+  queue is always accepted. `finish/2` never waits: it drains, including a
+  padded final packet. `flush/2` discards pending media. Sent RTP cannot be
+  recalled and never implies remote playout.
   """
   use GenServer
   @behaviour AudioFlow.Output
@@ -12,11 +19,15 @@ defmodule AudioFlow.WebRTC.Transport do
   alias AudioFlow.Telephony.Packetizer
   alias AudioFlow.WebRTC
 
+  @frame_ms 20
+  # A stream that is later than this resyncs to the clock instead of bursting.
+  @max_behind_ms 60
+
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
   @impl true
   def start_turn(pid, key), do: GenServer.call(pid, {:start, key})
   @impl true
-  def push(pid, key, audio), do: GenServer.call(pid, {:push, key, audio})
+  def push(pid, key, audio), do: GenServer.call(pid, {:push, key, audio}, :infinity)
   @impl true
   def finish(pid, key), do: GenServer.call(pid, {:finish, key}, :infinity)
   @impl true
@@ -45,9 +56,11 @@ defmodule AudioFlow.WebRTC.Transport do
        queue: :queue.new(),
        packetizer: %Packetizer{},
        timer: nil,
+       held: nil,
+       spurt: true,
        sealed: false,
        pts: 0,
-       next_at: System.monotonic_time(:millisecond),
+       next_at: nil,
        error: nil
      }}
   end
@@ -80,25 +93,23 @@ defmodule AudioFlow.WebRTC.Transport do
 
   def handle_call({:finish, _}, _, %{sealed: true} = s), do: {:reply, :ok, s}
 
-  def handle_call({:push, _, audio}, _, s) do
+  def handle_call({:push, _, _}, _, %{held: held} = s) when held != nil,
+    do: {:reply, {:error, :push_pending}, s}
+
+  def handle_call({:push, _, audio}, from, s) do
     case push_error(audio, s) do
-      nil -> push_audio(audio, s)
+      nil -> push_audio(audio, from, s)
       reason -> {:reply, {:error, reason}, s}
     end
   end
 
+  # The session calls finish inside its server, so it never waits for room.
+  # Keep draining afterwards so that it can still accept cancellation and
+  # deadline messages.
   def handle_call({:finish, _}, _from, s) do
     {packets, packetizer} = Packetizer.finish(s.packetizer)
-
-    case enqueue(packets, packetizer, s) do
-      {:ok, s} ->
-        # Session invokes finish inside its server. Keep draining asynchronously
-        # so that server can still accept cancellation and deadline messages.
-        {:reply, :ok, schedule(%{s | sealed: true})}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, s}
-    end
+    s = enqueue(%{s | packetizer: packetizer}, packets)
+    {:reply, :ok, schedule(%{s | sealed: true})}
   end
 
   @impl true
@@ -107,16 +118,17 @@ defmodule AudioFlow.WebRTC.Transport do
 
     case WebRTC.publish(s.peer, s.key, :audio, packet, s.pts) do
       :ok ->
-        # Relative scheduling prevents a delayed scheduler from bursting to catch up.
         s = %{
           s
           | queue: queue,
             timer: nil,
-            pts: s.pts + 20_000,
-            next_at: System.monotonic_time(:millisecond) + 20
+            spurt: false,
+            pts: s.pts + @frame_ms * 1000,
+            # The next deadline follows the previous one, not the time of this tick.
+            next_at: s.next_at + @frame_ms
         }
 
-        {:noreply, schedule(s)}
+        {:noreply, s |> admit_held() |> schedule()}
 
       {:error, reason} ->
         WebRTC.flush(s.peer, s.key)
@@ -139,55 +151,88 @@ defmodule AudioFlow.WebRTC.Transport do
       s.sealed or (s.packetizer.rate != nil and s.packetizer.rate != audio.sample_rate) ->
         :output_format_changed
 
-      byte_size(audio.data) > s.limit * if(audio.sample_rate == 8000, do: 320, else: 640) ->
-        :queue_limit
-
       true ->
         nil
     end
   end
 
-  defp push_audio(audio, s) do
+  defp push_audio(audio, from, s) do
     {packets, packetizer} = Packetizer.push(audio, s.packetizer)
-
-    case enqueue(packets, packetizer, s) do
-      {:ok, s} -> {:reply, :ok, schedule(s)}
-      {:error, reason} -> {:reply, {:error, reason}, s}
-    end
+    admit(%{s | packetizer: packetizer}, from, packets)
   end
 
-  defp enqueue(packets, packetizer, s) do
-    count = length(packets) + if(packetizer.pending == <<>>, do: 0, else: 1)
-
-    if :queue.len(s.queue) + count > s.limit do
-      {:error, :queue_limit}
+  # Accepts packets that fit in the queue, or any packets when the queue is
+  # empty. Otherwise the push waits in `held` and its reply waits with it.
+  defp admit(s, from, packets) do
+    if fits?(s, packets) do
+      {:reply, :ok, schedule(enqueue(s, packets))}
     else
-      {:ok, %{s | queue: Enum.reduce(packets, s.queue, &:queue.in/2), packetizer: packetizer}}
+      {:noreply, %{s | held: {from, packets}}}
     end
   end
+
+  defp admit_held(%{held: {from, packets}} = s) do
+    if fits?(s, packets) do
+      GenServer.reply(from, :ok)
+      enqueue(%{s | held: nil}, packets)
+    else
+      s
+    end
+  end
+
+  defp admit_held(s), do: s
+
+  defp fits?(s, packets) do
+    count = length(packets)
+    count == 0 or :queue.is_empty(s.queue) or :queue.len(s.queue) + count <= s.limit
+  end
+
+  defp enqueue(s, packets), do: %{s | queue: Enum.reduce(packets, s.queue, &:queue.in/2)}
 
   defp schedule(%{timer: nil} = s) do
     if :queue.is_empty(s.queue) do
       s
     else
+      s = resync(s, System.monotonic_time(:millisecond))
       token = make_ref()
-      delay = max(0, s.next_at - System.monotonic_time(:millisecond))
-      timer = Process.send_after(self(), {:tick, token}, delay)
+      timer = Process.send_after(self(), {:tick, token}, s.next_at, abs: true)
       %{s | timer: {timer, token}}
     end
   end
 
   defp schedule(s), do: s
 
+  # The start of a talkspurt, or a stream that fell far behind, begins at the
+  # clock. The presentation time skips the idle time, so the peer sees a gap in
+  # the RTP timestamps and marks the first packet of the new talkspurt.
+  defp resync(%{next_at: nil} = s, now), do: %{s | next_at: now}
+
+  defp resync(s, now) do
+    behind = now - s.next_at
+
+    if behind > @max_behind_ms or (s.spurt and behind > 0),
+      do: %{s | next_at: now, pts: s.pts + behind * 1000},
+      else: s
+  end
+
+  # Answers a waiting push, because its turn has ended.
+  defp release(%{held: {from, _}} = s) do
+    GenServer.reply(from, {:error, :stale_turn})
+    %{s | held: nil}
+  end
+
+  defp release(s), do: s
+
   defp clear(s) do
     if s.timer, do: Process.cancel_timer(elem(s.timer, 0))
 
     %{
-      s
+      release(s)
       | queue: :queue.new(),
         packetizer: %Packetizer{},
         timer: nil,
         sealed: false,
+        spurt: true,
         error: nil
     }
   end
