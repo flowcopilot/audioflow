@@ -18,7 +18,7 @@ PCM. Use the model examples for real inference.
 
 ## Run
 
-Use the tool versions in `mise.toml`, or Elixir 1.18 or later with a compatible
+Use the tool versions in `mise.toml`, or Elixir 1.20 or later with a compatible
 OTP version.
 
 ```sh

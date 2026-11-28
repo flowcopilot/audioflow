@@ -91,7 +91,11 @@ defmodule AudioFlow.Session.Options do
     ],
     on_commit: [
       type: :any,
-      doc: "Receives the durable snapshot each time saved history or conversation state changes."
+      doc:
+        "Receives the durable snapshot each time saved history or conversation state " <>
+          "changes: a one-argument function, `{pid, tag}` (sends `{tag, snapshot}`) or " <>
+          "`{module, function, args}` (snapshot appended). Prefer the last two in code " <>
+          "that hot upgrades replace."
     ],
     output: [
       type: @optional_output,
