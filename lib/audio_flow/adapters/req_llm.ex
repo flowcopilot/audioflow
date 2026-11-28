@@ -21,7 +21,7 @@ defmodule AudioFlow.Adapters.ReqLLM do
   Redirects, retries, cache replay and non-HTTP transports are not executed.
 
   `:timeout_ms` bounds the time that the adapter waits for the provider. In the
-  locked Finch version (0.24, HTTP/1) the budget shrinks only while Finch waits
+  locked Finch version (0.25, HTTP/1) the budget shrinks only while Finch waits
   for data, so time in the output callback (back pressure, speech synthesis)
   does not count. `:receive_timeout_ms` bounds the wait for each chunk. The
   Session deadline bounds the whole turn.

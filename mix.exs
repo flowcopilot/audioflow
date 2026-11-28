@@ -67,7 +67,7 @@ defmodule AudioFlow.MixProject do
     [
       {:nimble_options, "~> 1.1"},
       {:req_llm, "~> 1.29.0"},
-      {:finch, "~> 0.24.0"},
+      {:finch, "~> 0.25.0"},
       {:mint_web_socket, "~> 1.0"},
       {:postgrex, "~> 0.22"},
       {:jido, "~> 2.4.0"},
@@ -101,7 +101,7 @@ defmodule AudioFlow.MixProject do
           {:membrane_raw_audio_format, "~> 0.12"},
           {:membrane_portaudio_plugin, "~> 0.19.4"},
           {:membrane_file_plugin, "~> 0.17.5"},
-          {:membrane_mp4_plugin, "~> 0.36.11"},
+          {:membrane_mp4_plugin, "~> 0.37.0"},
           {:membrane_h26x_plugin, "~> 0.11.4"},
           {:membrane_h264_ffmpeg_plugin, "~> 0.32.7"},
           {:membrane_ffmpeg_swscale_plugin, "~> 0.16.5"},
