@@ -681,7 +681,7 @@ defmodule AudioFlow.Session do
 
   defp speech_event({kind, value}, session, turn, output)
        when kind in [:transcript, :text, :audio] do
-    call!(session, {:emit, turn, kind, value}, :infinity)
+    call!(session, {:emit, turn, kind, value})
     if kind == :audio, do: push!(output, session, turn, value)
     :ok
   end
@@ -695,7 +695,7 @@ defmodule AudioFlow.Session do
       Telemetry.stage(metadata, fn -> Adapter.run(adapter, input, emit) end)
     end
 
-    emit = fn kind, value -> call!(session, {:emit, turn, kind, value}, :infinity) end
+    emit = fn kind, value -> call!(session, {:emit, turn, kind, value}) end
 
     key = make_ref()
     Process.put(key, [])
@@ -783,15 +783,17 @@ defmodule AudioFlow.Session do
     call!(session, {:speech_checkpoint, turn})
   end
 
-  defp call!(session, request, timeout \\ 5000) do
-    case GenServer.call(session, request, timeout) do
+  # Turn-task calls wait without a timeout. The session's turn timer kills the
+  # task, so a slow output callback cannot make a call exit after 5 seconds.
+  defp call!(session, request) do
+    case GenServer.call(session, request, :infinity) do
       :ok -> :ok
       {:error, reason} -> throw(reason)
     end
   end
 
   defp fetch!(session, request) do
-    case GenServer.call(session, request) do
+    case GenServer.call(session, request, :infinity) do
       {:ok, value} -> value
       {:error, reason} -> throw(reason)
     end

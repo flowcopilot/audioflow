@@ -106,6 +106,31 @@ defmodule AudioFlow.SessionTest do
     refute_receive {AudioFlow, ^session, ^first, _}
   end
 
+  test "a turn waits for a busy session longer than the default call timeout" do
+    owner = self()
+
+    session =
+      start(
+        llm:
+          function(fn _, emit ->
+            send(owner, {:worker, self()})
+
+            receive do
+              :go -> emit.("late")
+            end
+          end),
+        tts: function(fn text, emit -> emit.(%Audio{data: text, sample_rate: 8000}) end)
+      )
+
+    {:ok, turn} = AudioFlow.submit(session, audio())
+    assert_receive {:worker, worker}
+    :sys.suspend(session)
+    send(worker, :go)
+    Process.sleep(5_300)
+    :sys.resume(session)
+    assert_receive {AudioFlow, ^session, ^turn, {:done, _}}, 1_000
+  end
+
   test "a timeout stops inference and leaves the session ready" do
     session =
       start(

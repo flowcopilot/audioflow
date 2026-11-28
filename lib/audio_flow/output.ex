@@ -5,6 +5,13 @@ defmodule AudioFlow.Output do
   `push/3` can block the turn worker to apply back pressure. `flush/2` must
   release a blocked push and stop queued output for that key. A completed turn
   can still have queued output, so `finish/2` must drain instead of discard it.
+
+  `start_turn/2`, `finish/2`, `flush/2` and the optional pause and resume
+  callbacks run inside the session process. They must return promptly: the
+  session answers no call until they return, and a call that never exits (for
+  example a `GenServer.call/3` with `:infinity`) can block it for good. Hand
+  slow work to another process, and return `{:error, reason}` on failure.
+  `push/3` runs in the turn worker, which the session turn timer bounds.
   """
   @interrupt_schema [
     min_words: [type: :pos_integer, default: 2]

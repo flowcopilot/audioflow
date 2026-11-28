@@ -11,7 +11,7 @@ defmodule AudioFlow.Graph.Handoff do
 
   @impl true
   def run(%{intent: intent}, %{session: session, turn: turn}) do
-    case GenServer.call(session, {:conversation_event, turn, {:intent, intent}}) do
+    case GenServer.call(session, {:conversation_event, turn, {:intent, intent}}, :infinity) do
       :ok -> {:ok, %{handoff: intent}}
       error -> error
     end
