@@ -144,6 +144,29 @@ defmodule AudioFlow.SessionTest do
     assert log =~ "session_test.exs"
   end
 
+  defmodule PcmOutput do
+    @behaviour AudioFlow.Output
+    def start_turn(_, _), do: :ok
+
+    def push(owner, _key, audio) do
+      send(owner, {:pcm, audio.data})
+      :ok
+    end
+
+    def finish(_, _), do: :ok
+    def flush(_, _), do: :ok
+  end
+
+  test "notify_audio false keeps audio events from the owner but not from the output" do
+    session = start(notify_audio: false, output: {PcmOutput, self()})
+    {:ok, turn} = AudioFlow.submit(session, audio())
+    assert_receive {AudioFlow, ^session, ^turn, {:text, _}}
+    assert_receive {:pcm, pcm}
+    assert byte_size(pcm) == 3200
+    assert_receive {AudioFlow, ^session, ^turn, {:done, %{events: 3}}}
+    refute_received {AudioFlow, ^session, ^turn, {:audio, _}}
+  end
+
   test "a timeout stops inference and leaves the session ready" do
     session =
       start(

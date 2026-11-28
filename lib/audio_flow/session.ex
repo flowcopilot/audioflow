@@ -106,6 +106,7 @@ defmodule AudioFlow.Session do
        limits: limits,
        history: History.new(Keyword.get(options, :history, false)),
        on_commit: Keyword.get(options, :on_commit),
+       notify_audio: Keyword.get(options, :notify_audio, true),
        output: Keyword.get(options, :output),
        output_turn: nil,
        playback_history: nil,
@@ -615,7 +616,9 @@ defmodule AudioFlow.Session do
         else: active
 
     first = Map.put_new(active.first, first_kind(kind), now() - active.started)
-    notify(state, if(node, do: {kind, value, node}, else: {kind, value}))
+    # `Map.get/3`: a session upgraded from an earlier version has no key.
+    if kind != :audio or Map.get(state, :notify_audio, true),
+      do: notify(state, if(node, do: {kind, value, node}, else: {kind, value}))
 
     %{
       state
