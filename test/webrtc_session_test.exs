@@ -115,12 +115,12 @@ if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
       {peer, bridge} = pair(gap_timeout_ms: 80)
       s = :sys.get_state(bridge)
       raw(peer, 65_535, 4_294_967_136)
-      await(fn -> map_size(:sys.get_state(bridge).reorder.pending) == 1 end)
+      await(fn -> map_size(:sys.get_state(bridge).input.reorder.pending) == 1 end)
       raw(peer, 1, 160)
-      await(fn -> map_size(:sys.get_state(bridge).reorder.pending) == 2 end)
+      await(fn -> map_size(:sys.get_state(bridge).input.reorder.pending) == 2 end)
       raw(peer, 0, 0)
-      await(fn -> :sys.get_state(bridge).reorder.expected == 2 end)
-      assert :sys.get_state(bridge).reorder.pending == %{}
+      await(fn -> :sys.get_state(bridge).input.reorder.expected == 2 end)
+      assert :sys.get_state(bridge).input.reorder.pending == %{}
       # Sequence 2 is lost. The next packet cannot enter VAD out of order.
       raw(peer, 3, 480)
       refs = for pid <- [bridge, s.peer, s.session, s.transport], do: {pid, Process.monitor(pid)}
@@ -276,7 +276,7 @@ if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
       :ok = WebRTC.publish(peer, turn, :audio, speech, 100_000)
 
       # Synchronize on the ingress state having consumed both speech packets.
-      await(fn -> :sys.get_state(bridge).reorder.expected == 6 end)
+      await(fn -> :sys.get_state(bridge).input.reorder.expected == 6 end)
       assert :sys.get_state(s.transport).key == nil
       assert :queue.is_empty(:sys.get_state(s.transport).queue)
 

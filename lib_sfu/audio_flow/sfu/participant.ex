@@ -28,19 +28,12 @@ defmodule AudioFlow.SFU.Participant do
   `{:error, reason}` and `{:closed, reason}`.
   """
   use GenServer
-  alias AudioFlow.Audio
-  alias AudioFlow.Resampler
-  alias AudioFlow.RTP.Reorder
+  alias AudioFlow.SFU.OpusDecoder
   alias AudioFlow.SFU.Transport
-  alias AudioFlow.Telephony.MuLaw
-  alias AudioFlow.Telephony.RateConverter
-  alias AudioFlow.VoiceInput
-  alias Membrane.Opus.Decoder.Native, as: Decoder
+  alias AudioFlow.Transport.PCMUDecoder
+  alias AudioFlow.Transport.RtpInput
 
   @vsn 1
-  # One gap of lost or untransmitted audio becomes at most one second of silence.
-  @max_silence_samples 16_000
-  @timestamp_modulus 4_294_967_296
 
   def start_link(options),
     do: GenServer.start_link(__MODULE__, Keyword.put_new(options, :owner, self()))
@@ -61,8 +54,17 @@ defmodule AudioFlow.SFU.Participant do
     sfu = Keyword.get(options, :sfu, node())
     room = Keyword.fetch!(options, :room)
     identity = Keyword.fetch!(options, :identity)
-    voice = VoiceInput.new(Keyword.fetch!(options, :vad), Keyword.get(options, :voice_input, []))
-    unless voice.rate == 16_000, do: raise(ArgumentError, "SFU VAD requires 16 kHz")
+
+    input =
+      RtpInput.new(
+        owner: owner,
+        tag: __MODULE__,
+        vad: Keyword.fetch!(options, :vad),
+        voice_input: Keyword.get(options, :voice_input, []),
+        reorder_window: Keyword.get(options, :reorder_window, 32),
+        gap_timeout_ms: Keyword.get(options, :gap_timeout_ms, 200),
+        loss: :silence
+      )
 
     join_options =
       Keyword.merge(
@@ -100,19 +102,9 @@ defmodule AudioFlow.SFU.Participant do
         track: track,
         transport: transport,
         session: session,
-        voice: voice,
+        input: %{input | session: session},
         members: Map.new(join.others, &{&1.sid, &1}),
-        source: nil,
-        reorder: Reorder.new(Keyword.get(options, :reorder_window, 32)),
-        gap_timeout: Keyword.get(options, :gap_timeout_ms, 200),
-        gap: nil,
-        # For an Opus source: channel count => decoder, set by choose_source/1.
-        decoder: nil,
-        resampler: nil,
-        up: %RateConverter{},
-        # The RTP timestamp where the next packet should start, and the clock rate.
-        next_timestamp: nil,
-        clock: 48_000
+        source: nil
       }
 
       {:ok, choose_source(state)}
@@ -141,7 +133,7 @@ defmodule AudioFlow.SFU.Participant do
   @impl true
   def handle_info({:audio_flow_sfu, 1, p, {:rtp, sid, rtp}}, %{join: %{participant: p}} = s) do
     if s.source && sid == s.source.sid,
-      do: reorder(rtp, s),
+      do: input(RtpInput.push(s.input, rtp), s),
       else: {:noreply, s}
   end
 
@@ -169,10 +161,7 @@ defmodule AudioFlow.SFU.Participant do
     {:noreply, s}
   end
 
-  def handle_info({:gap, token}, %{gap: {_, token}} = s) do
-    {_lost, packets, reorder} = Reorder.skip(s.reorder)
-    play(packets, %{s | gap: nil, reorder: reorder})
-  end
+  def handle_info({:gap, token}, s), do: input(RtpInput.gap(s.input, token), s)
 
   def handle_info({:DOWN, _, :process, pid, reason}, %{join: %{participant: pid}} = s) do
     notify(s.owner, {:error, {:sfu_participant_down, reason}})
@@ -185,7 +174,7 @@ defmodule AudioFlow.SFU.Participant do
 
   @impl true
   def terminate(_, s) do
-    if s.gap, do: Process.cancel_timer(elem(s.gap, 0))
+    RtpInput.stop(s.input)
     # Release a session that may wait in Output.finish before stopping it.
     safely(fn -> GenServer.stop(s.transport) end)
     safely(fn -> AudioFlow.stop_session(s.session) end)
@@ -209,18 +198,10 @@ defmodule AudioFlow.SFU.Participant do
         %{s | source: candidate}
 
       candidate != nil and candidate.mime_type == "audio/opus" ->
-        %{s | source: candidate, reorder: Reorder.new(s.reorder.window), next_timestamp: nil}
-        |> Map.merge(%{decoder: %{}, resampler: Resampler.new(48_000, 16_000), clock: 48_000})
+        %{s | source: candidate, input: RtpInput.restart(s.input, OpusDecoder.new(), 48_000)}
 
       true ->
-        %{
-          s
-          | source: candidate,
-            reorder: Reorder.new(s.reorder.window),
-            up: %RateConverter{},
-            next_timestamp: nil,
-            clock: 8000
-        }
+        %{s | source: candidate, input: RtpInput.restart(s.input, PCMUDecoder.new(), 8000)}
     end
   end
 
@@ -228,102 +209,8 @@ defmodule AudioFlow.SFU.Participant do
   defp same_track?(%{sid: sid}, %{sid: sid}), do: true
   defp same_track?(_, _), do: false
 
-  defp reorder(rtp, s) do
-    case Reorder.push(s.reorder, rtp) do
-      {:ok, packets, reorder} -> play(packets, %{s | reorder: reorder})
-      {:resync, _lost, packets, reorder} -> play(packets, %{s | reorder: reorder})
-    end
-  end
-
-  defp play(packets, s) do
-    s =
-      Enum.reduce(packets, s, fn packet, s ->
-        s = idle(s, packet.timestamp)
-        {pcm, samples, s} = decode(s, packet.payload)
-        listen(%{s | next_timestamp: rem(packet.timestamp + samples, @timestamp_modulus)}, pcm)
-      end)
-
-    {:noreply, schedule_gap(s)}
-  rescue
-    error -> fail({:decode, Exception.message(error)}, s)
-  end
-
-  # Audio that the RTP timestamps place before this packet but that never
-  # arrived: lost packets, or packets that DTX did not send. VoiceInput hears
-  # it as silence, so that it can end an utterance.
-  defp idle(%{next_timestamp: nil} = s, _timestamp), do: s
-
-  defp idle(s, timestamp) do
-    gap = rem(timestamp - s.next_timestamp + @timestamp_modulus, @timestamp_modulus)
-    samples = min(div(gap * 16_000, s.clock), @max_silence_samples)
-
-    if gap in 1..2_147_483_647//1 and samples > 0,
-      do: listen(s, <<0::size(samples * 16)>>),
-      else: s
-  end
-
-  # Returns the 16 kHz PCM and the packet duration in RTP clock samples.
-  defp decode(%{source: %{mime_type: "audio/PCMU"}} = s, payload) do
-    {data, up} = RateConverter.up(MuLaw.decode(payload), s.up)
-    {data, byte_size(payload), %{s | up: up}}
-  end
-
-  # Browsers can send stereo Opus (`stereo=1`). The TOC byte says how many
-  # channels a packet has; a stereo packet is decoded in stereo and mixed down.
-  defp decode(s, <<_::5, stereo::1, _::2, _::binary>> = payload) do
-    channels = stereo + 1
-    decoder = Map.get_lazy(s.decoder, channels, fn -> Decoder.create(48_000, channels) end)
-    pcm = Decoder.decode_packet(decoder, payload)
-    samples = div(byte_size(pcm), 2 * channels)
-    pcm = if channels == 2, do: downmix(pcm), else: pcm
-
-    {Resampler.push(s.resampler, pcm), samples,
-     %{s | decoder: Map.put(s.decoder, channels, decoder)}}
-  end
-
-  defp decode(s, _payload), do: {<<>>, 0, s}
-
-  defp downmix(pcm) do
-    for <<l::little-signed-16, r::little-signed-16 <- pcm>>,
-      into: <<>>,
-      do: <<div(l + r, 2)::little-signed-16>>
-  end
-
-  defp listen(s, <<>>), do: s
-
-  defp listen(s, pcm) do
-    {events, voice} = VoiceInput.push(s.voice, %Audio{data: pcm, sample_rate: 16_000})
-    Enum.each(events, &voice_event(s, &1))
-    %{s | voice: voice}
-  end
-
-  defp voice_event(s, :speech_started), do: AudioFlow.cancel(s.session)
-
-  defp voice_event(s, {:utterance, audio, reason}) do
-    notify(s.owner, {:utterance, reason})
-
-    case AudioFlow.submit(s.session, audio) do
-      {:ok, _} -> :ok
-      {:error, reason} -> notify(s.owner, {:error, {:submit, reason}})
-    end
-  end
-
-  defp voice_event(_s, _event), do: :ok
-
-  defp schedule_gap(s) do
-    cond do
-      not Reorder.waiting?(s.reorder) ->
-        if s.gap, do: Process.cancel_timer(elem(s.gap, 0))
-        %{s | gap: nil}
-
-      s.gap == nil ->
-        token = make_ref()
-        %{s | gap: {Process.send_after(self(), {:gap, token}, s.gap_timeout), token}}
-
-      true ->
-        s
-    end
-  end
+  defp input({:ok, input}, s), do: {:noreply, %{s | input: input}}
+  defp input({:error, reason}, s), do: fail(reason, s)
 
   defp fail(reason, s) do
     notify(s.owner, {:error, reason})

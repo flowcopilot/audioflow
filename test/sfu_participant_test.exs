@@ -190,14 +190,14 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
       {loud, _} = Enum.split(opus_frames(10, 10), 5)
       send_user(agent, participant, loud)
       before = :sys.get_state(agent)
-      assert before.reorder.expected == 105
+      assert before.input.reorder.expected == 105
 
       muted = %{@user | tracks: [Map.put(hd(@user.tracks), :muted, true)]}
       send(agent, {:audio_flow_sfu, 1, participant, {:participant_updated, muted}})
 
       after_update = :sys.get_state(agent)
-      assert after_update.reorder == before.reorder
-      assert after_update.decoder == before.decoder
+      assert after_update.input.reorder == before.input.reorder
+      assert after_update.input.codec == before.input.codec
       assert after_update.source.muted
     end
 
