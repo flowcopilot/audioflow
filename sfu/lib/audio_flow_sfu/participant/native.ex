@@ -46,6 +46,8 @@ defmodule AudioFlowSFU.Participant.Native do
 
   @impl true
   def init({room, identity, agent, options}) do
+    Participant.limit_heap()
+
     grants = %{
       identity: identity,
       name: Keyword.get(options, :name, identity),

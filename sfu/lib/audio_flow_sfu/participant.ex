@@ -62,18 +62,44 @@ defmodule AudioFlowSFU.Participant do
   def unsubscribe(publisher, track_sid),
     do: send(publisher, {__MODULE__, :unsubscribe, track_sid, self()})
 
+  # A local subscriber with more queued messages than this loses media. At
+  # 50 packets per second per publisher, 1 000 messages is seconds of audio.
+  @max_queue 1_000
+
+  # Heap limit of a media process, in words (64 MiB on a 64-bit system). A
+  # process above it is killed and its participant leaves; the room and the
+  # other participants stay up.
+  @max_heap_words 8_000_000
+
+  @doc """
+  Limits the heap of the calling media process. Call it from `init/1`.
+  """
+  def limit_heap do
+    Process.flag(:max_heap_size, %{size: @max_heap_words, kill: true, error_logger: true})
+  end
+
   @doc """
   Sends one packet to each subscriber. A subscriber on a busy distribution
-  connection loses the packet: late audio has no value. Returns the number
-  of dropped packets.
+  connection loses the packet: late audio has no value. So does a local
+  subscriber with more than #{@max_queue} queued messages, which otherwise
+  grows its mailbox without bound. Returns the number of dropped packets.
   """
   def forward(subscribers, track_sid, packet) do
     message = {__MODULE__, :rtp, track_sid, packet}
 
     Enum.count(subscribers, fn pid ->
-      :erlang.send(pid, message, [:nosuspend]) == :nosuspend
+      backlog?(pid) or :erlang.send(pid, message, [:nosuspend]) == :nosuspend
     end)
   end
+
+  defp backlog?(pid) when node(pid) == node() do
+    case Process.info(pid, :message_queue_len) do
+      {:message_queue_len, length} -> length > @max_queue
+      nil -> false
+    end
+  end
+
+  defp backlog?(_remote), do: false
 
   @doc "Sends an event to the owner. Events for an absent owner are dropped."
   def notify(nil, _event), do: :ok

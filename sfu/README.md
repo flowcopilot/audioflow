@@ -14,6 +14,10 @@ This application does not depend on `:audio_flow`. Run it as its own release.
 - A **participant** (`AudioFlowSFU.Participant.WebRTC`) owns one
   `ExWebRTC.PeerConnection` for publish and subscribe. It forwards the RTP of
   its published tracks to its subscribers without transcoding.
+- Slow receivers lose media instead of queueing it. A local subscriber with
+  more than 1 000 queued messages gets no new packets, and a busy
+  distribution connection drops them. Participant processes die above a
+  64 MiB heap (`max_heap_size`) and leave the room.
 - **Tokens** (`AudioFlowSFU.Token`) are HS256 JWTs with LiveKit-compatible
   claims, so LiveKit server SDKs can make them.
 - Audio only: Opus and PCMU.

@@ -128,6 +128,7 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   @impl true
   def init({grants, options}) do
     Process.flag(:trap_exit, true)
+    Participant.limit_heap()
     owner = Keyword.fetch!(options, :owner)
     ice_servers = Keyword.get(options, :ice_servers, [])
 
