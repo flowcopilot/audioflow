@@ -146,26 +146,28 @@ defmodule AudioFlow.TelephonyReorderTest do
     do: {Connection, :push, key, audio, {self(), tag}}
 
   # Plays the endpoint loop: handles pushes as they arrive and fires playout
-  # ticks by hand until the producer task finishes.
-  defp drive(state, task, packets \\ 0, longest \\ 0) do
+  # ticks by hand until the producer task finishes and the queue is empty.
+  defp drive(state, task, packets \\ 0, longest \\ 0, done? \\ false) do
     receive do
       {Connection, :push, _, _, _} = message ->
         {state, sent} = step(Handler.handle_info(message, state))
-        drive(state, task, packets + sent, max(longest, :queue.len(state.playout)))
+        drive(state, task, packets + sent, max(longest, :queue.len(state.playout)), done?)
     after
       0 ->
+        done? = done? or match?({:ok, _}, Task.yield(task, 0))
+
         cond do
-          match?({:ok, _}, Task.yield(task, 0)) ->
+          done? and :queue.is_empty(state.playout) ->
             {state, packets, longest}
 
           state.playout_timer == nil ->
             Process.sleep(1)
-            drive(state, task, packets, longest)
+            drive(state, task, packets, longest, done?)
 
           true ->
             {_, token} = state.playout_timer
             {state, sent} = step(Handler.handle_info({Handler, :playout, token}, state))
-            drive(state, task, packets + sent, longest)
+            drive(state, task, packets + sent, longest, done?)
         end
     end
   end
