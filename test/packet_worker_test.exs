@@ -37,9 +37,11 @@ defmodule AudioFlow.PacketWorkerTest do
 
   test "a late reply that arrives while the worker is idle settles the timed-out request",
        %{worker: worker, log: log} do
+    # The program must be running first, or its start-up time counts as the delay.
+    assert {:ok, "echo warm"} = PacketWorker.request(worker, "echo warm", 5000)
     assert {:error, :timeout} = PacketWorker.request(worker, "slow:150", 50)
     # The late "slow" reply reaches the idle worker before the next request.
-    Process.sleep(300)
+    Process.sleep(600)
     assert {:ok, "echo next"} = PacketWorker.request(worker, "echo next", 1000)
     assert {:ok, "echo last"} = PacketWorker.request(worker, "echo last", 1000)
     assert starts(log) == 1
