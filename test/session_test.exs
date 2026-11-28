@@ -167,6 +167,25 @@ defmodule AudioFlow.SessionTest do
     refute_received {AudioFlow, ^session, ^turn, {:audio, _}}
   end
 
+  test "a turn task exits when its session is killed" do
+    owner = self()
+
+    session =
+      start(
+        llm:
+          function(fn _, _ ->
+            send(owner, {:worker, self()})
+            Process.sleep(:infinity)
+          end)
+      )
+
+    {:ok, _turn} = AudioFlow.submit(session, audio())
+    assert_receive {:worker, worker}
+    ref = Process.monitor(worker)
+    Process.exit(session, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^worker, _}, 1_000
+  end
+
   test "a timeout stops inference and leaves the session ready" do
     session =
       start(

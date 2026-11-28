@@ -7,14 +7,17 @@ defmodule AudioFlow.Application do
     # ReqLLM has no Deepgram provider; AudioFlow.STT.ReqLLM uses this one.
     {:ok, :deepgram} = ReqLLM.Providers.register(AudioFlow.STT.DeepgramProvider)
 
+    # Children stop in reverse order: durable calls, then sessions, then the
+    # inference engines and the HTTP client that the sessions use.
     children =
       [
         {Finch,
          name: AudioFlow.HTTPClient,
          pools: %{default: [protocols: [:http1], conn_opts: [transport_opts: [timeout: 5_000]]]}},
-        {Task.Supervisor, name: AudioFlow.Tasks},
-        {DynamicSupervisor, name: AudioFlow.Sessions, strategy: :one_for_one}
-      ] ++ Application.get_env(:audio_flow, :inference_children, []) ++ calls()
+        {Task.Supervisor, name: AudioFlow.Tasks}
+      ] ++
+        Application.get_env(:audio_flow, :inference_children, []) ++
+        [{DynamicSupervisor, name: AudioFlow.Sessions, strategy: :one_for_one}] ++ calls()
 
     Supervisor.start_link(children, strategy: :one_for_one, name: AudioFlow.Supervisor)
   end

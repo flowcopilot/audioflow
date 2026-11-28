@@ -495,6 +495,7 @@ defmodule AudioFlow.Session do
 
         task =
           Task.Supervisor.async_nolink(AudioFlow.Tasks, fn ->
+            exit_with(session)
             run_turn(session, turn, input, stage, kind, adapters, graph, output)
           end)
 
@@ -528,6 +529,24 @@ defmodule AudioFlow.Session do
       {:error, reason} ->
         {:reply, {:error, {:output, reason}}, state}
     end
+  end
+
+  # The task is not linked to the session, so a killed session would leave it
+  # streaming. A linked watcher monitors the session and kills the task.
+  defp exit_with(session) do
+    task = self()
+
+    spawn_link(fn ->
+      Process.flag(:trap_exit, true)
+      ref = Process.monitor(session)
+
+      receive do
+        {:DOWN, ^ref, :process, _, _} -> Process.exit(task, :kill)
+        {:EXIT, ^task, _} -> :ok
+      end
+    end)
+
+    :ok
   end
 
   defp run_turn(session, turn, input, stage, kind, adapters, graph, output) do
