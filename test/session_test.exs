@@ -106,6 +106,106 @@ defmodule AudioFlow.SessionTest do
     refute_receive {AudioFlow, ^session, ^first, _}
   end
 
+  test "a turn waits for a busy session longer than the default call timeout" do
+    owner = self()
+
+    session =
+      start(
+        llm:
+          function(fn _, emit ->
+            send(owner, {:worker, self()})
+
+            receive do
+              :go -> emit.("late")
+            end
+          end),
+        tts: function(fn text, emit -> emit.(%Audio{data: text, sample_rate: 8000}) end)
+      )
+
+    {:ok, turn} = AudioFlow.submit(session, audio())
+    assert_receive {:worker, worker}
+    :sys.suspend(session)
+    send(worker, :go)
+    Process.sleep(5_300)
+    :sys.resume(session)
+    assert_receive {AudioFlow, ^session, ^turn, {:done, _}}, 1_000
+  end
+
+  test "an adapter exception is logged with its stacktrace and reported by message" do
+    session = start(llm: function(fn _, _ -> raise "boom" end))
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        {:ok, turn} = AudioFlow.submit(session, audio())
+        assert_receive {AudioFlow, ^session, ^turn, {:error, {:exception, "boom"}, _}}
+      end)
+
+    assert log =~ "** (RuntimeError) boom"
+    assert log =~ "session_test.exs"
+  end
+
+  defmodule PcmOutput do
+    @behaviour AudioFlow.Output
+    def start_turn(_, _), do: :ok
+
+    def push(owner, _key, audio) do
+      send(owner, {:pcm, audio.data})
+      :ok
+    end
+
+    def finish(_, _), do: :ok
+    def flush(_, _), do: :ok
+  end
+
+  test "notify_audio false keeps audio events from the owner but not from the output" do
+    session = start(notify_audio: false, output: {PcmOutput, self()})
+    {:ok, turn} = AudioFlow.submit(session, audio())
+    assert_receive {AudioFlow, ^session, ^turn, {:text, _}}
+    assert_receive {:pcm, pcm}
+    assert byte_size(pcm) == 3200
+    assert_receive {AudioFlow, ^session, ^turn, {:done, %{events: 3}}}
+    refute_received {AudioFlow, ^session, ^turn, {:audio, _}}
+  end
+
+  test "a turn task exits when its session is killed" do
+    owner = self()
+
+    session =
+      start(
+        llm:
+          function(fn _, _ ->
+            send(owner, {:worker, self()})
+            Process.sleep(:infinity)
+          end)
+      )
+
+    {:ok, _turn} = AudioFlow.submit(session, audio())
+    assert_receive {:worker, worker}
+    ref = Process.monitor(worker)
+    Process.exit(session, :kill)
+    assert_receive {:DOWN, ^ref, :process, ^worker, _}, 1_000
+  end
+
+  test "client functions on AudioFlow.Session cover the whole message protocol" do
+    alias AudioFlow.Session
+    session = start()
+    assert Session.idle?(session)
+    assert {:error, :no_conversation} = Session.conversation_state(session)
+    assert {:error, :no_conversation} = Session.conversation_event(session, :go)
+    assert {:error, :stale_turn} = Session.conversation_event(session, make_ref(), :go)
+    assert {:error, :stale_turn} = Session.acknowledge(session, make_ref(), 0)
+    assert {:error, :no_active_turn} = Session.provisional(session, 100)
+    assert {:error, :stale_candidate} = Session.resolve(session, make_ref(), :resume)
+
+    assert {:error, :stale_control} =
+             Session.control_ack(session, make_ref(), make_ref(), :pause, 0)
+
+    assert {:ok, turn} = Session.submit(session, audio())
+    assert_receive {AudioFlow, ^session, ^turn, {:done, _}}
+    assert :ok = Session.clear_history(session)
+    assert :ok = Session.cancel(session)
+  end
+
   test "a timeout stops inference and leaves the session ready" do
     session =
       start(
@@ -123,6 +223,7 @@ defmodule AudioFlow.SessionTest do
     assert {:ok, _} = AudioFlow.submit(session, audio())
   end
 
+  @tag :capture_log
   test "adapter errors and crashes do not stop other sessions" do
     for adapter <- [
           function(fn _, _ -> {:error, :offline} end),

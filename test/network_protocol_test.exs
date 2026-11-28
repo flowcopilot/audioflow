@@ -63,7 +63,7 @@ defmodule AudioFlow.NetworkProtocolTest do
           provider: @provider,
           session: Keyword.put(Demo.options(), :stt, stt),
           vad: {AudioFlow.Test.AlwaysSpeechDetector, []},
-          endpoint_options: [pre_roll_ms: 0, max_utterance_ms: 96]
+          voice_input: [pre_roll_ms: 0, max_utterance_ms: 96]
         )
 
       Client.send_json(socket, %{event: "connected"})
@@ -211,7 +211,7 @@ defmodule AudioFlow.NetworkProtocolTest do
         provider: :twilio,
         session: Keyword.put(Demo.options(), :tts, tts),
         vad: {AudioFlow.Test.AlwaysSpeechDetector, []},
-        endpoint_options: [pre_roll_ms: 0, max_utterance_ms: 96]
+        voice_input: [pre_roll_ms: 0, max_utterance_ms: 96]
       )
 
     Client.send_json(socket, start_message(:twilio))
@@ -268,5 +268,42 @@ defmodule AudioFlow.NetworkProtocolTest do
       end
 
     assert IO.iodata_to_binary(decoded) == data
+  end
+
+  test "RTVI ignores a rejected output chunk; the failed turn reports it" do
+    handler = AudioFlow.RTVI.WebSocket
+
+    {:ok, state} =
+      handler.init(session: Demo.options(), output_check: fn _ -> {:error, :nope} end)
+
+    on_exit(fn -> handler.terminate(:normal, state) end)
+    ref = make_ref()
+    state = %{state | pcm: %{state.pcm | turn: {ref, 1}}}
+    tag = make_ref()
+    audio = %AudioFlow.Audio{sample_rate: 16_000, data: :binary.copy(<<1, 0>>, 10)}
+
+    assert {:ok, _} =
+             handler.handle_info(
+               {AudioFlow.Transport.Connection, :push, {state.pcm.session, ref}, audio,
+                {self(), tag}},
+               state
+             )
+
+    assert_receive {^tag, {:error, :nope}}
+  end
+
+  @tag :capture_log
+  test "RTVI turn errors carry a stable code" do
+    handler = AudioFlow.RTVI.WebSocket
+    {:ok, state} = handler.init(session: Demo.options())
+    on_exit(fn -> handler.terminate(:normal, state) end)
+    ref = make_ref()
+    state = %{state | pcm: %{state.pcm | turn: {ref, 1}}}
+    event = {AudioFlow, state.pcm.session, ref, {:error, {:exception, "key sk-1"}, %{}}}
+
+    assert {:push, [{:text, json}], _} = handler.handle_info(event, state)
+
+    assert %{"type" => "error", "data" => %{"error" => "internal_error", "fatal" => false}} =
+             JSON.decode!(json)
   end
 end

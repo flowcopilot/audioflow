@@ -14,6 +14,33 @@ defmodule AudioFlow.VoiceInput do
   Minimum durations round up to whole detector frames; the maximum rounds down.
   Utterances include pre-roll and
   trailing silence. After a forced limit, detection starts a new utterance.
+
+  ## Semantic checks
+
+  A turn detector receives at most the most recent eight seconds of the
+  utterance (256000 bytes at 16 kHz), not the whole utterance.
+
+  By default a check is synchronous: `push/2,3` waits up to `turn_timeout_ms`
+  for the detector. With `async_turn: true`, `push/2,3` only starts the check and
+  returns. Frames keep being consumed and buffered while it is pending, and the
+  caller must route the check's messages to `handle_info/2`. It must be the
+  process that called `push/2,3`. `handle_info/2` returns `{:ok, events, state}`
+  for a message of this state and `:unknown` for any other message.
+
+  Event order in async mode is fixed:
+
+    * `push/2,3` and `flush/1` return events in frame order. Only one check is
+      pending at a time, and no new check starts until it resolves.
+    * A pending check is dropped, with no event, when a frame that is not silence
+      arrives (speech resumed), when a hard `:limit` or `:semantic_limit` ends the
+      utterance, and on `flush/1`.
+    * When the check resolves in `handle_info/2`, the `{:utterance, audio, reason}`
+      event holds every frame consumed so far, including frames pushed while the
+      check was pending. `reason` is `:semantic`, or `:semantic_fallback` when the
+      detector failed, returned an invalid value, or exceeded `turn_timeout_ms`.
+      An incomplete turn emits nothing, and the next check waits for
+      `turn_retry_ms` of further audio after the one that just ended.
+    * Frames pushed after that event start a new utterance.
   """
   alias AudioFlow.Audio
 
@@ -26,6 +53,7 @@ defmodule AudioFlow.VoiceInput do
     :preprocessor,
     :turn_detector,
     :semantic,
+    turn: nil,
     pending: <<>>,
     reference_pending: <<>>,
     semantic_checked_at: 0,
@@ -47,7 +75,8 @@ defmodule AudioFlow.VoiceInput do
     threshold: [type: {:or, [:integer, :float]}, default: 0.5],
     silence_threshold: [type: {:or, [:integer, :float]}, default: 0.35],
     turn_threshold: [type: {:or, [:integer, :float]}, default: 0.5],
-    turn_timeout_ms: [type: {:in, 1..5000}, default: 600]
+    turn_timeout_ms: [type: {:in, 1..5000}, default: 600],
+    async_turn: [type: :boolean, default: false]
   ]
 
   @doc "Endpoint options:\n\n" <> NimbleOptions.docs(@options_schema)
@@ -87,7 +116,8 @@ defmodule AudioFlow.VoiceInput do
       threshold: "probability thresholds must satisfy 0 <= silence < speech <= 1",
       silence_threshold: "probability thresholds must satisfy 0 <= silence < speech <= 1",
       turn_threshold: "invalid semantic endpoint limits",
-      turn_timeout_ms: "invalid semantic endpoint limits"
+      turn_timeout_ms: "invalid semantic endpoint limits",
+      async_turn: "async_turn must be a boolean"
     )
   end
 
@@ -144,6 +174,7 @@ defmodule AudioFlow.VoiceInput do
     semantic = %{
       threshold: limits_options[:turn_threshold],
       timeout: limits_options[:turn_timeout_ms],
+      async: limits_options[:async_turn],
       retry: frames.(:turn_retry_ms),
       max_silence: frames.(:max_semantic_silence_ms)
     }
@@ -169,10 +200,11 @@ defmodule AudioFlow.VoiceInput do
     if byte_size(audio.data) > 960_000,
       do: raise(ArgumentError, "input chunk exceeds 960000 bytes")
 
-    push(state, audio, %Audio{
-      sample_rate: audio.sample_rate,
-      data: :binary.copy(<<0>>, byte_size(audio.data))
-    })
+    reference =
+      if state.preprocessor,
+        do: :binary.copy(<<0>>, byte_size(audio.data))
+
+    ingest(state, audio.data, reference)
   end
 
   @doc "Push captured PCM with equally sized, aligned mono speaker-reference PCM."
@@ -190,9 +222,14 @@ defmodule AudioFlow.VoiceInput do
              byte_size(reference.data) == byte_size(data),
            do: raise(ArgumentError, "reference must match capture format and length")
 
+    ingest(state, data, state.preprocessor && reference.data)
+  end
+
+  # Without a preprocessor nothing reads the reference, so it is never stored.
+  defp ingest(state, data, reference) do
     consume(
       state.pending <> data,
-      %{state | pending: <<>>, reference_pending: state.reference_pending <> reference.data},
+      %{state | pending: <<>>, reference_pending: state.reference_pending <> (reference || <<>>)},
       []
     )
   end
@@ -204,12 +241,7 @@ defmodule AudioFlow.VoiceInput do
         {[], state}
       else
         padding = :binary.copy(<<0>>, state.frame_bytes - byte_size(state.pending))
-
-        consume(
-          state.pending <> padding,
-          %{state | pending: <<>>, reference_pending: state.reference_pending <> padding},
-          []
-        )
+        ingest(%{state | pending: <<>>}, state.pending <> padding, state.preprocessor && padding)
       end
 
     if state.speaking? do
@@ -227,12 +259,7 @@ defmodule AudioFlow.VoiceInput do
     frame = :binary.copy(binary_part(data, 0, state.frame_bytes))
     rest = binary_part(data, state.frame_bytes, byte_size(data) - state.frame_bytes)
 
-    frame_bytes = state.frame_bytes
-
-    <<reference::binary-size(^frame_bytes), reference_rest::binary>> =
-      state.reference_pending
-
-    state = %{state | reference_pending: reference_rest}
+    {reference, state} = take_reference(state)
 
     {frame, state} =
       case state.preprocessor do
@@ -264,6 +291,17 @@ defmodule AudioFlow.VoiceInput do
     consume(rest, state, Enum.reverse(new_events, events))
   end
 
+  defp take_reference(%{preprocessor: nil} = state), do: {nil, state}
+
+  defp take_reference(state) do
+    frame_bytes = state.frame_bytes
+
+    <<reference::binary-size(^frame_bytes), reference_rest::binary>> =
+      state.reference_pending
+
+    {reference, %{state | reference_pending: reference_rest}}
+  end
+
   defp step(%{speaking?: false} = state, frame, probability) do
     if probability >= state.limits.threshold do
       state = %{
@@ -281,15 +319,9 @@ defmodule AudioFlow.VoiceInput do
   end
 
   defp step(state, frame, probability) do
-    silence =
-      if probability < state.limits.silence_threshold, do: state.silence_count + 1, else: 0
-
-    state = %{
-      state
-      | frames: [frame | state.frames],
-        frame_count: state.frame_count + 1,
-        silence_count: silence
-    }
+    state = track_silence(state, probability)
+    silence = state.silence_count
+    state = %{state | frames: [frame | state.frames], frame_count: state.frame_count + 1}
 
     reason =
       cond do
@@ -307,6 +339,13 @@ defmodule AudioFlow.VoiceInput do
     else
       {[], state}
     end
+  end
+
+  # Speech after silence drops a pending semantic check.
+  defp track_silence(state, probability) do
+    if probability < state.limits.silence_threshold,
+      do: %{state | silence_count: state.silence_count + 1},
+      else: %{stop_turn(state) | silence_count: 0}
   end
 
   defp start_speech(state) do
@@ -333,9 +372,15 @@ defmodule AudioFlow.VoiceInput do
       state.silence_count >= state.semantic.max_silence ->
         {:semantic_limit, state}
 
+      state.turn != nil ->
+        {nil, state}
+
       state.semantic_checked_at > 0 and
           state.frame_count - state.semantic_checked_at < state.semantic.retry ->
         {nil, state}
+
+      state.semantic.async ->
+        {nil, start_turn(%{state | semantic_checked_at: state.frame_count})}
 
       true ->
         result = predict_turn(state)
@@ -344,15 +389,27 @@ defmodule AudioFlow.VoiceInput do
     end
   end
 
+  @turn_context_bytes 256_000
+
+  # Newest frames come first in `state.frames`; take only the tail the detector
+  # can use before reversing.
+  defp turn_audio(state) do
+    count = div(@turn_context_bytes + state.frame_bytes - 1, state.frame_bytes)
+    data = state.frames |> Enum.take(count) |> Enum.reverse() |> IO.iodata_to_binary()
+
+    data =
+      if byte_size(data) > @turn_context_bytes,
+        do: binary_part(data, byte_size(data) - @turn_context_bytes, @turn_context_bytes),
+        else: data
+
+    %Audio{data: data, sample_rate: state.rate}
+  end
+
   defp predict_turn(state) do
     {module, model_state} = state.turn_detector
     owner = self()
     token = make_ref()
-
-    audio = %Audio{
-      data: state.frames |> Enum.reverse() |> IO.iodata_to_binary(),
-      sample_rate: state.rate
-    }
+    audio = turn_audio(state)
 
     {pid, monitor} =
       spawn_monitor(fn -> send(owner, {token, safe_predict(module, audio, model_state)}) end)
@@ -375,6 +432,84 @@ defmodule AudioFlow.VoiceInput do
     end
 
     result
+  end
+
+  defp start_turn(state) do
+    {module, model_state} = state.turn_detector
+    owner = self()
+    token = make_ref()
+    audio = turn_audio(state)
+
+    {pid, monitor} =
+      spawn_monitor(fn ->
+        send(owner, {:audio_flow_turn, token, safe_predict(module, audio, model_state)})
+      end)
+
+    timer = Process.send_after(owner, {:audio_flow_turn_timeout, token}, state.semantic.timeout)
+    %{state | turn: %{token: token, pid: pid, monitor: monitor, timer: timer}}
+  end
+
+  # Drop a pending check and every message it can still deliver.
+  defp stop_turn(%{turn: nil} = state), do: state
+
+  defp stop_turn(%{turn: turn} = state) do
+    Process.exit(turn.pid, :kill)
+    Process.demonitor(turn.monitor, [:flush])
+    Process.cancel_timer(turn.timer)
+
+    receive do
+      {:audio_flow_turn, token, _} when token == turn.token -> :ok
+    after
+      0 -> :ok
+    end
+
+    receive do
+      {:audio_flow_turn_timeout, token} when token == turn.token -> :ok
+    after
+      0 -> :ok
+    end
+
+    %{state | turn: nil}
+  end
+
+  @doc """
+  Resolve a pending asynchronous semantic check.
+
+  Returns `{:ok, events, state}` when `message` belongs to this input (events are
+  empty for a check that was already dropped) and `:unknown` for any other
+  message. See the module documentation for event order.
+  """
+  def handle_info(%__MODULE__{turn: %{token: token}} = state, {:audio_flow_turn, token, result}),
+    do: resolve_turn(state, result)
+
+  def handle_info(%__MODULE__{turn: %{token: token}} = state, {:audio_flow_turn_timeout, token}),
+    do: resolve_turn(state, :timeout)
+
+  def handle_info(
+        %__MODULE__{turn: %{monitor: monitor}} = state,
+        {:DOWN, monitor, :process, _pid, _reason}
+      ),
+      do: resolve_turn(state, :error)
+
+  def handle_info(%__MODULE__{} = state, {:audio_flow_turn, _token, _result}),
+    do: {:ok, [], state}
+
+  def handle_info(%__MODULE__{} = state, {:audio_flow_turn_timeout, _token}),
+    do: {:ok, [], state}
+
+  def handle_info(%__MODULE__{}, _message), do: :unknown
+
+  defp resolve_turn(state, result) do
+    state = stop_turn(state)
+
+    case semantic_reason(result, state.semantic.threshold) do
+      nil ->
+        {:ok, [], state}
+
+      reason ->
+        {event, state} = finish(state, reason)
+        {:ok, [event], state}
+    end
   end
 
   defp safe_predict(module, audio, model_state) do
@@ -404,7 +539,7 @@ defmodule AudioFlow.VoiceInput do
 
   defp reset(state),
     do: %{
-      state
+      stop_turn(state)
       | frames: [],
         pre_roll: [],
         speech_count: 0,

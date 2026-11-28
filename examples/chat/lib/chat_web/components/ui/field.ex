@@ -121,7 +121,7 @@ defmodule ChatWeb.Components.UI.Field do
       data-slot={@rest[:"data-slot"] || "field-description"}
       class={[
         upstream_fact("port/class/0"),
-        (@class || "")
+        @class || ""
       ]}
       {Map.drop(@rest, [:"data-slot"])}
     >
@@ -154,7 +154,7 @@ defmodule ChatWeb.Components.UI.Field do
       :if={@render?}
       data-slot={@rest[:"data-slot"] || "field-error"}
       role="alert"
-      class={[upstream_fact("jsx/FieldError/class/1"), (@class || "")]}
+      class={[upstream_fact("jsx/FieldError/class/1"), @class || ""]}
       {Map.drop(@rest, [:"data-slot"])}
     >
       <%= if @inner_block != [] do %>
@@ -206,7 +206,7 @@ defmodule ChatWeb.Components.UI.Field do
     <legend
       data-slot={@rest[:"data-slot"] || "field-legend"}
       data-variant={@variant}
-      class={[upstream_fact("jsx/FieldLegend/class/0"), (@class || "")]}
+      class={[upstream_fact("jsx/FieldLegend/class/0"), @class || ""]}
       {Map.drop(@rest, [:"data-slot"])}
     >
       {render_slot(@inner_block)}
@@ -225,7 +225,7 @@ defmodule ChatWeb.Components.UI.Field do
     <div
       data-slot={@rest[:"data-slot"] || "field-separator"}
       data-content={@inner_block != []}
-      class={[upstream_fact("jsx/FieldSeparator/class/0"), (@class || "")]}
+      class={[upstream_fact("jsx/FieldSeparator/class/0"), @class || ""]}
       {Map.drop(@rest, [:"data-slot"])}
     >
       <LiveShadcn.UI.Separator.separator class={upstream_fact("jsx/FieldSeparator/class/1")} />
@@ -250,7 +250,7 @@ defmodule ChatWeb.Components.UI.Field do
     ~H"""
     <fieldset
       data-slot={@rest[:"data-slot"] || "field-set"}
-      class={[upstream_fact("jsx/FieldSet/class/0"), (@class || "")]}
+      class={[upstream_fact("jsx/FieldSet/class/0"), @class || ""]}
       {Map.drop(@rest, [:"data-slot"])}
     >
       {render_slot(@inner_block)}
@@ -268,7 +268,7 @@ defmodule ChatWeb.Components.UI.Field do
     ~H"""
     <div
       data-slot={@rest[:"data-slot"] || "field-content"}
-      class={[upstream_fact("jsx/FieldContent/class/0"), (@class || "")]}
+      class={[upstream_fact("jsx/FieldContent/class/0"), @class || ""]}
       {Map.drop(@rest, [:"data-slot"])}
     >
       {render_slot(@inner_block)}

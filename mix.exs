@@ -5,7 +5,7 @@ defmodule AudioFlow.MixProject do
     [
       app: :audio_flow,
       version: "0.1.0",
-      elixir: "~> 1.18",
+      elixir: "~> 1.20",
       build_path: "_build/#{profile()}",
       elixirc_paths: paths(),
       deps: deps(),
@@ -15,7 +15,16 @@ defmodule AudioFlow.MixProject do
       appup: "appup.exs",
       compilers: Mix.compilers() ++ [:appup],
       dialyzer: [plt_add_apps: [:mix, :ex_unit]],
+      docs: docs(),
       start_permanent: Mix.env() == :prod
+    ]
+  end
+
+  defp docs do
+    [
+      main: "AudioFlow",
+      source_url: "https://github.com/flowcopilot/audioflow",
+      extras: ["README.md"]
     ]
   end
 
@@ -24,9 +33,10 @@ defmodule AudioFlow.MixProject do
   defp aliases do
     [
       typecheck: [
-        "compile --force --warnings-as-errors",
+        "compile --warnings-as-errors",
         "test --warnings-as-errors --dry-run"
-      ]
+      ],
+      "bench.hot": "run bench/hot_paths.exs"
     ]
   end
 
@@ -57,7 +67,7 @@ defmodule AudioFlow.MixProject do
     [
       {:nimble_options, "~> 1.1"},
       {:req_llm, "~> 1.29.0"},
-      {:finch, "~> 0.24.0"},
+      {:finch, "~> 0.25.0"},
       {:mint_web_socket, "~> 1.0"},
       {:postgrex, "~> 0.22"},
       {:jido, "~> 2.4.0"},
@@ -79,7 +89,8 @@ defmodule AudioFlow.MixProject do
       {:blitz_credo_checks, "~> 0.1.10", only: [:dev, :test], runtime: false},
       {:credo_unnecessary_reduce, "~> 0.4.0", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false}
     ] ++
       ml ++
       if(enabled?("AUDIOFLOW_WEBRTC"), do: [{:ex_webrtc, "~> 0.18.0"}], else: []) ++
@@ -90,7 +101,7 @@ defmodule AudioFlow.MixProject do
           {:membrane_raw_audio_format, "~> 0.12"},
           {:membrane_portaudio_plugin, "~> 0.19.4"},
           {:membrane_file_plugin, "~> 0.17.5"},
-          {:membrane_mp4_plugin, "~> 0.36.11"},
+          {:membrane_mp4_plugin, "~> 0.37.0"},
           {:membrane_h26x_plugin, "~> 0.11.4"},
           {:membrane_h264_ffmpeg_plugin, "~> 0.32.7"},
           {:membrane_ffmpeg_swscale_plugin, "~> 0.16.5"},

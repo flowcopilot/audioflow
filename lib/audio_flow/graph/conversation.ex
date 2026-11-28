@@ -61,8 +61,8 @@ defmodule AudioFlow.Graph.Conversation do
   end
 
   @doc "During a turn, transitions commit only if that turn succeeds; otherwise immediately."
-  def event(session, event), do: GenServer.call(session, {:conversation_event, event})
-  def state(session), do: GenServer.call(session, :conversation_state)
+  def event(session, event), do: AudioFlow.Session.conversation_event(session, event)
+  def state(session), do: AudioFlow.Session.conversation_state(session)
 
   @doc "A tool that stages an explicit handoff. Also usable beside Jido action tools."
   def tool(session, name, event) do

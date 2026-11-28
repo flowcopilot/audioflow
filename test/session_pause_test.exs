@@ -166,6 +166,29 @@ defmodule AudioFlow.SessionPauseTest do
     assert :sys.get_state(s).history == history
   end
 
+  test "a turn that finishes during a pause is not timed out and keeps its heard reply" do
+    {s, t, w} = start(timeout_ms: 100)
+    assert_receive {:pcm, {^s, ^t}, _}
+    id = pause(s, t)
+    send(w, :finish)
+    assert eventually(fn -> :sys.get_state(s).pending_result != nil end)
+    refute_receive {AudioFlow, ^s, ^t, {:error, :timeout, _}}, 250
+    assert :ok = Output.resolve(s, id, :resume)
+    assert :ok = Output.control_ack(s, t, id, :resume, 100_000_000)
+    assert_receive {AudioFlow, ^s, ^t, {:done, _}}
+    assert :sys.get_state(s).history.turns == [{"hello", "first"}]
+  end
+
+  test "resume before the pause acknowledgement returns :not_paused and keeps the candidate" do
+    {s, t, _} = start()
+    assert {:ok, id} = Output.provisional(s, 2_000)
+    assert {:error, :not_paused} = Output.resolve(s, id, :resume)
+    assert :ok = Output.control_ack(s, t, id, :pause, 100_000_000)
+    assert :ok = Output.resolve(s, id, :resume)
+    assert {:error, :not_paused} = Output.resolve(s, id, :resume)
+    assert :ok = Output.control_ack(s, t, id, :resume, 100_000_000)
+  end
+
   test "candidate expiry without pause ack flushes; callback failure also cancels" do
     {s, t, w} = start()
     assert {:ok, _id} = Output.provisional(s, 20)

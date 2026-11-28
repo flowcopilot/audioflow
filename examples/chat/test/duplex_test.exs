@@ -3,7 +3,8 @@ defmodule Chat.DuplexSetupTest do
 
   test "CHAT_MODE selects the startup mode; an unknown mode keeps the profile default" do
     assert Chat.Setup.defaults(&%{"CHAT_MODE" => "moshi"}[&1])["mode"] == "moshi"
-    assert Chat.Setup.defaults(&%{"CHAT_MODE" => "nope"}[&1])["mode"] == "demo"
+    default = if Chat.Engine.native?(), do: "local", else: "demo"
+    assert Chat.Setup.defaults(&%{"CHAT_MODE" => "nope"}[&1])["mode"] == default
     assert Chat.Setup.rate(%{"mode" => "moshi"}) == 24_000
   end
 

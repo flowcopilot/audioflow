@@ -9,9 +9,16 @@ defmodule AudioFlow.Playback do
   `:max_bytes` bounds queued PCM (default 96,000). One extra chunk of at most
   that size can wait for capacity. The turn worker blocks while it waits;
   cancellation remains available. Downstream queues and device buffers have
-  their own limits. Flush closes the old pipeline before it acknowledges.
-  Device close can drain a short native buffer; acoustic stop time must be
-  measured separately. Old turn keys cannot send output after a flush.
+  their own limits.
+
+  One Membrane pipeline serves all turns of the output. It starts on the first
+  chunk and restarts only when the sample rate changes or the session ends.
+  Turn boundaries do not open or close the sink. Flush drops queued PCM, rotates
+  the turn key and acknowledges at once. If audio already reached the sink, the
+  pipeline is told to stop and the next turn starts a fresh one; the stop is
+  asynchronous, so it is off the session's call path. Audio already inside a
+  sink's own buffer can play until that stop completes; measure acoustic stop
+  time separately. Old turn keys cannot send output after a flush.
 
   The observer (default: caller) receives
   `{AudioFlow.Playback, pid, key, event}`. Events include pipeline start,
@@ -68,9 +75,10 @@ defmodule AudioFlow.Playback do
        playout: AudioFlow.Playout.new(),
        waiting: nil,
        demand: nil,
-       rate: nil,
+       turn_rate: nil,
        finished?: false,
-       draining?: false,
+       dispatched?: false,
+       draining: nil,
        last_flush_us: nil,
        started: nil,
        first_buffer_us: nil
@@ -83,14 +91,8 @@ defmodule AudioFlow.Playback do
     if state.session && state.session != session do
       {:reply, {:error, :output_in_use}, state}
     else
-      case clear(state) do
-        {:ok, state} ->
-          state = monitor_session(state, session)
-          {:reply, :ok, %{state | key: key, started: System.monotonic_time(:microsecond)}}
-
-        {:error, reason, state} ->
-          {:reply, {:error, reason}, state}
-      end
+      state = state |> abandon() |> monitor_session(session)
+      {:reply, :ok, %{state | key: key, started: System.monotonic_time(:microsecond)}}
     end
   end
 
@@ -106,7 +108,9 @@ defmodule AudioFlow.Playback do
   def handle_call({:push, _, _}, _from, state), do: {:reply, {:error, :stale_turn}, state}
 
   def handle_call({:finish, key}, _from, %{key: key} = state) do
-    if state.pipeline == nil and not state.finished?, do: notify(state, key, :drained)
+    if not state.finished? and not state.dispatched? and state.bytes == 0,
+      do: notify(state, key, :drained)
+
     {:reply, :ok, serve(%{state | finished?: true})}
   end
 
@@ -115,15 +119,10 @@ defmodule AudioFlow.Playback do
   def handle_call({:flush, key}, _from, %{key: key} = state) do
     started = System.monotonic_time(:microsecond)
 
-    case clear(state) do
-      {:ok, state} ->
-        us = System.monotonic_time(:microsecond) - started
-        notify(state, key, {:flushed, %{control_us: us}})
-        {:reply, :ok, %{state | last_flush_us: us}}
-
-      {:error, reason, state} ->
-        {:reply, {:error, reason}, state}
-    end
+    state = abandon(state)
+    us = System.monotonic_time(:microsecond) - started
+    notify(state, key, {:flushed, %{control_us: us}})
+    {:reply, :ok, %{state | last_flush_us: us}}
   end
 
   def handle_call({:flush, _}, _from, state), do: {:reply, :ok, state}
@@ -156,61 +155,52 @@ defmodule AudioFlow.Playback do
   end
 
   @impl true
-  def handle_info({:take_pcm, key, source, request}, %{key: key} = state) when key != nil do
+  def handle_info({:take_pcm, id, source, request}, %{pipeline: %{id: id}} = state) do
     {:noreply, serve(%{state | demand: {source, request}})}
   end
 
-  def handle_info({:take_pcm, _key, source, request}, state) do
+  def handle_info({:take_pcm, _id, source, request}, state) do
     send(source, {:pcm, request, :end_of_stream})
     {:noreply, state}
   end
 
-  def handle_info({:playback_notification, key, child, notification}, %{key: key} = state) do
-    notify(state, key, {:sink_notification, child, notification})
+  def handle_info(
+        {:playback_notification, id, child, notification},
+        %{pipeline: %{id: id}} = state
+      ) do
+    notify(state, state.key, {:sink_notification, child, notification})
     {:noreply, state}
   end
 
-  def handle_info({:playback_drained, key}, %{key: key} = state) do
-    {:noreply, %{state | draining?: true}}
+  def handle_info({:playback_drained, id}, %{pipeline: %{id: id}, draining: key} = state)
+      when key != nil do
+    notify(state, key, :drained)
+    {:noreply, %{state | draining: nil, dispatched?: false}}
   end
 
   def handle_info({:DOWN, ref, :process, _, _}, %{session_ref: ref} = state) do
-    case clear(state) do
-      {:ok, state} -> {:noreply, %{state | session: nil, session_ref: nil}}
-      {:error, reason, state} -> {:stop, reason, state}
-    end
+    state = state |> abandon(true) |> Map.merge(%{session: nil, session_ref: nil})
+    {:noreply, state}
   end
 
   def handle_info({:DOWN, ref, :process, _, _}, %{waiting: %{ref: ref}} = state),
     do: {:noreply, %{state | waiting: nil}}
 
   def handle_info({:DOWN, ref, :process, _, reason}, %{pipeline: %{ref: ref}} = state) do
-    event =
-      if state.draining? and reason in [:normal, :shutdown], do: :drained, else: {:failed, reason}
-
-    notify(state, state.key, event)
+    notify(state, state.key, {:failed, reason})
 
     if state.waiting do
       Process.demonitor(state.waiting.ref, [:flush])
       GenServer.reply(state.waiting.from, {:error, {:pipeline_exit, reason}})
     end
 
-    {:noreply,
-     %{
-       state
-       | pipeline: nil,
-         key: if(event == :drained, do: state.key),
-         queue: :queue.new(),
-         bytes: 0,
-         waiting: nil,
-         demand: nil
-     }}
+    {:noreply, %{reset_turn(state) | pipeline: nil, key: nil, waiting: nil, demand: nil}}
   end
 
   def handle_info(_, state), do: {:noreply, state}
 
   @impl true
-  def terminate(_, state), do: clear(state)
+  def terminate(_, state), do: stop_pipeline(state.pipeline)
 
   defp monitor_session(%{session_ref: nil} = state, session),
     do: %{state | session: session, session_ref: Process.monitor(session)}
@@ -221,7 +211,7 @@ defmodule AudioFlow.Playback do
     cond do
       not Audio.valid?(audio) -> :invalid_audio
       byte_size(audio.data) > state.max_bytes -> :chunk_too_large
-      state.rate && state.rate != audio.sample_rate -> :sample_rate_changed
+      state.turn_rate && state.turn_rate != audio.sample_rate -> :sample_rate_changed
       state.waiting -> :producer_busy
       true -> nil
     end
@@ -229,7 +219,7 @@ defmodule AudioFlow.Playback do
 
   defp accept_push(audio, from, state) do
     case ensure_pipeline(state, audio.sample_rate) do
-      {:ok, state} -> queue_or_wait(audio, from, state)
+      {:ok, state} -> queue_or_wait(audio, from, %{state | turn_rate: audio.sample_rate})
       {:error, reason, state} -> {:reply, {:error, reason}, state}
     end
   end
@@ -280,14 +270,18 @@ defmodule AudioFlow.Playback do
           | queue: queue,
             bytes: state.bytes - byte_size(audio.data),
             demand: nil,
+            dispatched?: true,
             playout: AudioFlow.Playout.audio(state.playout, audio)
         }
 
         release_producer(state)
 
+      {:empty, _} when state.finished? and state.dispatched? and state.draining == nil ->
+        send(source, {:pcm, request, :end_of_turn})
+        %{state | demand: nil, draining: state.key}
+
       {:empty, _} when state.finished? ->
-        send(source, {:pcm, request, :end_of_stream})
-        %{state | demand: nil}
+        state
 
       {:empty, _} ->
         state
@@ -308,8 +302,12 @@ defmodule AudioFlow.Playback do
     end
   end
 
-  defp ensure_pipeline(%{pipeline: nil} = state, rate) do
-    options = %{playback: self(), key: state.key, rate: rate, sink: state.sink}
+  defp ensure_pipeline(%{pipeline: %{rate: rate}} = state, rate), do: {:ok, state}
+
+  defp ensure_pipeline(state, rate) do
+    state = retire(state)
+    id = make_ref()
+    options = %{playback: self(), id: id, rate: rate, sink: state.sink}
 
     case Membrane.Pipeline.start_link(AudioFlow.PlaybackPipeline, options) do
       {:ok, supervisor, pipeline} ->
@@ -318,8 +316,13 @@ defmodule AudioFlow.Playback do
         {:ok,
          %{
            state
-           | rate: rate,
-             pipeline: %{pid: pipeline, supervisor: supervisor, ref: Process.monitor(supervisor)}
+           | pipeline: %{
+               pid: pipeline,
+               supervisor: supervisor,
+               ref: Process.monitor(supervisor),
+               id: id,
+               rate: rate
+             }
          }}
 
       {:error, reason} ->
@@ -327,35 +330,40 @@ defmodule AudioFlow.Playback do
     end
   end
 
-  defp ensure_pipeline(state, _rate), do: {:ok, state}
-
-  defp clear(state) do
+  # Ends the current turn without waiting for the pipeline. The pipeline is
+  # kept unless audio already reached the sink (or `retire?` is set), because
+  # only a stop can discard what the sink buffers.
+  defp abandon(state, retire? \\ false) do
     if state.waiting do
       Process.demonitor(state.waiting.ref, [:flush])
       GenServer.reply(state.waiting.from, {:error, :stale_turn})
     end
 
-    case stop_pipeline(state.pipeline) do
-      :ok ->
-        {:ok,
-         %{
-           state
-           | key: nil,
-             pipeline: nil,
-             waiting: nil,
-             queue: :queue.new(),
-             bytes: 0,
-             playout: AudioFlow.Playout.new(),
-             rate: nil,
-             demand: nil,
-             finished?: false,
-             draining?: false,
-             first_buffer_us: nil
-         }}
+    state = if retire? or state.dispatched?, do: retire(state), else: state
+    %{reset_turn(state) | key: nil, waiting: nil}
+  end
 
-      {:error, reason} ->
-        {:error, reason, %{state | waiting: nil}}
-    end
+  defp reset_turn(state),
+    do: %{
+      state
+      | queue: :queue.new(),
+        bytes: 0,
+        playout: AudioFlow.Playout.new(),
+        turn_rate: nil,
+        finished?: false,
+        dispatched?: false,
+        draining: nil,
+        first_buffer_us: nil
+    }
+
+  # Asks the pipeline's supervisor to shut down and forgets it. The caller is
+  # the supervisor's parent, so the exit signal is a shutdown request.
+  defp retire(%{pipeline: nil} = state), do: state
+
+  defp retire(%{pipeline: pipeline} = state) do
+    Process.demonitor(pipeline.ref, [:flush])
+    Process.exit(pipeline.supervisor, :shutdown)
+    %{state | pipeline: nil, demand: nil, dispatched?: false, draining: nil}
   end
 
   defp stop_pipeline(nil), do: :ok
@@ -364,11 +372,9 @@ defmodule AudioFlow.Playback do
     if Process.alive?(pipeline.supervisor),
       do: Supervisor.stop(pipeline.supervisor, :shutdown, 5000)
 
-    Process.demonitor(pipeline.ref, [:flush])
     :ok
   catch
-    :exit, {:noproc, _} -> :ok
-    :exit, reason -> {:error, {:pipeline_stop, reason}}
+    :exit, _ -> :ok
   end
 
   defp notify(state, key, event), do: send(state.observer, {__MODULE__, self(), key, event})

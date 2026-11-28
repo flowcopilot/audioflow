@@ -34,19 +34,19 @@ defmodule ChatWeb.Components.UI.Empty do
   defp upstream_fact(key), do: Map.fetch!(@upstream_facts, key)
 
   @variant_classes (for {"cva/" <> path, value} <- @upstream_facts,
-                       [table, "variant", group, choice] <- [String.split(path, "/")],
-                       reduce: %{} do
-    variants ->
-      put_in(
-        variants,
-        [
-          Access.key(table, %{}),
-          Access.key(group, %{}),
-          Access.key(choice, nil)
-        ],
-        value
-      )
-  end)
+                        [table, "variant", group, choice] <- [String.split(path, "/")],
+                        reduce: %{} do
+                      variants ->
+                        put_in(
+                          variants,
+                          [
+                            Access.key(table, %{}),
+                            Access.key(group, %{}),
+                            Access.key(choice, nil)
+                          ],
+                          value
+                        )
+                    end)
 
   @doc "The `empty` part."
 

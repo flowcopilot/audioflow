@@ -30,7 +30,11 @@ defmodule AudioFlowSFU.MixProject do
         max_participants: 100,
         empty_timeout_ms: 30_000,
         # How long a participant waits for its owner or connection to return.
-        away_timeout_ms: 30_000
+        away_timeout_ms: 30_000,
+        # A WebRTC participant closes when its connection is not up by then.
+        connect_timeout_ms: 30_000,
+        # How long a server offer waits for its answer, per attempt.
+        answer_timeout_ms: 10_000
       ]
     ]
   end
@@ -47,6 +51,8 @@ defmodule AudioFlowSFU.MixProject do
       {:protobuf, "~> 0.17.1"},
       # Decodes agent Opus to 8 kHz for phone calls (Signaling.Telephony).
       {:membrane_opus_plugin, "~> 0.21.0"},
+      # The clipping s16 adder mixes the members' audio for phone calls.
+      {:membrane_audio_mix_plugin, "~> 0.16.7"},
       {:telemetry, "~> 1.3"},
       {:castle, "~> 1.3", runtime: false}
     ]

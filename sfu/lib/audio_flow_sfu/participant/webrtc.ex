@@ -29,6 +29,13 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   participant to a new owner and sends the pending offer again. A failed
   connection gets an ICE restart offer. If the room process crashes, the
   participant joins the restarted room again with the same SID.
+
+  Two timers stop a stuck participant. The connection must come up within
+  `:connect_timeout_ms` (30 000) of the join, or the participant closes with
+  `:connect_timeout`. A server offer needs an answer within
+  `:answer_timeout_ms` (10 000). ex_webrtc cannot roll back an offer, so the
+  participant sends the same offer again, twice at most, and then closes with
+  `:answer_timeout`.
   """
   use GenServer, restart: :temporary
 
@@ -43,6 +50,9 @@ defmodule AudioFlowSFU.Participant.WebRTC do
 
   @vsn 1
 
+  # How often an unanswered server offer is sent again before the close.
+  @offer_retries 2
+
   # No fmtp: ex_webrtc then accepts any Opus parameters (browsers add
   # `stereo=1` or `usedtx=1`), and the client's own fmtp governs what it sends.
   @opus %RTPCodecParameters{
@@ -56,7 +66,8 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   @doc """
   Starts and joins a participant for verified `grants`. Options: `:owner`
   (required), `:ice_servers`, `:auto_subscribe` (true), `:away_timeout_ms`,
-  `:negotiation` (`:server` or `:client`).
+  `:connect_timeout_ms`, `:answer_timeout_ms` and `:negotiation` (`:server`
+  or `:client`).
   Returns the participant PID and
   `%{participant: info, others: [info], ice_servers: list, resume_token: binary}`.
   """
@@ -128,6 +139,7 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   @impl true
   def init({grants, options}) do
     Process.flag(:trap_exit, true)
+    Participant.limit_heap()
     owner = Keyword.fetch!(options, :owner)
     ice_servers = Keyword.get(options, :ice_servers, [])
 
@@ -159,6 +171,11 @@ defmodule AudioFlowSFU.Participant.WebRTC do
               Application.fetch_env!(:audio_flow_sfu, :away_timeout_ms)
             end),
           away_timer: nil,
+          connect_timeout: timeout(options, :connect_timeout_ms),
+          connect_timer: nil,
+          answer_timeout: timeout(options, :answer_timeout_ms),
+          answer_timer: nil,
+          answer_attempts: 0,
           connection: :new,
           room: room,
           room_ref: Process.monitor(room),
@@ -169,6 +186,9 @@ defmodule AudioFlowSFU.Participant.WebRTC do
           published: %{},
           # Track SID => %{subscriber pid => monitor ref}.
           subscribers: %{},
+          # Track SID => %{subscriber pid => {peer connection, track ID}}: the
+          # subscribers that get packets straight from this publisher.
+          routes: %{},
           # Track SID => %{publisher, publisher_sid, track, sender, mime_type, ready}.
           subscriptions: %{},
           negotiation: negotiation,
@@ -197,6 +217,7 @@ defmodule AudioFlowSFU.Participant.WebRTC do
           {:ok, _} = PeerConnection.create_data_channel(pc, "_reliable")
         end
 
+        state = arm(state, :connect_timer, :connect_timeout, state.connect_timeout)
         {:ok, state, {:continue, :subscribe}}
 
       {:error, reason} ->
@@ -229,8 +250,18 @@ defmodule AudioFlowSFU.Participant.WebRTC do
     state = %{state | owner: owner, owner_ref: Process.monitor(owner)}
     Telemetry.participant(:resume, state.info, state.grants.room)
 
-    with {description, mids} <- state.pending_offer,
-         do: Participant.notify(owner, {:offer, description, mids})
+    state = resend_offer(state)
+
+    state =
+      if state.pending_offer,
+        do: arm_answer_timer(%{state | answer_attempts: 0}),
+        else: state
+
+    # The client may have missed a request for sections while it had no owner.
+    state =
+      if state.negotiation == :client,
+        do: negotiate(%{state | sections_requested: false}),
+        else: state
 
     {:reply, {:ok, join_info(state)}, health(state)}
   end
@@ -273,7 +304,11 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   def handle_call({:answer, json}, _from, %{negotiating: true} = state) do
     with {:ok, answer} <- description(json, "answer"),
          :ok <- PeerConnection.set_remote_description(state.pc, answer) do
-      state = ready_subscriptions(%{state | negotiating: false, pending_offer: nil})
+      state =
+        %{state | negotiating: false, pending_offer: nil}
+        |> disarm(:answer_timer)
+        |> ready_subscriptions()
+
       {:reply, :ok, state, {:continue, :next}}
     else
       error -> {:reply, error, state}
@@ -308,7 +343,7 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   def handle_info({:ex_webrtc, pc, {:rtp, id, _rid, packet}}, %{pc: pc} = state) do
     with {:ok, sid} <- Map.fetch(state.published, id),
          {:ok, subscribers} <- Map.fetch(state.subscribers, sid) do
-      Participant.forward(Map.keys(subscribers), sid, packet)
+      Participant.forward(Map.keys(subscribers), sid, packet, Map.get(state.routes, sid, %{}))
       |> Telemetry.dropped(sid, state.info, state.grants.room)
     end
 
@@ -340,7 +375,7 @@ defmodule AudioFlowSFU.Participant.WebRTC do
 
   def handle_info({:ex_webrtc, pc, {:connection_state_change, :connected}}, %{pc: pc} = state) do
     Participant.notify(state.owner, :connected)
-    {:noreply, health(%{state | connection: :connected})}
+    {:noreply, health(disarm(%{state | connection: :connected}, :connect_timer))}
   end
 
   # A failed connection can come back with an ICE restart while the
@@ -379,6 +414,17 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   def handle_info({Participant, :unsubscribe, sid, pid}, state),
     do: {:noreply, drop_subscriber(state, sid, pid)}
 
+  # A subscriber that can take packets straight into its peer connection.
+  def handle_info({Participant, :route, sid, pid, target}, state) do
+    case state.subscribers do
+      %{^sid => %{^pid => _}} ->
+        {:noreply, %{state | routes: Participant.put_route(state.routes, sid, pid, target)}}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
   def handle_info({Room, _, {event, info, pid}}, state)
       when event in [:participant_joined, :participant_updated] do
     Participant.notify(state.owner, {event, info})
@@ -408,6 +454,26 @@ defmodule AudioFlowSFU.Participant.WebRTC do
     case Room.rejoin(state.grants.room, state.info, self()) do
       {:ok, room} -> {:noreply, %{state | room: room, room_ref: Process.monitor(room)}}
       {:error, reason} -> close(state, {:room_down, reason})
+    end
+  end
+
+  def handle_info({:connect_timeout, token}, %{connect_timer: {_, token}} = state),
+    do: close(%{state | connect_timer: nil}, :connect_timeout)
+
+  def handle_info({:answer_timeout, token}, %{answer_timer: {_, token}} = state) do
+    state = %{state | answer_timer: nil}
+
+    cond do
+      # A resume sends the offer again and arms the timer.
+      not state.negotiating or state.owner == nil ->
+        {:noreply, state}
+
+      state.answer_attempts >= @offer_retries ->
+        close(state, :answer_timeout)
+
+      true ->
+        state = %{state | answer_attempts: state.answer_attempts + 1}
+        {:noreply, state |> resend_offer() |> arm_answer_timer()}
     end
   end
 
@@ -468,6 +534,39 @@ defmodule AudioFlowSFU.Participant.WebRTC do
     end
   end
 
+  defp timeout(options, key) do
+    Keyword.get_lazy(options, key, fn -> Application.fetch_env!(:audio_flow_sfu, key) end)
+  end
+
+  defp arm(state, key, tag, milliseconds) do
+    state = disarm(state, key)
+    token = make_ref()
+    timer = Process.send_after(self(), {tag, token}, milliseconds)
+    Map.put(state, key, {timer, token})
+  end
+
+  defp disarm(state, key) do
+    case Map.fetch!(state, key) do
+      nil ->
+        state
+
+      {timer, _} ->
+        Process.cancel_timer(timer)
+        Map.put(state, key, nil)
+    end
+  end
+
+  defp arm_answer_timer(state),
+    do: arm(state, :answer_timer, :answer_timeout, state.answer_timeout)
+
+  # Sends the unanswered server offer to the owner again.
+  defp resend_offer(%{pending_offer: nil} = state), do: state
+
+  defp resend_offer(%{pending_offer: {description, mids}} = state) do
+    Participant.notify(state.owner, {:offer, description, mids})
+    state
+  end
+
   ## Negotiation
 
   # Client negotiation: asks for a new client offer when a subscription has
@@ -475,7 +574,9 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   defp negotiate(%{negotiation: :client} = state) do
     missing = Enum.count(state.subscriptions, fn {_, sub} -> sub.transceiver == nil end)
 
-    if (missing > 0 or state.renegotiate) and not state.sections_requested do
+    # Without an owner the request would be lost. A resume asks again.
+    if (missing > 0 or state.renegotiate) and not state.sections_requested and
+         state.owner != nil do
       Participant.notify(state.owner, {:media_sections, missing})
       %{state | sections_requested: true, renegotiate: false}
     else
@@ -493,7 +594,17 @@ defmodule AudioFlowSFU.Participant.WebRTC do
          :ok <- PeerConnection.set_local_description(state.pc, offer) do
       {description, mids} = offer = {SessionDescription.to_json(offer), mids(state)}
       Participant.notify(state.owner, {:offer, description, mids})
-      %{state | negotiating: true, renegotiate: false, ice_restart: false, pending_offer: offer}
+
+      state = %{
+        state
+        | negotiating: true,
+          renegotiate: false,
+          ice_restart: false,
+          pending_offer: offer,
+          answer_attempts: 0
+      }
+
+      arm(state, :answer_timer, :answer_timeout, state.answer_timeout)
     else
       _ -> %{state | renegotiate: true}
     end
@@ -600,7 +711,12 @@ defmodule AudioFlowSFU.Participant.WebRTC do
     case state.subscribers do
       %{^sid => %{^pid => ref} = subscribers} ->
         Process.demonitor(ref, [:flush])
-        %{state | subscribers: Map.put(state.subscribers, sid, Map.delete(subscribers, pid))}
+
+        %{
+          state
+          | subscribers: Map.put(state.subscribers, sid, Map.delete(subscribers, pid)),
+            routes: Participant.drop_route(state.routes, sid, pid)
+        }
 
       _ ->
         state
@@ -724,6 +840,9 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   # After each exchange, every negotiated send-only transceiver gets the
   # publisher's codec again: ex_webrtc unselects a sender codec when a new
   # remote description changes its parameters (for example `stereo=1`).
+  # A publisher sends packets straight into this peer connection while the
+  # subscription is ready. Until the publisher handles the route change, it
+  # can send a few packets to a sender without a codec; ex_webrtc drops them.
   defp ready_subscriptions(state) do
     transceivers = PeerConnection.get_transceivers(state.pc)
 
@@ -731,6 +850,10 @@ defmodule AudioFlowSFU.Participant.WebRTC do
       Map.new(state.subscriptions, fn {sid, sub} ->
         {sid, ready(state.pc, sub, transceivers)}
       end)
+
+    for {sid, sub} <- subscriptions, sub.ready != state.subscriptions[sid].ready do
+      Participant.route(sub.publisher, sid, if(sub.ready, do: {state.pc, sub.track.id}))
+    end
 
     %{state | subscriptions: subscriptions}
   end

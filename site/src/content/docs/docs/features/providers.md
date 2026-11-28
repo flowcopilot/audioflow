@@ -229,8 +229,28 @@ OpenAI uses the GA Realtime WebSocket protocol, waits for `session.updated`,
 disables VAD, appends and commits the input, then requests a response. Input and
 output PCM must be 24 kHz. Input transcription defaults to
 `gpt-4o-mini-transcribe` (`:transcription_model` overrides it). Success waits for
-both a completed response and input transcription. Failed or cancelled
+both a completed response and input transcription. OpenAI sends the transcript
+on its own schedule: if it has not arrived `:transcript_grace_ms` (3,000) after
+`response.done`, the turn fails with `:transcript_timeout`. Failed or cancelled
 responses, transcription failures and tool calls return errors.
+
+For these WebSocket adapters, `:timeout_ms` (30,000) bounds the time that the
+adapter waits for the provider. Time in the output callback (back pressure, or
+speech synthesis in the Session) does not count, so a slow consumer cannot fail
+a healthy stream. The turn deadline of the Session bounds the whole turn. The
+HTTP language-model adapter works the same way, see the
+[HTTP inference guide](../../guides/http-inference/).
+
+## Option validation
+
+`AudioFlow.Adapter.validate!/1` checks one `{module, options}` tuple before any
+call. It raises `ArgumentError` for wrong options, for example a missing
+`:voice_id`, an unsupported `:sample_rate` or an empty `:api_key`. Adapters
+implement the optional `c:AudioFlow.Adapter.validate_options/1` callback, with
+the helpers in `AudioFlow.Adapters.Options`. The message names the option key
+and never its value, because options can hold API keys and the message can
+reach a client. `run/3` makes the same check, so a direct call fails the same
+way.
 
 Gemini uses Live v1beta, waits for `setupComplete`, disables automatic activity
 detection and wraps the audio in `activityStart` / `activityEnd`. Input is
@@ -388,16 +408,24 @@ Bounds (defaults):
 - `:idle_timeout_ms` (30,000) without an accepted push.
 - `:max_session_ms` (1,800,000) in total.
 - `:max_chunk_bytes` (48,000) for each push, else `{:error, :too_large}`.
-- `:max_response_bytes` (67,108,864) for all incoming WebSocket bytes in a
-  session, including fragments. The session fails with `:response_too_large`
-  at this bound. Incomplete Ogg packets are limited to 256 KiB.
+- `:max_response_bytes` (67,108,864) for incoming WebSocket bytes in one
+  `:response_window_ms` (60,000) window, including fragments. The window is
+  fixed, so a burst can use two. `:max_message_bytes` (16,777,216) bounds one
+  message, or a partial frame that does not complete. The session fails with
+  `:response_too_large` at either bound. The bounds apply to each message and
+  window, not to the session, so a long conversation is not cut short.
+  Incomplete Ogg packets are limited to 256 KiB.
 - `:max_input_lead_ms` (2,000). For Moshi (adapter input flow `:answered`):
   pushed audio that model audio has not answered. For OpenAI (`:realtime`):
   pushed audio ahead of the wall clock since `:ready`, so continuous silence
   never fills it. A push past it returns `{:error, :overloaded}` and is not
   sent, for example while MLX warms up.
 - `:max_owner_queue` (250): when the owner mailbox has this many messages, the
-  session fails with `:owner_overloaded`. Output is not buffered or dropped.
+  session fails with `:owner_overloaded`. Output is not buffered or dropped. The
+  session reads the mailbox length only when the bound can be near: every event
+  for a small limit, and at most every 32 events for a large one.
+- `:clock` (monotonic milliseconds) is the time source of the `:realtime` input
+  bound and of the byte window. Replace it to control time in tests.
 - `:send_timeout_ms` (5,000) for each TCP write.
 
 The session monitors the owner and closes the connection when the owner exits.
@@ -466,10 +494,10 @@ the provider history keeps the full reply.
 Provider `error` events fail the session with `{:remote_error, code}` (only
 the code or type, never the message). Tool calls fail it with
 `:unsupported_tool_call`, because no tools are configured. All
-`AudioFlow.Duplex` bounds apply; `:max_response_bytes` (64 MiB) is about 17
-minutes of base64 reply audio per session.
-The chat example sets this bound to 256 MiB for OpenAI calls, to allow the
-30-minute call limit to apply before the response byte limit in ordinary use.
+`AudioFlow.Duplex` bounds apply. Reply audio arrives as base64 JSON, about
+64 KB for each second of model speech. The default `:max_response_bytes`
+(64 MiB in each 60-second window) allows about 17 minutes of continuous speech
+in each minute, so the bound limits a misbehaving peer and not a long call.
 
 `mix test test/duplex_openai_test.exs` checks the handshake order, server VAD
 configuration, several utterances on one socket, continuous silence,

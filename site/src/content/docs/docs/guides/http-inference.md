@@ -8,7 +8,10 @@ sidebar:
 `AudioFlow.Adapters.ReqLLM` runs HTTP language models through
 [ReqLLM](https://hexdocs.pm/req_llm). It takes ReqLLM's model, context, and
 generation options directly. It groups the generated text into sentences, with
-whitespace preserved, and runs tools in the turn. It uses the same adapter
+whitespace preserved, and runs tools in the turn. A sentence ends at `.`, `!` or
+`?` followed by whitespace, or at a CJK terminator (`。`, `！`, `？`) with no
+whitespace. Text with no boundary for 240 bytes is split at a clause mark,
+whitespace or a character boundary, so speech starts before generation ends. It uses the same adapter
 interface as the native models, and needs no native model dependencies. Local Nx
 adapters do not depend on ReqLLM.
 

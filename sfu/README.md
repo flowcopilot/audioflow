@@ -14,6 +14,13 @@ This application does not depend on `:audio_flow`. Run it as its own release.
 - A **participant** (`AudioFlowSFU.Participant.WebRTC`) owns one
   `ExWebRTC.PeerConnection` for publish and subscribe. It forwards the RTP of
   its published tracks to its subscribers without transcoding.
+- A publisher sends packets straight into the `PeerConnection` of a WebRTC
+  subscriber once its subscription is negotiated. Other subscribers, such as
+  agents, get them as messages.
+- Slow receivers lose media instead of queueing it. A local subscriber with
+  more than 1 000 queued messages gets no new packets, and a busy
+  distribution connection drops them. Participant processes die above a
+  64 MiB heap (`max_heap_size`) and leave the room.
 - **Tokens** (`AudioFlowSFU.Token`) are HS256 JWTs with LiveKit-compatible
   claims, so LiveKit server SDKs can make them.
 - Audio only: Opus and PCMU.
@@ -30,8 +37,10 @@ This application does not depend on `:audio_flow`. Run it as its own release.
   supported.
 - `AudioFlowSFU.Signaling.Telephony` takes Twilio and Telnyx Media Streams
   at `/telephony/twilio` and `/telephony/telnyx`. The phone call joins as a
-  participant of kind `sip` with a PCMU track. Opus from the other members is
-  decoded at 8 kHz and sent back as μ-law. Twilio passes the token as the
+  participant of kind `sip` with a PCMU track. The other members come back as
+  one stream: each is decoded to 8 kHz PCM, mixed every 20 ms (a clipping sum,
+  `Membrane.AudioMixer.Adder`) and sent as μ-law. A member's queue holds
+  100 ms, so the phone delay stays bounded. Twilio passes the token as the
   `access_token` custom parameter of `<Stream>`.
 - `AudioFlowSFU.Native` lets BEAM processes, such as AudioFlow agents on
   other nodes, join rooms over Erlang distribution.
@@ -60,8 +69,17 @@ config :audio_flow_sfu,
   port: 7880,
   ice_servers: [%{urls: "stun:stun.l.google.com:19302"}],
   max_participants: 100,
-  empty_timeout_ms: 30_000
+  empty_timeout_ms: 30_000,
+  away_timeout_ms: 30_000,
+  connect_timeout_ms: 30_000,
+  answer_timeout_ms: 10_000
 ```
+
+A WebRTC participant closes with `:connect_timeout` when its connection is
+not up `connect_timeout_ms` after the join. A server offer that gets no
+answer within `answer_timeout_ms` is sent again, twice at most (ex_webrtc
+cannot roll back an offer), and then the participant closes with
+`:answer_timeout`.
 
 ## Build and test
 

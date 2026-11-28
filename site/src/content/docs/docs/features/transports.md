@@ -50,8 +50,8 @@ codecs are unsupported. See [Telnyx's streaming guide](https://developers.telnyx
 Both paths decode Base64 headerless μ-law, resample to 16 kHz PCM, and feed
 the configured VAD. Endpoint detection submits an utterance; confirmed speech
 cancels an active reply and clears remote playback. TTS must emit 8 or 16 kHz
-mono s16le PCM. Other rates fail the turn and close the stream with code 1011;
-configure TTS output or an upstream resampler explicitly. G.711 and both rate
+mono s16le PCM. Other rates fail the turn; the call stays open. Configure TTS
+output or an upstream resampler explicitly. G.711 and both rate
 conversions use FFmpeg (libswresample), which holds about 2 ms of audio. On
 completion that audio is drained and the last 20 ms packet is padded with μ-law
 silence. No
@@ -69,13 +69,29 @@ Malformed payloads and wrong stream IDs also close. Timer tokens prevent stale
 timeouts from affecting a recovered stream. Termination cancels timers.
 
 Outgoing PCMU is packetized into 160-byte (20 ms) messages, emitted at most once
-per 20 ms timer tick. The local queue defaults to 500 packets (10 seconds),
-configurable with :max_playout_packets; overflow closes rather than growing
-without bound. Barge-in clears the local queue/filter tail, invalidates its timer,
-and sends provider clear immediately. Timers never burst to catch up after delays.
+per timer tick. Ticks use absolute monotonic deadlines (previous deadline plus
+20 ms), so a late tick does not slow later ones and playout keeps 50 packets per
+second. After a stall of more than three packets the clock restarts at the
+current time; it never bursts to catch up. The local queue has a high-water mark
+of 500 packets (10 seconds), configurable with :max_playout_packets. TTS can
+stream faster than real time. While the queue is above the mark, the endpoint
+keeps the acknowledgement of the last chunk, so the turn waits. It releases the
+acknowledgement when playout drains the queue to the mark. A flush, a new turn,
+a stop or a close releases a waiting chunk with a stale-turn error. A single
+chunk longer than the mark (10 seconds at 16 kHz, 20 seconds at 8 kHz) closes
+the call with 1008.
+Barge-in clears the local queue/filter tail, invalidates its timer,
+and sends provider clear immediately.
 Twilio permits arbitrary payload sizes and buffers media in arrival order;
 Telnyx RTP mode permits 20 ms–30 s chunks. The once-per-second submission limit
 in Telnyx's guide belongs to MP3 mode, which this transport does not use.
+
+A failed turn (an LLM error, a timeout, a busy session or a context limit) does
+not close the call. The server logs it and the next utterance starts a new turn.
+The call closes only when the session cannot start or stops, or when the peer
+breaks the protocol: an invalid message or frame, an unsupported start, a wrong
+stream, an invalid payload or track, unordered or missing media, or an output
+chunk over the hard limit.
 
 Acknowledging a chunk means local acceptance, not playback at the handset.
 Mark-based playout accounting, SIP, call creation/transfers and webhook handlers

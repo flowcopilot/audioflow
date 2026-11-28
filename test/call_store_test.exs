@@ -12,6 +12,7 @@ end
 if System.get_env("AUDIOFLOW_POSTGRES_URL") do
   defmodule AudioFlow.CallStore.PostgresTest do
     use AudioFlow.Test.CallStoreContract, async: false
+    alias AudioFlow.CallStore
     alias AudioFlow.CallStore.Postgres
 
     setup do
@@ -49,14 +50,26 @@ if System.get_env("AUDIOFLOW_POSTGRES_URL") do
       ]
     end
 
+    test "a database error is not :stale, :not_found or :ok", %{store: {module, config}} do
+      broken = {module, Keyword.put(config, :table, "audio_flow_calls_missing")}
+      id = CallStore.uuid()
+
+      assert {:error, %Postgrex.Error{}} = CallStore.get(broken, id)
+      assert {:error, %Postgrex.Error{}} = CallStore.save(broken, id, "a", 0, %{turns: 1})
+      assert {:error, %Postgrex.Error{}} = CallStore.renew(broken, "a", [id], 1_000)
+      assert {:error, %Postgrex.Error{}} = CallStore.claim(broken, "a", 1_000, 10)
+      assert {:error, %Postgrex.Error{}} = CallStore.release(broken, id, "a")
+      assert CallStore.now(broken) > 0
+    end
+
     test "concurrent claims split the calls", %{store: store} do
       ids =
         for _ <- 1..20,
-            do: elem(AudioFlow.CallStore.create(store, %{room: "r", agent: "A"}), 1).id
+            do: elem(CallStore.create(store, %{room: "r", agent: "A"}), 1).id
 
       claims =
         for owner <- ["a", "b", "c", "d"] do
-          Task.async(fn -> AudioFlow.CallStore.claim(store, owner, 60_000, 20) end)
+          Task.async(fn -> CallStore.claim(store, owner, 60_000, 20) end)
         end
         |> Task.await_many()
         |> Enum.flat_map(fn {:ok, calls} -> Enum.map(calls, & &1.id) end)

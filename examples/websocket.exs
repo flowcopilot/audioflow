@@ -94,4 +94,6 @@ defmodule WebSocketExample do
 end
 
 port = String.to_integer(System.get_env("AUDIOFLOW_WS_PORT", "4000"))
-{:ok, _} = Bandit.start_link(plug: WebSocketExample, port: port, ip: {127, 0, 0, 1})
+# `mix run` ends the script process after the last line, so the server must not be linked to it.
+{:ok, server} = Bandit.start_link(plug: WebSocketExample, port: port, ip: {127, 0, 0, 1})
+Process.unlink(server)

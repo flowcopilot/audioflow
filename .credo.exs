@@ -11,6 +11,7 @@
           "lib_ml/",
           "lib_media/",
           "lib_webrtc/",
+          "lib_sfu/",
           "test/",
           "ui/lib/",
           "ui/test/",

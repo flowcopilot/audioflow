@@ -5,6 +5,13 @@ defmodule AudioFlow.Output do
   `push/3` can block the turn worker to apply back pressure. `flush/2` must
   release a blocked push and stop queued output for that key. A completed turn
   can still have queued output, so `finish/2` must drain instead of discard it.
+
+  `start_turn/2`, `finish/2`, `flush/2` and the optional pause and resume
+  callbacks run inside the session process. They must return promptly: the
+  session answers no call until they return, and a call that never exits (for
+  example a `GenServer.call/3` with `:infinity`) can block it for good. Hand
+  slow work to another process, and return `{:error, reason}` on failure.
+  `push/3` runs in the turn worker, which the session turn timer bounds.
   """
   @interrupt_schema [
     min_words: [type: :pos_integer, default: 2]
@@ -21,8 +28,7 @@ defmodule AudioFlow.Output do
   Call from a trusted transport after endpoint acknowledgement. Stale turns,
   regressing offsets and offsets beyond emitted audio are rejected.
   """
-  def acknowledge(session, turn, nanoseconds),
-    do: GenServer.call(session, {:played, turn, nanoseconds})
+  defdelegate acknowledge(session, turn, nanoseconds), to: AudioFlow.Session
 
   @doc """
   Request a provisional pause on an explicitly pausable endpoint. Returns a
@@ -30,14 +36,20 @@ defmodule AudioFlow.Output do
   Deadline expiry confirms interruption (flush/cancel), never silently resumes.
   """
   def provisional(session, timeout_ms \\ 2_000),
-    do: GenServer.call(session, {:provisional, timeout_ms})
+    do: AudioFlow.Session.provisional(session, timeout_ms)
 
+  @doc """
+  Resolve a provisional pause. `:confirm` cancels the turn. `:resume` needs the
+  endpoint's pause acknowledgement first (see `control_ack/5`); before it, or
+  while a resume waits for its own acknowledgement, it returns
+  `{:error, :not_paused}` and the candidate stays live. A candidate that no
+  longer exists returns `{:error, :stale_candidate}`.
+  """
   def resolve(session, candidate, decision) when decision in [:resume, :confirm],
-    do: GenServer.call(session, {:resolve, candidate, decision})
+    do: AudioFlow.Session.resolve(session, candidate, decision)
 
   @doc "Endpoint control acknowledgement, after actual suspension/resumption."
-  def control_ack(session, turn, candidate, action, ns),
-    do: GenServer.call(session, {:control_ack, turn, candidate, action, ns})
+  defdelegate control_ack(session, turn, candidate, action, ns), to: AudioFlow.Session
 
   @doc """
   Ignore transcripts shorter than min_words (default 2), otherwise cancel.

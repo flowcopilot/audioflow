@@ -103,7 +103,11 @@ in both the upgrade and the downgrade lists.
   module, the fun is purged and a call to it fails with `:badfun`. Session
   options such as adapter `:run` functions live as long as the session. In
   modules that you upgrade often, prefer `&Module.function/arity` or
-  `{module, options}` adapter tuples.
+  `{module, options}` adapter tuples. The session option `:on_commit` also
+  takes `{pid, tag}` (sends `{tag, snapshot}`) and `{module, function, args}`;
+  durable calls use the pid form, so saves go on after upgrades. If an
+  `:on_commit` callback fails, the session logs it with a stacktrace and the
+  call state is no longer saved.
 - **Turns finish on the old code.** A running turn task keeps the code it
   started with. The next turn uses the new code. Upgrades with
   `{:advanced, []}` or `soft_purge` wait for those tasks.

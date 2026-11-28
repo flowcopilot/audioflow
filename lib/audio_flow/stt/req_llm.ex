@@ -29,15 +29,25 @@ defmodule AudioFlow.STT.ReqLLM do
   language, and emits text.
   """
   @behaviour AudioFlow.Adapter
+  alias AudioFlow.Adapters.Options
   alias AudioFlow.Audio
   alias AudioFlow.STT
   alias AudioFlow.Transcript.Segment
+
+  @impl true
+  def validate_options(options) do
+    {_common, rest} = STT.split_options!(options)
+    Options.optional_api_key!(rest)
+    Options.optional_string!(rest, :base_url)
+    :ok
+  end
 
   @impl true
   def run(%Audio{} = audio, options, emit) do
     unless Audio.valid?(audio) and audio.data != <<>>,
       do: raise(ArgumentError, "expected nonempty mono s16le PCM")
 
+    :ok = validate_options(options)
     {common, options} = STT.split_options!(options)
     {:ok, model} = ReqLLM.model(model_input(common.model))
 
@@ -68,8 +78,11 @@ defmodule AudioFlow.STT.ReqLLM do
   # A key function runs at request time, so session options need not hold the key.
   defp resolve_key(options) do
     case Keyword.get(options, :api_key) do
-      key when is_function(key, 0) -> Keyword.put(options, :api_key, key.())
-      _ -> options
+      key when is_function(key, 0) ->
+        Keyword.put(options, :api_key, Options.resolve_key!(options))
+
+      _ ->
+        options
     end
   end
 

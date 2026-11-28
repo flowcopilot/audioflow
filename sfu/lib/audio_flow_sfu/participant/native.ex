@@ -13,6 +13,7 @@ defmodule AudioFlowSFU.Participant.Native do
   alias AudioFlowSFU.Participant
   alias AudioFlowSFU.Room
   alias AudioFlowSFU.Telemetry
+  alias ExWebRTC.RTP.Munger
 
   @vsn 1
   @tag :audio_flow_sfu
@@ -45,6 +46,8 @@ defmodule AudioFlowSFU.Participant.Native do
 
   @impl true
   def init({room, identity, agent, options}) do
+    Participant.limit_heap()
+
     grants = %{
       identity: identity,
       name: Keyword.get(options, :name, identity),
@@ -82,7 +85,12 @@ defmodule AudioFlowSFU.Participant.Native do
           # Track SID => publisher pid.
           subscriptions: %{},
           # Own track SID => %{subscriber pid => monitor ref}.
-          subscribers: %{}
+          subscribers: %{},
+          # Own track SID => %{subscriber pid => {peer connection, track ID}}.
+          routes: %{},
+          # Own track SID => RTP munger: one continuous sequence number and
+          # timestamp domain for the subscribers, whatever the agent sends.
+          mungers: %{}
         }
 
         {:ok, Enum.reduce(others, state, fn {i, pid}, s -> put_member(s, i, pid) end)}
@@ -101,7 +109,18 @@ defmodule AudioFlowSFU.Participant.Native do
     if state.away_timer, do: Process.cancel_timer(elem(state.away_timer, 0))
     Telemetry.participant(:resume, state.info, state.grants.room)
 
-    state = %{state | agent: agent, agent_ref: Process.monitor(agent), away_timer: nil}
+    # A new agent transport picks its own sequence number and timestamp.
+    # The mungers keep the downstream numbers continuous across the change.
+    mungers = Map.new(state.mungers, fn {sid, munger} -> {sid, Munger.update(munger)} end)
+
+    state = %{
+      state
+      | agent: agent,
+        agent_ref: Process.monitor(agent),
+        away_timer: nil,
+        mungers: mungers
+    }
+
     state = update_info(state, %{state.info | state: :active})
     {:reply, {:ok, join_info(state)}, state}
   end
@@ -130,14 +149,17 @@ defmodule AudioFlowSFU.Participant.Native do
             marker: Map.get(rtp, :marker, false)
           )
 
-        Participant.forward(Map.keys(subscribers), sid, packet)
+        {packet, munger} = Munger.munge(munger(state, sid), packet)
+        state = %{state | mungers: Map.put(state.mungers, sid, munger)}
+
+        Participant.forward(Map.keys(subscribers), sid, packet, Map.get(state.routes, sid, %{}))
         |> Telemetry.dropped(sid, state.info, state.grants.room)
 
-      _ ->
-        :ok
-    end
+        {:noreply, state}
 
-    {:noreply, state}
+      _ ->
+        {:noreply, state}
+    end
   end
 
   # Audio for the agent.
@@ -173,6 +195,17 @@ defmodule AudioFlowSFU.Participant.Native do
 
   def handle_info({Participant, :unsubscribe, sid, pid}, state),
     do: {:noreply, drop_subscriber(state, sid, pid)}
+
+  # A subscriber that can take packets straight into its peer connection.
+  def handle_info({Participant, :route, sid, pid, target}, state) do
+    case state.subscribers do
+      %{^sid => %{^pid => _}} ->
+        {:noreply, %{state | routes: Participant.put_route(state.routes, sid, pid, target)}}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
 
   def handle_info({Room, _, {event, info, pid}}, state)
       when event in [:participant_joined, :participant_updated] do
@@ -242,6 +275,16 @@ defmodule AudioFlowSFU.Participant.Native do
     Telemetry.participant(:leave, state.info, state.grants.room)
   end
 
+  defp munger(state, sid) do
+    Map.get_lazy(state.mungers, sid, fn ->
+      track = Enum.find(state.info.tracks, &(&1.sid == sid))
+      Munger.new(:opus, clock_rate(track.mime_type))
+    end)
+  end
+
+  defp clock_rate("audio/PCMU"), do: 8000
+  defp clock_rate(_opus), do: 48_000
+
   defp join_info(state) do
     %{
       participant: self(),
@@ -301,7 +344,12 @@ defmodule AudioFlowSFU.Participant.Native do
     case state.subscribers do
       %{^sid => %{^pid => ref} = subscribers} ->
         Process.demonitor(ref, [:flush])
-        %{state | subscribers: Map.put(state.subscribers, sid, Map.delete(subscribers, pid))}
+
+        %{
+          state
+          | subscribers: Map.put(state.subscribers, sid, Map.delete(subscribers, pid)),
+            routes: Participant.drop_route(state.routes, sid, pid)
+        }
 
       _ ->
         state

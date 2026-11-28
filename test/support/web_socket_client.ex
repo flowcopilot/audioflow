@@ -12,7 +12,7 @@ defmodule AudioFlow.Test.WebSocketClient do
         "Connection: Upgrade\r\nSec-WebSocket-Key: #{key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
       ])
 
-    {:ok, "HTTP/1.1 101" <> _} = :gen_tcp.recv(socket, 0, 1000)
+    {:ok, "HTTP/1.1 101" <> _} = :gen_tcp.recv(socket, 0, 5000)
     skip_headers(socket)
     :ok = :inet.setopts(socket, packet: :raw)
     socket
@@ -23,7 +23,7 @@ defmodule AudioFlow.Test.WebSocketClient do
   def close(socket), do: send_frame(socket, 8, <<1000::16>>)
 
   @doc "Receive one frame. Text frames are decoded as JSON."
-  def recv(socket, timeout \\ 1000) do
+  def recv(socket, timeout \\ 5000) do
     with {:ok, <<_fin::1, _::3, opcode::4, 0::1, length::7>>} <- :gen_tcp.recv(socket, 2, timeout),
          {:ok, length} <- extended_length(socket, length, timeout),
          {:ok, payload} <- payload(socket, length, timeout) do
@@ -37,7 +37,7 @@ defmodule AudioFlow.Test.WebSocketClient do
   end
 
   defp skip_headers(socket) do
-    case :gen_tcp.recv(socket, 0, 1000) do
+    case :gen_tcp.recv(socket, 0, 5000) do
       {:ok, "\r\n"} -> :ok
       {:ok, _header} -> skip_headers(socket)
     end

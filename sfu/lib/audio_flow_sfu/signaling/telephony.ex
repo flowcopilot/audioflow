@@ -5,8 +5,13 @@ defmodule AudioFlowSFU.Signaling.Telephony do
 
   The phone call joins the room as a native participant of kind `:sip`. Its
   8 kHz μ-law audio becomes a PCMU track. The audio of the other members
-  comes back to the phone: PCMU as it is, Opus decoded at 8 kHz and encoded
-  as μ-law. The phone call stays connected while agent nodes restart.
+  comes back to the phone as one stream: each member's audio is decoded to
+  8 kHz PCM (Opus with libopus, PCMU by table), queued per member, mixed
+  every 20 ms with `Membrane.AudioMixer.Adder` (a sum that clips at the
+  16-bit limits) and encoded as μ-law. A queue holds 100 ms at most: when a
+  member sends faster than real time, the oldest audio is dropped, so the
+  delay on the phone stays bounded. The stream pauses when no member has
+  audio. The phone call stays connected while agent nodes restart.
 
   The token comes from the `access_token` query parameter or, for Twilio,
   which does not allow query parameters in a stream URL, from the
@@ -19,7 +24,14 @@ defmodule AudioFlowSFU.Signaling.Telephony do
   require Logger
   alias AudioFlowSFU.Native
   alias AudioFlowSFU.Token
+  alias Membrane.AudioMixer.Adder
   alias Membrane.Opus.Decoder.Native, as: OpusDecoder
+  alias Membrane.RawAudio
+
+  # One 20 ms frame of 8 kHz mono s16le audio, and how many a member may queue.
+  @interval 20
+  @frame 320
+  @max_queue 5 * @frame
 
   @impl true
   def init(%{provider: provider} = options) when provider in [:twilio, :telnyx] do
@@ -32,7 +44,14 @@ defmodule AudioFlowSFU.Signaling.Telephony do
        participant: nil,
        track: nil,
        sequence: 0,
-       decoders: %{}
+       # Phone audio that does not fill a 20 ms packet yet.
+       inbound: <<>>,
+       decoders: %{},
+       # Member track SID => decoded PCM that waits for its 20 ms turn.
+       queues: %{},
+       mixer: Adder.init(%RawAudio{sample_format: :s16le, sample_rate: 8000, channels: 1}),
+       # Monotonic time of the next 20 ms tick; nil while no audio waits.
+       tick: nil
      }}
   end
 
@@ -90,9 +109,14 @@ defmodule AudioFlowSFU.Signaling.Telephony do
   defp incoming(event, _message, state) when event in ["mark", "dtmf"], do: {:ok, state}
   defp incoming(_event, _message, state), do: fail(:invalid_event, state)
 
-  # Phone audio in 20 ms RTP packets on the PCMU track.
+  # Phone audio in 20 ms RTP packets on the PCMU track. A message that does
+  # not end on a packet boundary leaves its remainder for the next one.
   defp publish(bytes, state) do
-    for <<chunk::binary-size(160) <- bytes>>, reduce: state do
+    bytes = state.inbound <> bytes
+    rest = byte_size(bytes) - rem(byte_size(bytes), 160)
+    <<whole::binary-size(^rest), remainder::binary>> = bytes
+
+    for <<chunk::binary-size(160) <- whole>>, reduce: %{state | inbound: remainder} do
       state ->
         rtp = %{
           sequence_number: rem(state.sequence, 65_536),
@@ -108,8 +132,8 @@ defmodule AudioFlowSFU.Signaling.Telephony do
 
   @impl true
   def handle_info({:audio_flow_sfu, 1, p, {:rtp, sid, rtp}}, %{participant: p} = state) do
-    {mulaw, state} = to_mulaw(sid, rtp.payload, state)
-    if mulaw == <<>>, do: {:ok, state}, else: {:push, media(mulaw, state), state}
+    {pcm, state} = to_pcm(sid, rtp.payload, state)
+    {:ok, state |> enqueue(sid, pcm) |> start_ticking()}
   rescue
     error ->
       Logger.debug("telephony decode failed: #{Exception.message(error)}")
@@ -121,6 +145,23 @@ defmodule AudioFlowSFU.Signaling.Telephony do
 
   def handle_info({:audio_flow_sfu, 1, p, {:participant_updated, info}}, %{participant: p} = s),
     do: {:ok, put_decoder(s, info)}
+
+  def handle_info({:audio_flow_sfu, 1, p, {:participant_left, info}}, %{participant: p} = s),
+    do: {:ok, drop_tracks(s, info)}
+
+  # Mixes one 20 ms frame of every member that has audio queued.
+  def handle_info(:tick, state) do
+    {frames, queues} = take_frames(state.queues)
+    state = %{state | queues: queues}
+
+    if frames == [] do
+      {:ok, %{state | tick: nil}}
+    else
+      {pcm, mixer} = Adder.mix(frames, state.mixer)
+      state = schedule_tick(%{state | mixer: mixer})
+      {:push, media(mulaw(pcm), state), state}
+    end
+  end
 
   def handle_info({:audio_flow_sfu, 1, p, {:closed, _reason}}, %{participant: p} = state),
     do: {:stop, :normal, state}
@@ -151,9 +192,53 @@ defmodule AudioFlowSFU.Signaling.Telephony do
     %{state | decoders: decoders}
   end
 
-  defp to_mulaw(sid, payload, state) do
+  # A queue keeps the newest audio. Whole 20 ms frames leave it per tick.
+  defp enqueue(state, _sid, <<>>), do: state
+
+  defp enqueue(state, sid, pcm) do
+    queue = Map.get(state.queues, sid, <<>>) <> pcm
+    skip = max(byte_size(queue) - @max_queue, 0)
+    queue = binary_part(queue, skip, byte_size(queue) - skip)
+    %{state | queues: Map.put(state.queues, sid, queue)}
+  end
+
+  defp take_frames(queues) do
+    Enum.reduce(queues, {[], %{}}, fn
+      {sid, <<frame::binary-size(@frame), rest::binary>>}, {frames, queues} ->
+        {[frame | frames], if(rest == <<>>, do: queues, else: Map.put(queues, sid, rest))}
+
+      # A short rest at the end of a packet burst plays as it is.
+      {_sid, rest}, {frames, queues} ->
+        {[rest | frames], queues}
+    end)
+  end
+
+  defp start_ticking(%{tick: nil} = state) do
+    Process.send_after(self(), :tick, @interval)
+    %{state | tick: now() + @interval}
+  end
+
+  defp start_ticking(state), do: state
+
+  # The next tick follows the last one by 20 ms, whatever the delay of this
+  # one. After a long stall it restarts from now instead of catching up.
+  defp schedule_tick(state) do
+    next = state.tick + @interval
+    next = if now() - next > 5 * @interval, do: now() + @interval, else: next
+    Process.send_after(self(), :tick, max(next - now(), 0))
+    %{state | tick: next}
+  end
+
+  defp now, do: System.monotonic_time(:millisecond)
+
+  defp drop_tracks(state, info) do
+    sids = Enum.map(info.tracks, & &1.sid)
+    %{state | decoders: Map.drop(state.decoders, sids), queues: Map.drop(state.queues, sids)}
+  end
+
+  defp to_pcm(sid, payload, state) do
     case Map.get(state.decoders, sid) do
-      :pcmu -> {payload, state}
+      :pcmu -> {mulaw_decode(payload), state}
       nil -> {<<>>, state}
       decoders -> opus(sid, decoders, payload, state)
     end
@@ -166,7 +251,7 @@ defmodule AudioFlowSFU.Signaling.Telephony do
     decoder = Map.get_lazy(decoders, channels, fn -> OpusDecoder.create(8000, channels) end)
     pcm = OpusDecoder.decode_packet(decoder, payload)
     pcm = if channels == 2, do: downmix(pcm), else: pcm
-    {mulaw(pcm), put_in(state.decoders[sid], Map.put(decoders, channels, decoder))}
+    {pcm, put_in(state.decoders[sid], Map.put(decoders, channels, decoder))}
   end
 
   defp opus(_sid, _decoders, _payload, state), do: {<<>>, state}
@@ -193,8 +278,19 @@ defmodule AudioFlowSFU.Signaling.Telephony do
   @doc "G.711 μ-law encoding of signed 16-bit little-endian PCM."
   def mulaw(pcm), do: for(<<sample::little-signed-16 <- pcm>>, into: <<>>, do: <<encode(sample)>>)
 
+  @doc "Signed 16-bit little-endian PCM of G.711 μ-law bytes."
+  def mulaw_decode(mulaw),
+    do: for(<<byte <- mulaw>>, into: <<>>, do: <<decode(byte)::little-signed-16>>)
+
   @bias 0x84
   @clip 32_635
+
+  defp decode(byte) do
+    value = bxor(byte, 0xFF)
+    exponent = value >>> 4 &&& 0x07
+    sample = ((((value &&& 0x0F) <<< 3) + @bias) <<< exponent) - @bias
+    if (value &&& 0x80) == 0, do: sample, else: -sample
+  end
 
   defp encode(sample) do
     sign = if sample < 0, do: 0x80, else: 0

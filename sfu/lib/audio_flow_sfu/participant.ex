@@ -15,10 +15,16 @@ defmodule AudioFlowSFU.Participant do
   - `{AudioFlowSFU.Participant, :unsubscribe, track_sid, pid}` stops it.
   - `{AudioFlowSFU.Participant, :rtp, track_sid, packet}` carries one
     `ExRTP.Packet`.
+  - `{AudioFlowSFU.Participant, :route, track_sid, pid, target}` tells a
+    publisher that `pid` can take the track's packets straight into its
+    `ExWebRTC.PeerConnection`. `target` is `{peer_connection, track_id}`, or
+    `nil` to go back to `:rtp` messages. A WebRTC subscriber sets a route once
+    its sender is negotiated, which saves one process hop for each packet.
 
   Events for the owner of a participant (a signaling socket or an agent) are
   `{AudioFlowSFU.Participant, pid, event}`.
   """
+  alias ExWebRTC.PeerConnection
 
   @doc "A new server ID with a LiveKit-style prefix, such as `PA_` or `TR_`."
   def sid(prefix) do
@@ -62,18 +68,72 @@ defmodule AudioFlowSFU.Participant do
   def unsubscribe(publisher, track_sid),
     do: send(publisher, {__MODULE__, :unsubscribe, track_sid, self()})
 
+  def route(publisher, track_sid, target),
+    do: send(publisher, {__MODULE__, :route, track_sid, self(), target})
+
+  @doc """
+  Sets or clears (`nil`) the route of `pid` in `routes`, the routes of all
+  tracks of a publisher: track SID => %{subscriber pid => target}.
+  """
+  def put_route(routes, track_sid, pid, nil), do: drop_route(routes, track_sid, pid)
+
+  def put_route(routes, track_sid, pid, target),
+    do: Map.update(routes, track_sid, %{pid => target}, &Map.put(&1, pid, target))
+
+  def drop_route(routes, track_sid, pid),
+    do: Map.update(routes, track_sid, %{}, &Map.delete(&1, pid))
+
+  # A local subscriber with more queued messages than this loses media. At
+  # 50 packets per second per publisher, 1 000 messages is seconds of audio.
+  @max_queue 1_000
+
+  # Heap limit of a media process, in words (64 MiB on a 64-bit system). A
+  # process above it is killed and its participant leaves; the room and the
+  # other participants stay up.
+  @max_heap_words 8_000_000
+
+  @doc """
+  Limits the heap of the calling media process. Call it from `init/1`.
+  """
+  def limit_heap do
+    Process.flag(:max_heap_size, %{size: @max_heap_words, kill: true, error_logger: true})
+  end
+
   @doc """
   Sends one packet to each subscriber. A subscriber on a busy distribution
-  connection loses the packet: late audio has no value. Returns the number
-  of dropped packets.
+  connection loses the packet: late audio has no value. So does a local
+  subscriber with more than #{@max_queue} queued messages, which otherwise
+  grows its mailbox without bound. A subscriber in `routes` (subscriber pid
+  => `{peer_connection, track_id}` for this track) gets the packet in its
+  peer connection directly. Returns the number of dropped packets.
   """
-  def forward(subscribers, track_sid, packet) do
+  def forward(subscribers, track_sid, packet, routes \\ %{}) do
     message = {__MODULE__, :rtp, track_sid, packet}
 
     Enum.count(subscribers, fn pid ->
-      :erlang.send(pid, message, [:nosuspend]) == :nosuspend
+      case routes do
+        %{^pid => {pc, track_id}} ->
+          backlog?(pc) or direct(pc, track_id, packet)
+
+        _ ->
+          backlog?(pid) or :erlang.send(pid, message, [:nosuspend]) == :nosuspend
+      end
     end)
   end
+
+  defp direct(pc, track_id, packet) do
+    PeerConnection.send_rtp(pc, track_id, packet)
+    false
+  end
+
+  defp backlog?(pid) when node(pid) == node() do
+    case Process.info(pid, :message_queue_len) do
+      {:message_queue_len, length} -> length > @max_queue
+      nil -> false
+    end
+  end
+
+  defp backlog?(_remote), do: false
 
   @doc "Sends an event to the owner. Events for an absent owner are dropped."
   def notify(nil, _event), do: :ok

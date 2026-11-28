@@ -100,6 +100,50 @@ defmodule AudioFlow.RemoteProvidersTest do
     assert_receive {:disconnected, ^socket}
   end
 
+  test "OpenAI fails a finished response without an input transcript after the grace time" do
+    task = start_run(OpenAIRealtime, socket_options() ++ [transcript_grace_ms: 100])
+    assert_receive {:connected, socket}
+    event(socket, %{type: "session.updated"})
+    event(socket, %{type: "response.done", response: %{status: "completed", output: []}})
+
+    assert {:error, :transcript_timeout} = Task.await(task)
+  end
+
+  test "timeout_ms bounds provider time, not the time in the output callback" do
+    owner = self()
+    options = socket_options() ++ [timeout_ms: 2000]
+
+    task =
+      Task.async(fn ->
+        audio = %Audio{data: <<1, 0, 2, 0>>, sample_rate: 24_000}
+
+        OpenAIRealtime.run(audio, options, fn
+          {:text, _} ->
+            send(owner, :emitting)
+            # Longer than timeout_ms. The provider steps stay well inside it, even when loaded.
+            Process.sleep(2500)
+            :ok
+
+          _other ->
+            :ok
+        end)
+      end)
+
+    assert_receive {:connected, socket}
+    event(socket, %{type: "session.updated"})
+    event(socket, %{type: "response.output_audio_transcript.delta", delta: "Hello"})
+    assert_receive :emitting
+
+    event(socket, %{type: "response.done", response: %{status: "completed", output: []}})
+
+    event(socket, %{
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "Hi"
+    })
+
+    assert :ok = Task.await(task)
+  end
+
   test "Gemini waits for setupComplete and uses manual activity with distinct PCM rates" do
     task = start_run(GeminiLive, socket_options(), 16_000)
     assert_receive {:connected, socket}

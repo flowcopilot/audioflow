@@ -1,6 +1,7 @@
 defmodule AudioFlow.Input do
   @moduledoc "Membrane input chain with FFmpeg resampling and voice detection."
   import Membrane.ChildrenSpec
+  alias AudioFlow.VoiceInput
 
   @doc "Append a mono s16le resampler and session sink to an input source chain."
   def attach(source, session, options \\ []) do
@@ -23,7 +24,7 @@ defmodule AudioFlow.Input do
     |> child(:audio_flow_input, %AudioFlow.PCMSink{
       session: session,
       vad: vad,
-      endpoint_options: Keyword.get(options, :endpoint_options, [])
+      voice_input: VoiceInput.Options.fetch(options)
     })
   end
 end

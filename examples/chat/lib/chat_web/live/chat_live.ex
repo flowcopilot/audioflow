@@ -424,12 +424,7 @@ defmodule ChatWeb.ChatLive do
 
   # A model failure must not stop the LiveView. Duplex monitors this owner.
   defp start_duplex(adapter) do
-    limits =
-      if elem(adapter, 0) == Duplex.OpenAIRealtime,
-        do: [max_response_bytes: 256 * 1024 * 1024],
-        else: []
-
-    Duplex.start([owner: self(), adapter: adapter] ++ limits)
+    Duplex.start(owner: self(), adapter: adapter)
   rescue
     error in ArgumentError -> {:error, Exception.message(error)}
   end

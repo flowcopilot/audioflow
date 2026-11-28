@@ -8,7 +8,9 @@ defmodule AudioFlow.WebRTC do
 
   `publish/5` sends one encoded VP8 frame or 20 ms PCMU packet. `pts_us` is
   relative to a shared audio/video epoch; the producer must pace calls in real
-  time. No encoder, decoder, jitter buffer or playout acknowledgement is implied.
+  time. The first audio packet of a turn, and the first after a `pts_us` gap
+  of more than 20 ms, has the RTP marker bit: it starts a talkspurt. The last
+  packet of a video frame has the marker bit. No encoder, decoder, jitter buffer or playout acknowledgement is implied.
   Flush invalidates the generation key, preventing stale producers from sending.
   """
   use GenServer
@@ -82,7 +84,9 @@ defmodule AudioFlow.WebRTC do
        timer: timer,
        key: nil,
        seq: %{audio: 0, video: 0},
-       pts: %{}
+       pts: %{},
+       # True until an audio packet has been sent since the turn started.
+       spurt: true
      }}
   end
 
@@ -136,7 +140,9 @@ defmodule AudioFlow.WebRTC do
   end
 
   def handle_call({:signal, _}, _, s), do: {:reply, {:error, :invalid_signal}, s}
-  def handle_call({:turn, key}, _, s) when not is_nil(key), do: {:reply, :ok, %{s | key: key}}
+
+  def handle_call({:turn, key}, _, s) when not is_nil(key),
+    do: {:reply, :ok, %{s | key: key, spurt: true}}
 
   def handle_call({:flush, key}, _, s),
     do: {:reply, :ok, if(s.key == key, do: %{s | key: nil}, else: s)}
@@ -205,9 +211,12 @@ defmodule AudioFlow.WebRTC do
 
   defp send_media(s, kind, data, pts) do
     chunks = if kind == :video, do: vp8(data), else: [data]
+    last = length(chunks) - 1
 
     timestamp =
       rem(div(pts * if(kind == :video, do: 90_000, else: 8000), 1_000_000), 4_294_967_296)
+
+    spurt = kind == :audio and (s.spurt or pts - Map.get(s.pts, :audio, pts) > 20_000)
 
     seq =
       Enum.reduce(Enum.with_index(chunks), s.seq[kind], fn {payload, i}, seq ->
@@ -215,14 +224,19 @@ defmodule AudioFlow.WebRTC do
           ExRTP.Packet.new(payload,
             timestamp: timestamp,
             sequence_number: seq,
-            marker: kind == :video and i == length(chunks) - 1
+            marker: if(kind == :video, do: i == last, else: spurt)
           )
 
         PeerConnection.send_rtp(s.pc, s.tracks[kind], packet)
         rem(seq + 1, 65_536)
       end)
 
-    %{s | seq: Map.put(s.seq, kind, seq), pts: Map.put(s.pts, kind, pts)}
+    %{
+      s
+      | seq: Map.put(s.seq, kind, seq),
+        pts: Map.put(s.pts, kind, pts),
+        spurt: s.spurt and kind != :audio
+    }
   end
 
   defp valid?(:audio, data, pts),

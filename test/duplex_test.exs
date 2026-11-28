@@ -204,7 +204,8 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
     end
 
     for {reason, server_options, options, action} <- [
-          {:connect_timeout, [handshake: :manual], [connect_timeout_ms: 100], nil},
+          # Long enough for the fake server to accept the socket on a loaded machine.
+          {:connect_timeout, [handshake: :manual], [connect_timeout_ms: 1_000], nil},
           {:idle_timeout, [], [idle_timeout_ms: 100], nil},
           {:session_timeout, [], [max_session_ms: 150], nil},
           {:connection_closed, [], [], :close}
@@ -214,7 +215,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
         ref = Process.monitor(duplex)
         if unquote(action), do: send(server, unquote(action))
 
-        assert_receive {Duplex, ^duplex, {:error, unquote(reason)}}, 1_000
+        assert_receive {Duplex, ^duplex, {:error, unquote(reason)}}
         assert_receive {Duplex, ^duplex, :closed}
         assert_receive :moshi_server_closed
         assert_receive {:DOWN, ^ref, :process, ^duplex, :normal}

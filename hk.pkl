@@ -1,6 +1,6 @@
-amends "package://github.com/jdx/hk/releases/download/v2.11.0/hk@2.11.0#/Config.pkl"
+amends "package://github.com/jdx/hk/releases/download/v2.14.0/hk@2.14.0#/Config.pkl"
 
-import "package://github.com/jdx/hk/releases/download/v2.11.0/hk@2.11.0#/Builtins.pkl"
+import "package://github.com/jdx/hk/releases/download/v2.14.0/hk@2.14.0#/Builtins.pkl"
 
 exclude = List("deps/**", "_build/**", "**/node_modules/**", "priv/static/**")
 
@@ -8,6 +8,28 @@ exclude = List("deps/**", "_build/**", "**/node_modules/**", "priv/static/**")
 local clean_git_env = "env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_INDEX_FILE "
 
 local elixir_glob = List("**/*.ex", "**/*.exs")
+
+// ui/, sfu/ and examples/chat are separate Mix projects. Their formatter plugins and
+// tests need their own deps, so their steps run inside the project directory.
+// `test_env` is a prefix for the test command, such as "CHAT_PROFILE=demo ". With
+// `docker`, the tests run in the Linux container of scripts/docker-test.sh, for
+// projects whose native libraries (ex_libsrtp) do not load on every host.
+local function subproject_steps(name: String, path: String, test_env: String, docker: Boolean) =
+  new Mapping<String, Step> {
+    ["\(name)-format"] {
+      dir = path
+      glob = elixir_glob
+      check = "mix deps.get --check-locked > /dev/null && mix format --check-formatted"
+    }
+    ["\(name)-test"] {
+      dir = path
+      glob = elixir_glob
+      check =
+        if (docker) clean_git_env + "../scripts/docker-test.sh --project \(path)"
+        else clean_git_env + test_env + "mix deps.get --check-locked > /dev/null && " + test_env + "mix test"
+      depends = List("\(name)-format")
+    }
+  }
 
 // Shared steps: these make up the pre-commit, check and fix hooks.
 steps = new Mapping<String, Step | Group> {
@@ -31,8 +53,8 @@ steps = new Mapping<String, Step | Group> {
   // ── tier 3: formatters ──
   ["ruff-format"] = (Builtins.ruff_format) { depends = List("ruff") }
   ["rumdl-format"] = (Builtins.rumdl_format) { depends = List("rumdl") }
-  // ui/, sfu/, releases/ and examples/chat are separate Mix projects with their own formatter
-  // plugins, which need those projects' deps.
+  // ui/, sfu/, releases/ and examples/chat have their own formatter configs (see the
+  // pre-push subproject steps).
   ["mix-format"] = (Builtins.mix_fmt) {
     exclude = List("deps/**/*", "ui/**", "examples/chat/**", "sfu/**", "releases/**")
   }
@@ -45,9 +67,13 @@ steps = new Mapping<String, Step | Group> {
       ["newlines"] = (Builtins.newlines) { exclude = List("validation/**") }
     }
   }
+
+  // ── tier 5: validators ──
+  ["shellcheck"] = Builtins.shellcheck
 }
 
-// Slow, whole-project checks for the core build profile.
+// Slow, whole-project checks. CI runs only the core tests, so these are the gate for
+// the optional build profiles and the subprojects.
 local slow_steps = new Mapping<String, Step> {
   // New issues relative to main, so existing findings don't block pushes.
   ["credo"] {
@@ -58,11 +84,13 @@ local slow_steps = new Mapping<String, Step> {
     glob = elixir_glob
     check = "mix typecheck"
   }
-  // Builds into _build/core_webrtc, so it can run alongside the core steps.
-  // Needs the OpenSSL dev headers for ex_dtls.
-  ["mix-typecheck-webrtc"] {
+  // Every optional source directory (ML, media, WebRTC, SFU) in one build, typechecked
+  // and tested in a Linux container with its own deps and _build volumes, so native
+  // libraries do not depend on the host. Model tests stay excluded by
+  // test/test_helper.exs. Needs a running Docker daemon.
+  ["all-profiles-docker"] {
     glob = elixir_glob
-    check = "AUDIOFLOW_WEBRTC=1 mix typecheck"
+    check = clean_git_env + "scripts/docker-test.sh"
   }
   ["mix-dialyzer"] {
     glob = elixir_glob
@@ -70,7 +98,8 @@ local slow_steps = new Mapping<String, Step> {
   }
   ["mix-deps-audit"] {
     glob = List("mix.exs", "mix.lock")
-    check = "mix deps.audit && mix hex.audit"
+    // mix_audit runs git in its advisory checkout; the hook's GIT_DIR would point it here.
+    check = clean_git_env + "mix deps.audit && mix hex.audit"
   }
   ["mix-test"] {
     glob = elixir_glob
@@ -78,6 +107,10 @@ local slow_steps = new Mapping<String, Step> {
     // Same MIX_ENV and build directory as mix-typecheck.
     depends = List("mix-typecheck")
   }
+  ...subproject_steps("sfu", "sfu", "", true)
+  ...subproject_steps("ui", "ui", "", false)
+  // The chat tests expect the demo profile (no model processes). Its default on macOS is native.
+  ...subproject_steps("chat", "examples/chat", "CHAT_PROFILE=demo ", false)
 }
 
 hooks {
@@ -87,8 +120,9 @@ hooks {
     }
   }
   ["pre-push"] {
+    // The slow credo step checks the whole branch, so it replaces the HEAD-only one.
     steps = new Mapping<String, Step | Group> {
-      ...module.steps
+      ...module.steps.toMap().remove("credo")
       ...slow_steps
     }
   }

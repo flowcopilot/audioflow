@@ -38,7 +38,7 @@ than `:max_chunk_bytes` (64,000). Text frames are JSON commands:
 
 Without `:vad`, PCM collects until `commit`. The collected input must not be
 larger than `:max_buffer_bytes` (960,000). With `:vad`, PCM goes through
-`AudioFlow.VoiceInput`, and `:endpoint_options` sets its endpoint detection.
+`AudioFlow.VoiceInput`, and `:voice_input` sets its endpoint detection.
 Confirmed speech cancels the active reply, and an endpoint submits the
 utterance. The input rate must then be the detector rate.
 
@@ -53,6 +53,15 @@ event for an STT segment also has `start_ms`, `end_ms` and `words`. See
 it must discard its queued playback. After a cancellation, the connection
 drops output from the old turn. An invalid client message gets an `error`
 event, and the connection stays open.
+
+An `error` event has a stable `reason` code, and a `turn` when a turn failed.
+Atom reasons keep their name, for example `busy`, `timeout` or `invalid_audio`.
+Known failures use a fixed code: `output_failed`, `turn_crashed`,
+`session_stopped` and `unsupported_input`. Any other failure, such as an
+adapter exception, is `internal_error`. The server logs the full reason, and it
+never goes to the client. If the session does not answer a command in time, the
+reason is `session_unavailable`. When a cancel arrives after the turn finished,
+the client gets that turn's `done` event, not `cancelled`.
 
 The browser example uses the Demo adapters. Hold the button to speak, or type
 a message:

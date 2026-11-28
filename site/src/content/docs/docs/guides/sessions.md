@@ -22,6 +22,20 @@ receive do
 end
 ```
 
+## Options
+
+`AudioFlow.start_session/1` validates all session options and raises
+`ArgumentError` for an unknown or misspelled key or an invalid value, before it
+starts the session. The `AudioFlow.Session` module documentation lists every
+option with its type and default. They are `:owner`, `:stt`, `:llm`, `:tts`,
+`:vision`, `:speech_to_speech`, `:graph`, `:conversation`, `:history`,
+`:restore`, `:on_commit`, `:output`, `:notify_audio` and the limits below.
+An invalid combination, such as `:speech_to_speech` with `:graph`, returns
+`{:error, reason}`.
+
+Set `notify_audio: false` when an `:output` transport already receives the
+audio. The owner then gets every event except `{:audio, audio}`.
+
 ## Turns
 
 Each turn has a unique reference. A session accepts one turn at a time. Further
@@ -77,6 +91,25 @@ or [Moshi](../../features/providers/#continuous-full-duplex-moshi).
 The session stops when its owner exits. Turn failures do not stop the session.
 Sessions are temporary supervisor children: a session crash does not restart a
 conversation with lost state. The caller must start a new session after a crash.
+
+## HTTP connection pool
+
+Streaming LLM and TTS adapters hold one HTTP/1 connection for the whole turn
+and share one Finch pool. When all connections to a host are in use, a new
+turn waits for a connection and then fails. Size the pool for the number of
+concurrent turns per host:
+
+```elixir
+config :audio_flow, :http_pool, size: 100, count: 2
+```
+
+| Option | Default | Meaning |
+| --- | ---: | --- |
+| `size` | 50 | Connections per pool |
+| `count` | 1 | Pools per host (capacity is `size * count`) |
+| `connect_timeout_ms` | 5,000 | Time to open a connection |
+
+The pool is read when the application starts. Invalid values stop the start.
 
 ## Back pressure
 

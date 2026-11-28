@@ -24,7 +24,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
       spec =
         child(:source, %AudioFlow.PCMSource{
           playback: broker,
-          key: {self(), make_ref()},
+          id: make_ref(),
           sample_rate: 24_000,
           alignment_samples: 256
         })
@@ -39,6 +39,55 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
 
       assert_sink_buffer(pipeline, :sink, %Membrane.Buffer{payload: padding, pts: 41_666})
       assert padding == :binary.copy(<<0, 0>>, 255)
+      assert_end_of_stream(pipeline, :sink)
+    end
+
+    test "the source survives a turn end: it pads, notifies its parent and restarts timestamps" do
+      first = %AudioFlow.Audio{data: <<1::little-signed-16>>, sample_rate: 24_000}
+
+      second = %AudioFlow.Audio{
+        data: <<2::little-signed-16, 3::little-signed-16>>,
+        sample_rate: 24_000
+      }
+
+      broker =
+        spawn(fn ->
+          for result <- [first, :end_of_turn, second, :end_of_stream] do
+            receive do
+              {:take_pcm, _id, source, request} -> send(source, {:pcm, request, result})
+            end
+          end
+        end)
+
+      on_exit(fn -> if Process.alive?(broker), do: Process.exit(broker, :kill) end)
+
+      spec =
+        child(:source, %AudioFlow.PCMSource{
+          playback: broker,
+          id: make_ref(),
+          sample_rate: 24_000,
+          alignment_samples: 4
+        })
+        |> child(:sink, Membrane.Testing.Sink)
+
+      pipeline = Pipeline.start_link_supervised!(spec: spec)
+
+      assert_sink_buffer(pipeline, :sink, %Membrane.Buffer{
+        payload: <<1::little-signed-16>>,
+        pts: 0
+      })
+
+      assert_sink_buffer(pipeline, :sink, %Membrane.Buffer{payload: padding, pts: 41_666})
+      assert padding == :binary.copy(<<0, 0>>, 3)
+      assert_pipeline_notified(pipeline, :source, :end_of_turn)
+
+      assert_sink_buffer(pipeline, :sink, %Membrane.Buffer{
+        payload: <<2::little-signed-16, 3::little-signed-16>>,
+        pts: 0
+      })
+
+      assert_sink_buffer(pipeline, :sink, %Membrane.Buffer{payload: tail, pts: 83_333})
+      assert tail == :binary.copy(<<0, 0>>, 2)
       assert_end_of_stream(pipeline, :sink)
     end
   end

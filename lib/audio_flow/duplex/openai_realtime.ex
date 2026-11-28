@@ -34,49 +34,35 @@ defmodule AudioFlow.Duplex.OpenAIRealtime do
   (`"wss://api.openai.com/v1/realtime"`).
   """
   @behaviour AudioFlow.Duplex.Adapter
+  alias AudioFlow.Adapters.Options
+  alias AudioFlow.Adapters.Providers.OpenAIRealtime, as: Protocol
   alias AudioFlow.Adapters.Providers.Socket
   alias AudioFlow.Audio
 
-  @rate 24_000
+  @rate Protocol.rate()
   @truncate "audioflow_truncate_"
-  @statuses %{
-    "completed" => :completed,
-    "cancelled" => :cancelled,
-    "incomplete" => :incomplete,
-    "failed" => :failed
-  }
+  @turn_detection %{type: "server_vad", create_response: true, interrupt_response: true}
+  @allowed [:model, :api_key, :voice, :instructions, :transcription_model, :endpoint]
 
   @impl true
   def config(options) do
-    options =
-      Keyword.validate!(options, [
-        :model,
-        :api_key,
-        voice: "marin",
-        instructions: "",
-        transcription_model: "gpt-4o-mini-transcribe",
-        endpoint: "wss://api.openai.com/v1/realtime"
-      ])
-
-    for key <- [:model, :voice, :transcription_model, :endpoint] do
-      unless is_binary(options[key]) and options[key] != "",
-        do: raise(ArgumentError, "#{key} must be a nonempty string")
-    end
-
-    unless is_binary(options[:instructions]),
-      do: raise(ArgumentError, "instructions must be a string")
-
+    options |> Options.keyword!() |> Options.known!(@allowed)
+    Protocol.validate_options!(options)
     api_key = options[:api_key]
 
-    unless is_function(api_key, 0) or (is_binary(api_key) and api_key != ""),
-      do: raise(ArgumentError, "api_key must be a nonempty string or a function")
-
     %{
-      url: Socket.url(options[:endpoint], %{"model" => options[:model]}),
+      url:
+        Socket.url(Keyword.get(options, :endpoint, Protocol.endpoint()), %{
+          "model" => options[:model]
+        }),
       headers: fn -> [{"authorization", "Bearer " <> Socket.key(api_key: api_key)}] end,
       sample_rate: @rate,
       input_flow: :realtime,
-      options: Keyword.take(options, [:model, :voice, :instructions, :transcription_model])
+      options:
+        Keyword.merge(
+          [voice: "marin", instructions: "", transcription_model: "gpt-4o-mini-transcribe"],
+          Keyword.take(options, [:model, :voice, :instructions, :transcription_model])
+        )
     }
   end
 
@@ -96,8 +82,11 @@ defmodule AudioFlow.Duplex.OpenAIRealtime do
   @impl true
   def handle_frame({:text, data}, state) do
     case JSON.decode(data) do
-      {:ok, %{"type" => type} = event} when is_binary(type) -> event(type, event, state)
-      _ -> {:error, :invalid_event}
+      {:ok, %{"type" => type} = event} when is_binary(type) ->
+        event(Protocol.decode(event), state)
+
+      _ ->
+        {:error, :invalid_event}
     end
   end
 
@@ -136,80 +125,58 @@ defmodule AudioFlow.Duplex.OpenAIRealtime do
 
   def handle_control(_command, _state), do: {:error, :invalid_command}
 
-  defp event("session.created", _event, %{phase: :connecting} = state),
+  defp event(:session_created, %{phase: :connecting} = state),
     do:
       {:ok, [], [json(%{type: "session.update", session: session(state.session)})],
        %{state | phase: :updating}}
 
-  defp event("session.updated", _event, %{phase: :updating} = state),
+  defp event(:session_updated, %{phase: :updating} = state),
     do: {:ok, [:ready], [], %{state | phase: :ready}}
 
-  defp event("error", event, state) do
-    error = if is_map(event["error"]), do: event["error"], else: %{}
-
+  defp event({:remote_error, error}, state) do
     # A rejected truncation only leaves the provider history longer.
     if is_binary(error["event_id"]) and String.starts_with?(error["event_id"], @truncate),
       do: {:ok, [], [], state},
       else: {:error, {:remote_error, code(error)}}
   end
 
-  defp event(_type, _event, %{phase: phase} = state) when phase != :ready,
+  defp event(_decoded, %{phase: phase} = state) when phase != :ready,
     do: {:ok, [], [], state}
 
-  defp event("input_audio_buffer.speech_started", %{"item_id" => item}, state)
-       when is_binary(item) do
+  defp event({:speech_started, item}, state) do
     state = %{state | dropped: state.response, cut: state.output || state.cut, output: nil}
     {:ok, [{:speech_started, item}], [], state}
   end
 
-  defp event(
-         "conversation.item.input_audio_transcription.completed",
-         %{"item_id" => item, "transcript" => text},
-         state
-       )
-       when is_binary(item) and is_binary(text),
-       do: {:ok, [{:transcript, item, text}], [], state}
+  defp event({:transcript, item, text}, state) when is_binary(item),
+    do: {:ok, [{:transcript, item, text}], [], state}
 
-  defp event("conversation.item.input_audio_transcription.failed", %{"item_id" => item}, state)
-       when is_binary(item),
-       do: {:ok, [{:transcript, item, :failed}], [], state}
+  defp event({:transcript_failed, item}, state) when is_binary(item),
+    do: {:ok, [{:transcript, item, :failed}], [], state}
 
-  defp event("response.created", %{"response" => %{"id" => id}}, state) when is_binary(id),
+  defp event({:response_created, id}, state),
     do: {:ok, [{:response, id, :created}], [], %{state | response: id}}
 
-  defp event("response.output_audio.delta", %{"response_id" => id}, %{dropped: id} = state),
+  defp event({:audio, %{response_id: id}}, %{dropped: id} = state) when is_binary(id),
     do: {:ok, [], [], state}
 
-  defp event(
-         "response.output_audio.delta",
-         %{"item_id" => item, "delta" => delta} = event,
-         state
-       )
-       when is_binary(item) and is_binary(delta) do
-    case Base.decode64(delta) do
-      {:ok, pcm} when rem(byte_size(pcm), 2) == 0 -> audio(pcm, item, event, state)
-      _ -> {:error, :invalid_audio}
-    end
-  end
+  defp event({:audio, %{item_id: item} = audio}, state) when is_binary(item),
+    do: audio(audio.pcm, item, audio.content_index, state)
 
-  defp event(type, %{"response_id" => id}, %{dropped: id} = state)
-       when type in ["response.output_audio_transcript.delta", "response.output_text.delta"],
-       do: {:ok, [], [], state}
+  defp event(:invalid_audio, _state), do: {:error, :invalid_audio}
 
-  defp event(type, %{"delta" => text}, state)
-       when type in ["response.output_audio_transcript.delta", "response.output_text.delta"] and
-              is_binary(text),
-       do: {:ok, [{:text, text}], [], state}
+  defp event({:text, id, _text}, %{dropped: id} = state) when is_binary(id),
+    do: {:ok, [], [], state}
 
-  defp event("response.done", %{"response" => %{"id" => id} = response}, state)
+  defp event({:text, _response, text}, state), do: {:ok, [{:text, text}], [], state}
+
+  defp event({:response_done, %{id: id, tool_call?: tool_call?, status: status}}, state)
        when is_binary(id) do
-    output = if is_list(response["output"]), do: response["output"], else: []
-
     cond do
-      Enum.any?(output, &(is_map(&1) and &1["type"] == "function_call")) ->
+      tool_call? ->
         {:error, :unsupported_tool_call}
 
-      status = @statuses[response["status"]] ->
+      status != nil ->
         state = %{
           state
           | response: if(state.response == id, do: nil, else: state.response),
@@ -223,26 +190,19 @@ defmodule AudioFlow.Duplex.OpenAIRealtime do
     end
   end
 
-  defp event(type, _event, _state)
-       when type in [
-              "input_audio_buffer.speech_started",
-              "response.created",
-              "response.output_audio.delta",
-              "response.output_audio_transcript.delta",
-              "response.output_text.delta",
-              "response.done",
-              "conversation.item.input_audio_transcription.completed",
-              "conversation.item.input_audio_transcription.failed"
-            ],
-       do: {:error, :invalid_event}
+  # A missing id, or a known event type with missing fields.
+  defp event({kind, _}, _state) when kind in [:audio, :transcript_failed, :invalid],
+    do: {:error, :invalid_event}
 
-  defp event(_type, _event, state), do: {:ok, [], [], state}
+  defp event({kind, _, _}, _state) when kind in [:transcript], do: {:error, :invalid_event}
+  defp event({:response_done, _response}, _state), do: {:error, :invalid_event}
+  defp event(_ignored, state), do: {:ok, [], [], state}
 
-  defp audio(pcm, item, event, state) do
+  defp audio(pcm, item, content_index, state) do
     {started, output} =
       case state.output do
         %{item: ^item} = output -> {[], output}
-        _ -> {[{:output, item}], %{item: item, content_index: index(event), samples: 0}}
+        _ -> {[{:output, item}], %{item: item, content_index: content_index, samples: 0}}
       end
 
     output = %{output | samples: output.samples + div(byte_size(pcm), 2)}
@@ -250,25 +210,7 @@ defmodule AudioFlow.Duplex.OpenAIRealtime do
     {:ok, started ++ [audio], [], %{state | output: output}}
   end
 
-  defp session(options) do
-    %{
-      type: "realtime",
-      model: options[:model],
-      output_modalities: ["audio"],
-      instructions: options[:instructions],
-      audio: %{
-        input: %{
-          format: %{type: "audio/pcm", rate: @rate},
-          transcription: %{model: options[:transcription_model]},
-          turn_detection: %{type: "server_vad", create_response: true, interrupt_response: true}
-        },
-        output: %{format: %{type: "audio/pcm", rate: @rate}, voice: options[:voice]}
-      }
-    }
-  end
-
-  defp index(%{"content_index" => index}) when is_integer(index) and index >= 0, do: index
-  defp index(_event), do: 0
+  defp session(options), do: Protocol.session(options, @turn_detection)
 
   # Only the short code or type: provider messages can quote request data.
   defp code(%{"code" => code}) when is_binary(code), do: String.slice(code, 0, 64)

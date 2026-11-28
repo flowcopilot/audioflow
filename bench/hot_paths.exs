@@ -75,13 +75,9 @@ pcm16 = Bench.pcm(320)
 Bench.run("MuLaw.decode 160 B", fn -> MuLaw.decode(ulaw) end, audio_ms: 20)
 Bench.run("MuLaw.encode 160 samples", fn -> MuLaw.encode(pcm8) end, audio_ms: 20)
 
-Bench.run("RateConverter.up 8k->16k", fn -> RateConverter.up(pcm8, up) end,
-  audio_ms: 20
-)
+Bench.run("RateConverter.up 8k->16k", fn -> RateConverter.up(pcm8, up) end, audio_ms: 20)
 
-Bench.run("RateConverter.down 16k->8k", fn -> RateConverter.down(pcm16, down) end,
-  audio_ms: 20
-)
+Bench.run("RateConverter.down 16k->8k", fn -> RateConverter.down(pcm16, down) end, audio_ms: 20)
 
 second16 = Bench.audio(1000, 16_000)
 second8 = Bench.audio(1000, 8000)
@@ -290,6 +286,8 @@ Bench.run(
   "consume 1 s audio event (base64)",
   fn ->
     AudioFlow.Recording.consume(recorder, {AudioFlow, self(), turn, {:audio, second}})
-  end, audio_ms: 1000)
+  end,
+  audio_ms: 1000
+)
 
 File.rm_rf!(store_root)

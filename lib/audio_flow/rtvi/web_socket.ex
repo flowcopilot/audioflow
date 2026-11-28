@@ -98,13 +98,11 @@ defmodule AudioFlow.RTVI.WebSocket do
   defp translate({:stop, reason, close, pcm}, state),
     do: {:stop, reason, close, %{state | pcm: pcm}}
 
-  defp translate({:events, frames, pcm}, state) do
-    {frames, state} =
-      Enum.reduce(frames, {[], %{state | pcm: pcm}}, fn frame, {frames, state} ->
-        {new, state} = outgoing(frame, state)
-        {frames ++ new, state}
-      end)
+  # The producer already has the rejection and the failed turn reports it.
+  defp translate({:output_rejected, _reason, pcm}, state), do: {:ok, %{state | pcm: pcm}}
 
+  defp translate({:events, frames, pcm}, state) do
+    {frames, state} = Connection.collect(frames, %{state | pcm: pcm}, &outgoing/2)
     reply(frames, state)
   end
 

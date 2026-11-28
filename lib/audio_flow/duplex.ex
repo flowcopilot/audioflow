@@ -21,7 +21,25 @@ defmodule AudioFlow.Duplex do
             max_response_bytes: [
               type: :pos_integer,
               default: 67_108_864,
-              doc: "Total incoming WebSocket bytes, including partial frames."
+              doc:
+                "Incoming WebSocket bytes in one `:response_window_ms` window, including partial frames."
+            ],
+            response_window_ms: [
+              type: :pos_integer,
+              default: 60_000,
+              doc: "Length of the window of `:max_response_bytes`."
+            ],
+            max_message_bytes: [
+              type: :pos_integer,
+              default: 16_777_216,
+              doc:
+                "Incoming bytes of one WebSocket message, or of a partial frame that does not complete."
+            ],
+            clock: [
+              type: {:fun, 0},
+              default: &__MODULE__.now/0,
+              doc:
+                "Monotonic time in milliseconds, for the input pacing and the byte window. Replace it to control time."
             ],
             max_input_lead_ms: [
               type: :pos_integer,
@@ -83,7 +101,19 @@ defmodule AudioFlow.Duplex do
              past the bound returns `{:error, :overloaded}` and the chunk is not
              sent. Output is sent to the owner at once and is not buffered. If the owner
              mailbox has `:max_owner_queue` messages or more, the session fails with
-             `:owner_overloaded`. The owner must be a local process.
+             `:owner_overloaded`. The session reads the mailbox length only as often
+             as the bound needs: after a read it skips the next events that cannot
+             reach the bound (at most 32), so a large queue limit costs no round trip
+             for each event. The owner must be a local process.
+
+             Incoming bytes are bounded per message and per time window, not per
+             session, so a long conversation does not end early. A message (or a
+             partial frame) of more than `:max_message_bytes` fails the session with
+             `:response_too_large`, and so do more than `:max_response_bytes` in one
+             `:response_window_ms` window. OpenAI Realtime sends model speech as
+             base64 JSON, about 64 KB for each second of speech, so the default
+             window allows about 17 minutes of continuous speech in each minute of
+             wall time. Windows do not slide, so a burst can use two windows.
 
              """ <> NimbleOptions.docs(@schema)
   use GenServer
@@ -157,10 +187,36 @@ defmodule AudioFlow.Duplex do
 
   # State version for hot code upgrades. Bump it when the state shape changes,
   # and migrate the old state in code_change/3 (see the hot-upgrades guide).
-  @vsn 1
+  @vsn 2
 
   @impl true
+  def code_change(1, state, _extra) do
+    {:ok,
+     state
+     |> Map.delete(:response_bytes)
+     |> Map.merge(%{
+       window_ms: 60_000,
+       window_start: now(),
+       window_bytes: 0,
+       max_message: 16_777_216,
+       partial_bytes: 0,
+       clock: &__MODULE__.now/0,
+       check_in: 0
+     })}
+  end
+
+  def code_change({:down, 1}, state, _extra) do
+    {:ok,
+     state
+     |> Map.drop([:window_ms, :window_start, :window_bytes, :max_message, :partial_bytes, :clock])
+     |> Map.drop([:check_in])
+     |> Map.put(:response_bytes, 0)}
+  end
+
   def code_change(_old_vsn, state, _extra), do: {:ok, state}
+
+  @doc false
+  def now, do: System.monotonic_time(:millisecond)
 
   @impl true
   def init({options, module, config}) do
@@ -195,8 +251,14 @@ defmodule AudioFlow.Duplex do
        ref: nil,
        pushed: 0,
        received: 0,
-       response_bytes: 0,
+       clock: options[:clock],
+       window_ms: options[:response_window_ms],
+       window_start: options[:clock].(),
+       window_bytes: 0,
+       partial_bytes: 0,
        max_response_bytes: options[:max_response_bytes],
+       max_message: options[:max_message_bytes],
+       check_in: 0,
        max_lead: lead,
        max_chunk: options[:max_chunk_bytes],
        max_queue: options[:max_owner_queue],
@@ -263,7 +325,7 @@ defmodule AudioFlow.Duplex do
   defp allowance(%{input_flow: :answered} = state), do: state.received
 
   defp allowance(%{input_flow: :realtime} = state),
-    do: div((System.monotonic_time(:millisecond) - state.ready_at) * state.rate, 1000)
+    do: div((state.clock.() - state.ready_at) * state.rate, 1000)
 
   defp fail(reply, state, reason) do
     notify!(state, {:error, reason})
@@ -343,22 +405,43 @@ defmodule AudioFlow.Duplex do
   defp responses(state, []), do: {:noreply, state}
 
   defp responses(%{ref: ref} = state, [{:data, ref, data} | rest]) do
-    bytes = state.response_bytes + byte_size(data)
-
-    if bytes > state.max_response_bytes do
-      failed(state, :response_too_large)
-    else
-      decode_response(%{state | response_bytes: bytes}, data, rest)
+    case account(state, byte_size(data)) do
+      {:ok, state} -> decode_response(state, data, rest)
+      :error -> failed(state, :response_too_large)
     end
   end
 
   defp responses(%{ref: ref} = state, [{:done, ref} | _]), do: failed(state, :connection_closed)
   defp responses(state, [_ | rest]), do: responses(state, rest)
 
+  # Bytes count against the window, and against the message that is not
+  # complete yet. A decode that returns frames ends the message.
+  defp account(state, size) do
+    now = state.clock.()
+
+    {start, bytes} =
+      if now - state.window_start >= state.window_ms,
+        do: {now, 0},
+        else: {state.window_start, state.window_bytes}
+
+    bytes = bytes + size
+    partial = state.partial_bytes + size
+
+    if bytes > state.max_response_bytes or partial > state.max_message,
+      do: :error,
+      else: {:ok, %{state | window_start: start, window_bytes: bytes, partial_bytes: partial}}
+  end
+
   defp decode_response(state, data, rest) do
     case WS.decode(state.ws, data) do
       {:ok, ws, frames} ->
-        case frames(%{state | ws: ws}, frames) do
+        state = %{
+          state
+          | ws: ws,
+            partial_bytes: if(frames == [], do: state.partial_bytes, else: 0)
+        }
+
+        case frames(state, frames) do
           {:ok, state} -> responses(state, rest)
           {:error, reason, state} -> failed(state, reason)
         end
@@ -400,20 +483,20 @@ defmodule AudioFlow.Duplex do
         state
         | phase: :ready,
           connect_timer: nil,
-          ready_at: System.monotonic_time(:millisecond)
+          ready_at: state.clock.()
       })
 
-    with :ok <- notify(state, :ready), do: events(state, rest)
+    with {:ok, state} <- notify(state, :ready), do: events(state, rest)
   end
 
   defp events(state, [{:audio, %Audio{} = audio} = event | rest]) do
     state = %{state | received: state.received + div(byte_size(audio.data), 2)}
-    with :ok <- notify(state, event), do: events(state, rest)
+    with {:ok, state} <- notify(state, event), do: events(state, rest)
   end
 
   defp events(state, [event | rest]) do
     if valid_event?(event) do
-      with :ok <- notify(state, event), do: events(state, rest)
+      with {:ok, state} <- notify(state, event), do: events(state, rest)
     else
       {:error, :invalid_event, state}
     end
@@ -431,15 +514,31 @@ defmodule AudioFlow.Duplex do
   defp valid_event?({:response, id, status}), do: is_binary(id) and status in @statuses
   defp valid_event?(_event), do: false
 
-  defp notify(state, event) do
+  # The mailbox length is a signal to the owner. The owner only takes messages
+  # out, so after a read of `length`, the next `max_queue - length - 1` events
+  # cannot reach the bound from this session alone. Other senders can fill the
+  # mailbox too, so the read is repeated every `@queue_check_every` events.
+  @queue_check_every 32
+
+  defp notify(%{check_in: 0} = state, event) do
     case Process.info(state.owner, :message_queue_len) do
       {:message_queue_len, length} when length >= state.max_queue ->
         {:error, :owner_overloaded, state}
 
-      _ ->
+      {:message_queue_len, length} ->
+        check_in = min(state.max_queue - length - 1, @queue_check_every)
         send(state.owner, {__MODULE__, self(), event})
-        :ok
+        {:ok, %{state | check_in: check_in}}
+
+      nil ->
+        send(state.owner, {__MODULE__, self(), event})
+        {:ok, state}
     end
+  end
+
+  defp notify(state, event) do
+    send(state.owner, {__MODULE__, self(), event})
+    {:ok, %{state | check_in: state.check_in - 1}}
   end
 
   defp notify!(state, event), do: send(state.owner, {__MODULE__, self(), event})

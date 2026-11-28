@@ -13,11 +13,28 @@ defmodule AudioFlow.Adapters.FishAudio do
   for setup and shared HTTP limits.
   """
   @behaviour AudioFlow.Adapter
+  alias AudioFlow.Adapters.Options
   alias AudioFlow.Adapters.Providers.PCMHTTP
-  alias AudioFlow.Adapters.Providers.Socket
+
+  @impl true
+  def validate_options(options) do
+    Options.optional_string!(options, :endpoint)
+
+    # A blank key means no authorization header, for servers without `--api-key`.
+    unless is_nil(options[:api_key]) or is_binary(options[:api_key]) or
+             is_function(options[:api_key], 0),
+           do: raise(ArgumentError, "api_key must be a string or a function")
+
+    unless is_nil(options[:reference_id]) or is_binary(options[:reference_id]),
+      do: raise(ArgumentError, "reference_id must be a string")
+
+    PCMHTTP.validate_options!(options)
+  end
 
   @impl true
   def run(text, options, emit) when is_binary(text) do
+    :ok = validate_options(options)
+
     options =
       Keyword.put_new(options, :receive_timeout_ms, Keyword.get(options, :timeout_ms, 30_000))
 
@@ -28,18 +45,14 @@ defmodule AudioFlow.Adapters.FishAudio do
         nil ->
           body
 
-        id when is_binary(id) ->
+        id ->
           if String.trim(id) == "", do: body, else: Map.put(body, :reference_id, id)
       end
 
     headers =
-      if options[:api_key] do
-        case Socket.key(options) do
-          key when key in [nil, ""] -> []
-          key when is_binary(key) -> [{"authorization", "Bearer " <> key}]
-        end
-      else
-        []
+      case api_key(options[:api_key]) do
+        key when key in [nil, ""] -> []
+        key -> [{"authorization", "Bearer " <> key}]
       end
 
     PCMHTTP.run(
@@ -51,5 +64,14 @@ defmodule AudioFlow.Adapters.FishAudio do
       emit,
       :wav
     )
+  end
+
+  defp api_key(key) do
+    key = if is_function(key, 0), do: key.(), else: key
+
+    unless is_nil(key) or is_binary(key),
+      do: raise(ArgumentError, "api_key must resolve to a string")
+
+    key
   end
 end

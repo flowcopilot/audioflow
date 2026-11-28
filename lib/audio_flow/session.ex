@@ -6,15 +6,16 @@ defmodule AudioFlow.Session do
   turns without STT/LLM/TTS stages. Only audio input is supported; history replay,
   graphs and conversation flows are rejected in this mode. Provider instructions
   remain adapter options. Each turn starts a fresh provider connection.
-  `:max_output_bytes` (16,777,216) bounds cumulative event payload bytes per turn
-  in every mode, in addition to the event count and deadline.
 
-  Options: `:stt`, `:llm`, `:tts` adapter tuples; `:owner`; `:timeout_ms`
-  (30,000); `:max_input_bytes` (960,000); `:max_events` (1,024); optional
-  `:output` transport tuple `{module, target}` implementing `AudioFlow.Output`.
-  An optional `:vision` adapter converts RGB images to description strings.
+  ## Options
+
+  `AudioFlow.start_session/1` validates these options and raises
+  `ArgumentError` for unknown keys.
+
+  #{AudioFlow.Session.Options.docs()}
+
   `AudioFlow.Text` input goes directly to the LLM without an input stage.
-  `:max_image_bytes` defaults to 6,291,456. Image-only sessions can omit `:stt`.
+  Image-only sessions can omit `:stt`.
   Descriptions form one LLM prompt, then follow the same speech output path.
   Omit both `:llm` and `:tts` for a transcription session. Its turns end after
   the input stage, and text input returns `{:error, {:unsupported_input, :llm}}`.
@@ -22,10 +23,7 @@ defmodule AudioFlow.Session do
   `{:partial, text}`. These become `{:transcript, text}`, `{:segment, segment}`
   and `{:partial_transcript, text}` events. Partial text is an unstable hypothesis
   that follows the final text emitted so far. It is not part of the prompt or the
-  history.
-  Set `:history` to `true` or `[max_turns: 8, max_bytes: 16_384]` to retain
-  successful user/assistant pairs. The LLM then receives a list of role/content
-  message maps. History is disabled by default.
+  history. History is disabled by default.
 
   In place of the adapters, `:graph` takes an `AudioFlow.Graph.Plan` from
   `AudioFlow.Graph.session_options/2`. The input goes to the graph input nodes
@@ -35,38 +33,130 @@ defmodule AudioFlow.Session do
   retain only complete reply chunks covered by explicit playback acknowledgements.
   Durable calls: `:restore` takes `%{history: [{user, assistant}],
   conversation_state: name, turns: count}` from an earlier session, and
-  `:on_commit` is a one-argument function that gets the same map each time the
-  saved history or conversation state changes (a completed turn, the heard
-  part of a cancelled turn, a cleared history or a transition between turns).
-  It runs in the session process, so it must return quickly; send the
-  snapshot to another process. An exception in it is logged and ignored.
+  `:on_commit` gets the same map each time the saved history or conversation
+  state changes (a completed turn, the heard part of a cancelled turn, a
+  cleared history or a transition between turns). It is a one-argument
+  function, `{pid, tag}` (sends `{tag, snapshot}` to `pid`) or
+  `{module, function, args}` (calls the function with the snapshot appended).
+  Use `{pid, tag}` or `{module, function, args}` in a process that a hot
+  upgrade can replace: an anonymous function refers to the code of its module
+  and fails after two code loads. The callback runs in the session process, so
+  it must return quickly. An exception, throw or exit in it is logged with its
+  stacktrace and ignored.
   The session stops when its owner exits. Interrupted turns cannot deliver
   further output. Cancellation stops the caller task, but an inference engine
   may still finish a batch already submitted to shared hardware.
   """
   use GenServer, restart: :temporary
   require Logger
-  alias AudioFlow.Adapter
+  import AudioFlow.Session.Durable, only: [snapshot: 1]
   alias AudioFlow.Audio
   alias AudioFlow.Graph.Conversation
   alias AudioFlow.Graph.Plan
-  alias AudioFlow.Graph.Runner
   alias AudioFlow.History
   alias AudioFlow.Image
+  alias AudioFlow.Session.Durable
+  alias AudioFlow.Session.Pipeline
   alias AudioFlow.Telemetry
   alias AudioFlow.Text
   alias AudioFlow.Transcript.Segment
 
-  @limits_schema [
-    timeout_ms: [type: :pos_integer, default: 30_000],
-    max_input_bytes: [type: :pos_integer, default: 960_000],
-    max_image_bytes: [type: :pos_integer, default: 6_291_456],
-    max_events: [type: :pos_integer, default: 1024],
-    max_output_bytes: [type: :pos_integer, default: 16_777_216]
-  ]
+  @limits_schema AudioFlow.Session.Options.limits_schema()
 
   @doc "Session resource limits:\n\n" <> NimbleOptions.docs(@limits_schema)
   def start_link(options), do: GenServer.start_link(__MODULE__, options)
+
+  ## Client functions
+  #
+  # The message protocol of the session lives here. Other modules call these
+  # functions instead of building `GenServer.call/3` messages themselves.
+
+  @typedoc "A session pid or registered name."
+  @type session :: GenServer.server()
+  @typedoc "Turn reference from `submit/2`."
+  @type turn :: reference()
+  @typedoc "Provisional pause reference from `provisional/2`."
+  @type candidate :: reference()
+  @typedoc "Input a turn accepts."
+  @type input :: AudioFlow.Audio.t() | AudioFlow.Image.t() | AudioFlow.Text.t()
+
+  @doc """
+  Start a turn. Returns `{:ok, turn}`, or `{:error, reason}` when the input is
+  invalid or too large, the session lacks the needed stage, the output refuses
+  the turn (`{:error, {:output, reason}}`), or a turn is running (`:busy`).
+  """
+  @spec submit(session(), input()) :: {:ok, turn()} | {:error, term()}
+  def submit(session, input), do: GenServer.call(session, {:submit, input})
+
+  @doc """
+  Cancel the running turn and flush the output. Retains the reply the user
+  heard. Returns `:ok` when no turn runs, or `{:error, reason}` when the output
+  flush fails.
+  """
+  @spec cancel(session()) :: :ok | {:error, term()}
+  def cancel(session), do: GenServer.call(session, :cancel)
+
+  @doc "True when the session has no turn and no pending interruption."
+  @spec idle?(session()) :: boolean()
+  def idle?(session), do: GenServer.call(session, :idle?)
+
+  @doc "Clear saved conversation text while idle. Returns `{:error, :busy}` during a turn."
+  @spec clear_history(session()) :: :ok | {:error, :busy}
+  def clear_history(session), do: GenServer.call(session, :clear_history)
+
+  @doc """
+  Report rendered PCM in cumulative nanoseconds. See `AudioFlow.Output.acknowledge/3`.
+  """
+  @spec acknowledge(session(), turn(), integer()) :: :ok | {:error, term()}
+  def acknowledge(session, turn, nanoseconds),
+    do: GenServer.call(session, {:played, turn, nanoseconds})
+
+  @doc """
+  Pause the output for up to `timeout_ms` (1 to 30,000) while the caller decides
+  whether the user really interrupted. Returns `{:ok, candidate}`. See
+  `AudioFlow.Output.provisional/2`.
+  """
+  @spec provisional(session(), integer()) :: {:ok, candidate()} | {:error, term()}
+  def provisional(session, timeout_ms), do: GenServer.call(session, {:provisional, timeout_ms})
+
+  @doc """
+  Resolve a provisional pause with `:confirm` (cancel the turn) or `:resume`.
+  `:resume` returns `{:error, :not_paused}` until the endpoint acknowledged the
+  pause, and `{:error, :stale_candidate}` for a candidate that no longer exists.
+  """
+  @spec resolve(session(), candidate(), :resume | :confirm) :: :ok | {:error, term()}
+  def resolve(session, candidate, decision) when decision in [:resume, :confirm],
+    do: GenServer.call(session, {:resolve, candidate, decision})
+
+  @doc """
+  Endpoint acknowledgement that a pause or resume took effect, with the
+  cumulative rendered nanoseconds.
+  """
+  @spec control_ack(session(), turn(), candidate(), :pause | :resume, integer()) ::
+          :ok | {:error, term()}
+  def control_ack(session, turn, candidate, action, nanoseconds),
+    do: GenServer.call(session, {:control_ack, turn, candidate, action, nanoseconds})
+
+  @doc """
+  Send a conversation event. During a turn the transition commits only if the
+  turn succeeds; otherwise it applies at once.
+  """
+  @spec conversation_event(session(), term()) :: :ok | {:error, term()}
+  def conversation_event(session, event),
+    do: GenServer.call(session, {:conversation_event, event})
+
+  @doc """
+  Send a conversation event for one turn, from that turn's task (for example a
+  handoff tool). Waits without a timeout, because the turn timer bounds the
+  task. Returns `{:error, :stale_turn}` after the turn ended.
+  """
+  @spec conversation_event(session(), turn(), term()) :: :ok | {:error, term()}
+  def conversation_event(session, turn, event),
+    do: GenServer.call(session, {:conversation_event, turn, event}, :infinity)
+
+  @doc "Current conversation state name, or `{:error, :no_conversation}`."
+  @spec conversation_state(session()) :: {:ok, term()} | {:error, :no_conversation}
+  def conversation_state(session), do: GenServer.call(session, :conversation_state)
 
   # State version for hot code upgrades. Bump it when the state shape changes,
   # and migrate the old state in code_change/3 (see the hot-upgrades guide).
@@ -89,7 +179,7 @@ defmodule AudioFlow.Session do
     telemetry = %{session: self(), owner: owner, graph?: graph != nil}
 
     {:ok,
-     restore(Keyword.get(options, :restore), %{
+     Durable.restore(Keyword.get(options, :restore), %{
        telemetry: telemetry,
        telemetry_started: Telemetry.session_start(telemetry),
        turns: 0,
@@ -101,6 +191,7 @@ defmodule AudioFlow.Session do
        limits: limits,
        history: History.new(Keyword.get(options, :history, false)),
        on_commit: Keyword.get(options, :on_commit),
+       notify_audio: Keyword.get(options, :notify_audio, true),
        output: Keyword.get(options, :output),
        output_turn: nil,
        playback_history: nil,
@@ -196,6 +287,11 @@ defmodule AudioFlow.Session do
       end
     end
   end
+
+  # The candidate is live but the endpoint has not acknowledged the pause yet
+  # (or is already resuming), so a resume cannot apply.
+  def handle_call({:resolve, id, :resume}, _from, %{candidate: %{id: id}} = state),
+    do: {:reply, {:error, :not_paused}, state}
 
   def handle_call({:resolve, _, _}, _from, state),
     do: {:reply, {:error, :stale_candidate}, state}
@@ -399,6 +495,9 @@ defmodule AudioFlow.Session do
       )
       when candidate != nil do
     Process.demonitor(ref, [:flush])
+    # The candidate deadline bounds the wait now. A turn timeout during the
+    # pause would drop the finished turn and its heard reply.
+    Process.cancel_timer(state.active.timer)
     {:noreply, %{state | pending_result: result}}
   end
 
@@ -481,7 +580,7 @@ defmodule AudioFlow.Session do
 
         task =
           Task.Supervisor.async_nolink(AudioFlow.Tasks, fn ->
-            run_turn(session, turn, input, stage, kind, adapters, graph, output)
+            Pipeline.run(session, turn, input, stage, kind, adapters, graph, output)
           end)
 
         timer = Process.send_after(self(), {:timeout, turn}, state.limits.timeout_ms)
@@ -513,19 +612,6 @@ defmodule AudioFlow.Session do
 
       {:error, reason} ->
         {:reply, {:error, {:output, reason}}, state}
-    end
-  end
-
-  defp run_turn(session, turn, input, stage, kind, adapters, graph, output) do
-    cond do
-      graph ->
-        graph_pipeline(session, turn, input, graph, output)
-
-      adapters[:speech_to_speech] ->
-        speech_pipeline(session, turn, input, adapters.speech_to_speech, output)
-
-      true ->
-        pipeline(session, turn, input, stage, kind, adapters, output)
     end
   end
 
@@ -602,7 +688,9 @@ defmodule AudioFlow.Session do
         else: active
 
     first = Map.put_new(active.first, first_kind(kind), now() - active.started)
-    notify(state, if(node, do: {kind, value, node}, else: {kind, value}))
+    # `Map.get/3`: a session upgraded from an earlier version has no key.
+    if kind != :audio or Map.get(state, :notify_audio, true),
+      do: notify(state, if(node, do: {kind, value, node}, else: {kind, value}))
 
     %{
       state
@@ -653,185 +741,6 @@ defmodule AudioFlow.Session do
     }
   end
 
-  defp speech_pipeline(session, turn, input, adapter, output) do
-    {module, _} = adapter
-
-    Telemetry.stage(
-      %{session: session, turn: turn, stage: :speech_to_speech, adapter: module},
-      fn -> Adapter.run(adapter, input, &speech_event(&1, session, turn, output)) end
-    )
-  rescue
-    error -> {:error, {:exception, Exception.message(error)}}
-  catch
-    reason -> {:error, reason}
-  end
-
-  defp speech_event({kind, value}, session, turn, output)
-       when kind in [:transcript, :text, :audio] do
-    call!(session, {:emit, turn, kind, value}, :infinity)
-    if kind == :audio, do: push!(output, session, turn, value)
-    :ok
-  end
-
-  defp speech_event(_event, _session, _turn, _output), do: throw(:invalid_output)
-
-  defp pipeline(session, turn, input, stage, kind, adapters, output) do
-    run = fn stage, input, emit ->
-      {module, _} = adapter = Map.fetch!(adapters, stage)
-      metadata = %{session: session, turn: turn, stage: stage, adapter: module}
-      Telemetry.stage(metadata, fn -> Adapter.run(adapter, input, emit) end)
-    end
-
-    emit = fn kind, value -> call!(session, {:emit, turn, kind, value}, :infinity) end
-
-    key = make_ref()
-    Process.put(key, [])
-
-    try do
-      transcript = input_transcript(run, emit, key, input, stage, kind)
-
-      if transcript != "" and Map.has_key?(adapters, :llm),
-        do: respond(run, emit, {session, turn, output}, transcript)
-
-      :ok
-    rescue
-      error -> {:error, {:exception, Exception.message(error)}}
-    catch
-      reason -> {:error, reason}
-    after
-      Process.delete(key)
-    end
-  end
-
-  defp input_transcript(run, emit, key, input, stage, kind) do
-    if stage != nil do
-      run.(stage, input, &input_output(&1, emit, key, stage, kind))
-    else
-      Process.put(key, [input.data])
-    end
-
-    transcript = Process.get(key) |> Enum.reverse() |> join_input() |> String.trim()
-    input_context(input, transcript)
-  end
-
-  defp input_output(text, emit, key, _stage, kind) when is_binary(text) do
-    emit.(kind, text)
-    Process.put(key, [text | Process.get(key)])
-    :ok
-  end
-
-  defp input_output(%Segment{} = segment, emit, key, :stt, _kind) do
-    emit.(:segment, segment)
-    Process.put(key, [segment | Process.get(key)])
-    :ok
-  end
-
-  defp input_output({:partial, text}, emit, _key, :stt, _kind) when is_binary(text),
-    do: emit.(:partial_transcript, text)
-
-  defp input_output(_, _emit, _key, _stage, _kind), do: throw(:invalid_output)
-
-  defp join_input(parts) do
-    parts
-    |> Enum.reduce({[], nil}, fn
-      %Segment{text: text}, {acc, previous} ->
-        text = String.trim(text)
-
-        cond do
-          text == "" -> {acc, previous}
-          previous in [nil, :space] -> {[text | acc], :segment}
-          true -> {[text, " " | acc], :segment}
-        end
-
-      text, {acc, _} ->
-        {[text | acc], if(String.ends_with?(text, [" ", "\n", "\t"]), do: :space, else: :text)}
-    end)
-    |> elem(0)
-    |> Enum.reverse()
-    |> IO.iodata_to_binary()
-  end
-
-  defp respond(run, emit, {session, turn, _output} = target, transcript) do
-    prompt = fetch!(session, {:context, turn, transcript})
-
-    run.(:llm, prompt, fn text ->
-      emit.(:text, text)
-      if String.trim(text) != "", do: speak(run, emit, target, text)
-      :ok
-    end)
-  end
-
-  defp speak(run, emit, {session, turn, output}, text) do
-    run.(:tts, text, fn audio ->
-      emit.(:audio, audio)
-      push!(output, session, turn, audio)
-    end)
-
-    call!(session, {:speech_checkpoint, turn})
-  end
-
-  defp call!(session, request, timeout \\ 5000) do
-    case GenServer.call(session, request, timeout) do
-      :ok -> :ok
-      {:error, reason} -> throw(reason)
-    end
-  end
-
-  defp fetch!(session, request) do
-    case GenServer.call(session, request) do
-      {:ok, value} -> value
-      {:error, reason} -> throw(reason)
-    end
-  end
-
-  defp push!(output, session, turn, value) do
-    case AudioFlow.Output.call(output, :push, [{session, turn}, value]) do
-      :ok -> :ok
-      {:error, reason} -> throw({:output, reason})
-    end
-  end
-
-  defp graph_pipeline(session, turn, input, plan, output) do
-    call = fn message ->
-      case GenServer.call(session, message, :infinity) do
-        :ok -> :ok
-        {:ok, value} -> value
-        {:error, reason} -> throw(reason)
-      end
-    end
-
-    callbacks = %{
-      emit: fn step, value ->
-        call.({:emit, turn, step.event, value, step.id, if(step.history, do: :text, else: :none)})
-
-        if step.event == :audio and step.targets == [] do
-          case AudioFlow.Output.call(output, :push, [{session, turn}, value]) do
-            :ok -> :ok
-            {:error, reason} -> throw({:output, reason})
-          end
-        end
-
-        :ok
-      end,
-      context: fn text -> call.({:context, turn, text}) end,
-      checkpoint: fn -> call.({:speech_checkpoint, turn}) end,
-      telemetry: %{session: session, turn: turn}
-    }
-
-    Runner.run(plan, input, callbacks)
-  rescue
-    error -> {:error, {:exception, Exception.message(error)}}
-  catch
-    reason -> {:error, reason}
-  end
-
-  defp input_context(_, ""), do: ""
-
-  defp input_context(%Image{pts: pts}, text) when is_integer(pts),
-    do: "At video time #{div(pts, 1_000_000)} ms: #{text}"
-
-  defp input_context(_, text), do: text
-
   defp record_context(%{history: nil, active: active}, _, _), do: {:ok, active}
 
   defp record_context(state, :segment, %Segment{text: text}),
@@ -860,37 +769,6 @@ defmodule AudioFlow.Session do
     %{state | candidate: nil, held: nil, pending_result: nil}
   end
 
-  ## Durable state
-
-  defp snapshot(state) do
-    %{
-      history: History.snapshot(state.history),
-      conversation_state: state.conversation && state.conversation.current,
-      turns: state.turns
-    }
-  end
-
-  defp restore(nil, state), do: state
-
-  defp restore(%{} = saved, state) do
-    history = History.restore(state.history, Map.get(saved, :history, []))
-    conversation = restore_conversation(state.conversation, Map.get(saved, :conversation_state))
-    graph = if conversation, do: Conversation.plan(conversation), else: state.graph
-    turns = Map.get(saved, :turns, 0)
-    %{state | history: history, conversation: conversation, graph: graph, turns: turns}
-  end
-
-  # Only a state of this conversation can be restored.
-  defp restore_conversation(nil, _name), do: nil
-  defp restore_conversation(flow, nil), do: flow
-
-  defp restore_conversation(flow, name) do
-    case Enum.find(Map.keys(flow.states), &(to_string(&1) == to_string(name))) do
-      nil -> raise ArgumentError, "unknown conversation state #{inspect(name)}"
-      state -> %{flow | current: state}
-    end
-  end
-
   # Calls :on_commit when the saved history or conversation state changed.
   defp commit(_old, %{on_commit: nil} = new), do: new
 
@@ -900,14 +778,23 @@ defmodule AudioFlow.Session do
 
     if Map.delete(snapshot, :turns) != before do
       try do
-        new.on_commit.(snapshot)
-      rescue
-        error -> Logger.warning("Session on_commit failed: #{Exception.message(error)}")
+        run_on_commit(new.on_commit, snapshot)
+      catch
+        kind, reason ->
+          Logger.warning(
+            "Session on_commit failed: " <> Exception.format(kind, reason, __STACKTRACE__)
+          )
       end
     end
 
     new
   end
+
+  defp run_on_commit(fun, snapshot) when is_function(fun, 1), do: fun.(snapshot)
+  defp run_on_commit({target, tag}, snapshot), do: send(target, {tag, snapshot})
+
+  defp run_on_commit({module, function, args}, snapshot),
+    do: apply(module, function, args ++ [snapshot])
 
   defp retain_heard(state, nil), do: state
   defp retain_heard(state, %{context: nil}), do: state

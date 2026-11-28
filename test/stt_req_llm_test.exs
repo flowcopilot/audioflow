@@ -201,6 +201,6 @@ defmodule AudioFlow.STTReqLLMTest do
     {:ok, session} = AudioFlow.start_session(stt: {STT, options})
     {:ok, turn} = AudioFlow.submit(session, %Audio{data: <<1, 0>>, sample_rate: 16_000})
     assert_receive {AudioFlow, ^session, ^turn, {:transcript, "Hello from Voxtral"}}, 5000
-    assert_receive {AudioFlow, ^session, ^turn, {:done, _}}
+    assert_receive {AudioFlow, ^session, ^turn, {:done, _}}, 5000
   end
 end

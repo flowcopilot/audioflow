@@ -115,12 +115,12 @@ if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
       {peer, bridge} = pair(gap_timeout_ms: 80)
       s = :sys.get_state(bridge)
       raw(peer, 65_535, 4_294_967_136)
-      await(fn -> :sys.get_state(bridge).reorder.expected == 0 end)
+      await(fn -> map_size(:sys.get_state(bridge).input.reorder.pending) == 1 end)
       raw(peer, 1, 160)
-      await(fn -> map_size(:sys.get_state(bridge).reorder.pending) == 1 end)
+      await(fn -> map_size(:sys.get_state(bridge).input.reorder.pending) == 2 end)
       raw(peer, 0, 0)
-      await(fn -> :sys.get_state(bridge).reorder.expected == 2 end)
-      assert :sys.get_state(bridge).reorder.pending == %{}
+      await(fn -> :sys.get_state(bridge).input.reorder.expected == 2 end)
+      assert :sys.get_state(bridge).input.reorder.pending == %{}
       # Sequence 2 is lost. The next packet cannot enter VAD out of order.
       raw(peer, 3, 480)
       refs = for pid <- [bridge, s.peer, s.session, s.transport], do: {pid, Process.monitor(pid)}
@@ -211,6 +211,39 @@ if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
       assert :sys.get_state(state.session).playback_history.playout.played == 0
     end
 
+    test "a pending semantic turn check does not block RTP, and its result submits the utterance" do
+      {peer, bridge} =
+        pair(
+          voice_input: [
+            min_speech_ms: 20,
+            min_silence_ms: 20,
+            pre_roll_ms: 0,
+            turn_timeout_ms: 5000,
+            turn_detector: {AudioFlow.Test.GatedTurn, owner: self()}
+          ]
+        )
+
+      speak(peer)
+      assert_receive {:turn_gate, gate, _audio}, 2000
+      assert :sys.get_state(bridge).input.voice.turn
+
+      # Two more packets are consumed while the detector still works.
+      turn = make_ref()
+      :ok = WebRTC.start_turn(peer, turn)
+      silence = :binary.copy(<<255>>, 160)
+      :ok = WebRTC.publish(peer, turn, :audio, silence, 80_000)
+      :ok = WebRTC.publish(peer, turn, :audio, silence, 100_000)
+      await(fn -> :sys.get_state(bridge, 500).input.reorder.expected == 6 end)
+      refute_received {Session, ^bridge, {:utterance, _}}
+      refute_received {:input, _}
+
+      send(gate, :release)
+      assert_receive {Session, ^bridge, {:utterance, :semantic}}, 1000
+      assert_receive {:input, %Audio{sample_rate: 16_000, data: input}}, 1000
+      assert byte_size(input) >= 1280 + 2 * 640
+      assert :sys.get_state(bridge).input.voice.turn == nil
+    end
+
     test "cancel flushes finished turn queues and rejects stale pushes without changing next turn clocks" do
       {peer, bridge} = pair()
       s = :sys.get_state(bridge)
@@ -276,7 +309,7 @@ if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
       :ok = WebRTC.publish(peer, turn, :audio, speech, 100_000)
 
       # Synchronize on the ingress state having consumed both speech packets.
-      await(fn -> :sys.get_state(bridge).reorder.expected == 6 end)
+      await(fn -> :sys.get_state(bridge).input.reorder.expected == 6 end)
       assert :sys.get_state(s.transport).key == nil
       assert :queue.is_empty(:sys.get_state(s.transport).queue)
 
@@ -297,25 +330,81 @@ if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
           )
     end
 
-    test "bounded output rejects unsupported rates, format changes and overflow" do
-      {_peer, bridge} = pair(max_queue_packets: 2)
+    defp pcmu_audio(packets),
+      do: %Audio{data: :binary.copy(<<0, 0>>, 160 * packets), sample_rate: 8000}
+
+    defp output(opts \\ []) do
+      {peer, bridge} = pair(opts)
       s = :sys.get_state(bridge)
-      key = make_ref()
+      key = {s.session, make_ref()}
       :ok = Transport.start_turn(s.transport, key)
+      {s.transport, key, peer}
+    end
+
+    test "bounded output rejects unsupported rates and format changes" do
+      {transport, key, _peer} = output(max_queue_packets: 2)
 
       assert {:error, :unsupported_pcm} =
-               Transport.push(s.transport, key, %Audio{data: <<0, 0>>, sample_rate: 24_000})
+               Transport.push(transport, key, %Audio{data: <<0, 0>>, sample_rate: 24_000})
 
-      assert {:error, :queue_limit} =
-               Transport.push(s.transport, key, %Audio{
-                 data: :binary.copy(<<0, 0>>, 481),
-                 sample_rate: 8000
-               })
-
-      :ok = Transport.push(s.transport, key, %Audio{data: <<0, 0>>, sample_rate: 8000})
+      :ok = Transport.push(transport, key, %Audio{data: <<0, 0>>, sample_rate: 8000})
 
       assert {:error, :output_format_changed} =
-               Transport.push(s.transport, key, %Audio{data: <<0, 0>>, sample_rate: 16_000})
+               Transport.push(transport, key, %Audio{data: <<0, 0>>, sample_rate: 16_000})
+    end
+
+    test "output packets leave on absolute 20 ms deadlines" do
+      {transport, key, peer} = output()
+      deadline = System.monotonic_time(:millisecond) + 50
+      :sys.replace_state(transport, &%{&1 | next_at: deadline})
+      :ok = Transport.push(transport, key, pcmu_audio(10))
+      for _ <- 1..10, do: packet(peer)
+
+      # Each tick moves the deadline by exactly 20 ms, whatever its own delay.
+      assert :sys.get_state(transport).next_at == deadline + 200
+    end
+
+    test "a talkspurt after silence skips the idle time and sets the marker" do
+      {transport, key, peer} = output()
+      :ok = Transport.push(transport, key, pcmu_audio(3))
+      first = for _ <- 1..3, do: packet(peer)
+      Process.sleep(300)
+      :ok = Transport.push(transport, key, pcmu_audio(3))
+      second = for _ <- 1..3, do: packet(peer)
+
+      assert Enum.map(first, & &1.marker) == [true, false, false]
+      assert Enum.map(second, & &1.marker) == [true, false, false]
+      idle = hd(second).timestamp - List.last(first).timestamp - 160
+      assert idle in (250 * 8)..(400 * 8)
+    end
+
+    test "a push into a full queue waits for the queue to drain" do
+      {transport, key, _peer} = output(max_queue_packets: 2)
+      :ok = Transport.push(transport, key, pcmu_audio(2))
+      push = Task.async(fn -> Transport.push(transport, key, pcmu_audio(2)) end)
+
+      assert Task.yield(push, 10) == nil
+      assert Task.await(push) == :ok
+      assert :queue.len(:sys.get_state(transport).queue) <= 2
+    end
+
+    test "a push of more than the queue limit is accepted into an empty queue" do
+      {transport, key, _peer} = output(max_queue_packets: 2)
+      assert :ok = Transport.push(transport, key, pcmu_audio(5))
+    end
+
+    test "flush releases a waiting push and finish does not wait" do
+      {transport, key, _peer} = output(max_queue_packets: 2)
+      :ok = Transport.push(transport, key, pcmu_audio(2))
+      push = Task.async(fn -> Transport.push(transport, key, pcmu_audio(2)) end)
+      assert Task.yield(push, 10) == nil
+      assert :ok = Transport.flush(transport, key)
+      assert Task.await(push) == {:error, :stale_turn}
+
+      key = {elem(key, 0), make_ref()}
+      :ok = Transport.start_turn(transport, key)
+      :ok = Transport.push(transport, key, pcmu_audio(2))
+      assert :ok = Transport.finish(transport, key)
     end
 
     test "negotiation timeout and owner exit clean up Session, output and peer" do

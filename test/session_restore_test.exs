@@ -46,6 +46,34 @@ defmodule AudioFlow.SessionRestoreTest do
     assert turn(restored, "three") == expected
   end
 
+  def report(test, snapshot), do: send(test, {:reported, snapshot})
+
+  test "on_commit also takes a pid with a tag, or a module, function and arguments" do
+    pid_session = text_session(on_commit: {self(), :tagged})
+    turn(pid_session, "one")
+    assert_receive {:tagged, %{history: [{"one", "reply 1"}], turns: 1}}
+
+    mfa_session = text_session(on_commit: {__MODULE__, :report, [self()]})
+    turn(mfa_session, "one")
+    assert_receive {:reported, %{history: [{"one", "reply 1"}], turns: 1}}
+  end
+
+  test "a throw or an exit in on_commit is logged with a stacktrace and ignored" do
+    for callback <- [fn _ -> throw(:store_down) end, fn _ -> exit(:store_down) end] do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          session = text_session(on_commit: callback)
+          assert [%{content: "one"}] = turn(session, "one")
+          # The commit runs after the done event; wait for the session to finish it.
+          :sys.get_state(session)
+        end)
+
+      assert log =~ "Session on_commit failed"
+      assert log =~ "store_down"
+      assert log =~ "session_restore_test.exs"
+    end
+  end
+
   test "a cleared history is reported; a failed turn and a failing callback are not" do
     session = text_session(on_commit: fn _ -> raise "store down" end)
     turn(session, "one")

@@ -9,7 +9,7 @@ defmodule AudioFlow.Transcription do
   Without `:vad`, sections are fixed windows of `:chunk_ms`. A window boundary
   can cut a word. With `:vad`, a voice detector tuple, sections are the detected
   utterances, and silence is not sent to the adapter. The audio must then use
-  the detector sample rate. `:endpoint_options` go to `AudioFlow.VoiceInput.new/2`.
+  the detector sample rate. `:voice_input` goes to `AudioFlow.VoiceInput.new/2`.
   Utterance times are accurate to one detector frame.
 
   An adapter can emit strings, segments, or `{:partial, text}`. Strings from one
@@ -31,7 +31,8 @@ defmodule AudioFlow.Transcription do
   @options_schema [
     chunk_ms: [type: :pos_integer, default: 30_000],
     vad: [type: {:tuple, [:atom, :keyword_list]}],
-    endpoint_options: [type: :keyword_list, default: []],
+    voice_input: [type: :keyword_list],
+    endpoint_options: [type: :keyword_list, doc: "Deprecated alias of `:voice_input`."],
     timeout_ms: [type: :pos_integer, default: 120_000],
     max_concurrency: [type: :pos_integer, default: 1],
     on_segment: [type: {:fun, 1}]
@@ -135,7 +136,7 @@ defmodule AudioFlow.Transcription do
   defp sections(audio, options) do
     case options[:vad] do
       nil -> windows(audio, options[:chunk_ms])
-      vad -> utterances(audio, vad, options[:endpoint_options])
+      vad -> utterances(audio, vad, VoiceInput.Options.fetch(options))
     end
   end
 
@@ -152,8 +153,8 @@ defmodule AudioFlow.Transcription do
     end)
   end
 
-  defp utterances(%Audio{data: data, sample_rate: rate} = audio, vad, endpoint_options) do
-    input = VoiceInput.new(vad, endpoint_options)
+  defp utterances(%Audio{data: data, sample_rate: rate} = audio, vad, voice_options) do
+    input = VoiceInput.new(vad, voice_options)
 
     unless input.rate == rate,
       do: raise(ArgumentError, "audio must use the detector rate of #{input.rate} Hz")

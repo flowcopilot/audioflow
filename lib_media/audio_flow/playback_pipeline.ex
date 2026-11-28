@@ -7,7 +7,7 @@ defmodule AudioFlow.PlaybackPipeline do
     spec =
       child(:source, %AudioFlow.PCMSource{
         playback: options.playback,
-        key: options.key,
+        id: options.id,
         sample_rate: options.rate,
         alignment_samples:
           if(is_struct(options.sink, Membrane.PortAudio.Sink),
@@ -22,26 +22,27 @@ defmodule AudioFlow.PlaybackPipeline do
   end
 
   @impl true
+  def handle_child_notification(:end_of_turn, :source, _ctx, state) do
+    if is_struct(state.sink, Membrane.PortAudio.Sink) do
+      # Let the native ring play out before reporting the turn as drained.
+      frames = state.sink.ringbuffer_size + state.sink.portaudio_buffer_size
+      milliseconds = div(frames * 1000 + state.rate - 1, state.rate)
+      Process.send_after(self(), :turn_drained, milliseconds)
+    else
+      send(state.playback, {:playback_drained, state.id})
+    end
+
+    {[], state}
+  end
+
   def handle_child_notification(notification, child, _ctx, state) do
-    send(state.playback, {:playback_notification, state.key, child, notification})
+    send(state.playback, {:playback_notification, state.id, child, notification})
     {[], state}
   end
 
   @impl true
-  def handle_element_end_of_stream(:sink, :input, _ctx, state) do
-    send(state.playback, {:playback_drained, state.key})
-
-    if is_struct(state.sink, Membrane.PortAudio.Sink) do
-      # Let the native ring finish before resource cleanup closes the device.
-      frames = state.sink.ringbuffer_size + state.sink.portaudio_buffer_size
-      milliseconds = div(frames * 1000 + state.rate - 1, state.rate)
-      Process.send_after(self(), :close_device, milliseconds)
-      {[], state}
-    else
-      {[terminate: :normal], state}
-    end
+  def handle_info(:turn_drained, _ctx, state) do
+    send(state.playback, {:playback_drained, state.id})
+    {[], state}
   end
-
-  @impl true
-  def handle_info(:close_device, _ctx, state), do: {[terminate: :normal], state}
 end

@@ -16,13 +16,14 @@ defmodule AudioFlow.WebRTC.Session do
   (200 ms). This deliberately fails on loss rather than inventing speech.
   `:reorder_window` defaults to 32 (max 256). VoiceInput handles silence/length
   endpoints; speech start cancels output. Owner/peer/session exit closes all work.
+
+  `:voice_input` holds the options of `AudioFlow.VoiceInput.new/2`. A semantic
+  turn check runs beside the session (`async_turn: true` unless you set it), so
+  RTP and output keep flowing while the detector works.
   """
   use GenServer
-  alias AudioFlow.Audio
-  alias AudioFlow.RTP.Reorder
-  alias AudioFlow.Telephony.MuLaw
-  alias AudioFlow.Telephony.RateConverter
-  alias AudioFlow.VoiceInput
+  alias AudioFlow.Transport.PCMUDecoder
+  alias AudioFlow.Transport.RtpInput
   alias AudioFlow.WebRTC
   alias AudioFlow.WebRTC.Transport
 
@@ -45,13 +46,19 @@ defmodule AudioFlow.WebRTC.Session do
     Process.flag(:trap_exit, true)
     owner = Keyword.fetch!(opts, :owner)
     Process.monitor(owner)
-    voice = VoiceInput.new(Keyword.fetch!(opts, :vad), Keyword.get(opts, :voice_input, []))
-    unless voice.rate == 16_000, do: raise(ArgumentError, "WebRTC VAD requires 16 kHz")
-    window = Keyword.get(opts, :reorder_window, 32)
-    timeout = Keyword.get(opts, :gap_timeout_ms, 200)
 
-    unless is_integer(window) and window in 1..256 and is_integer(timeout) and timeout in 1..5000,
-      do: raise(ArgumentError, "invalid RTP reorder limits")
+    input =
+      RtpInput.new(
+        Keyword.take(opts, [:voice_input, :endpoint_options]) ++
+          [
+            owner: owner,
+            tag: __MODULE__,
+            vad: Keyword.fetch!(opts, :vad),
+            reorder_window: Keyword.get(opts, :reorder_window, 32),
+            gap_timeout_ms: Keyword.get(opts, :gap_timeout_ms, 200),
+            loss: :fail
+          ]
+      )
 
     {:ok, peer} =
       WebRTC.start_link(
@@ -88,14 +95,9 @@ defmodule AudioFlow.WebRTC.Session do
        peer: peer,
        transport: transport,
        session: session,
-       voice: voice,
-       up: %RateConverter{},
+       input: %{input | session: session},
        track: nil,
-       timestamp: nil,
-       ssrc: nil,
-       reorder: Reorder.new(window),
-       timeout: timeout,
-       gap: nil
+       ssrc: nil
      }}
   end
 
@@ -123,7 +125,7 @@ defmodule AudioFlow.WebRTC.Session do
     cond do
       packet.payload_type != 0 or byte_size(packet.payload) != 160 -> fail(:unsupported_rtp, s)
       s.ssrc != nil and s.ssrc != packet.ssrc -> fail(:ssrc_changed, s)
-      true -> reorder(packet, %{s | ssrc: packet.ssrc})
+      true -> input(RtpInput.push(s.input, packet), %{s | ssrc: packet.ssrc})
     end
   end
 
@@ -145,19 +147,33 @@ defmodule AudioFlow.WebRTC.Session do
     {:noreply, s}
   end
 
-  def handle_info({:gap, token}, %{gap: {_, token}} = s), do: fail(:rtp_gap_timeout, s)
+  def handle_info({:gap, token}, s), do: input(RtpInput.gap(s.input, token), s)
+
+  def handle_info({:audio_flow_turn, _, _} = message, s), do: turn_check(message, s)
+  def handle_info({:audio_flow_turn_timeout, _} = message, s), do: turn_check(message, s)
 
   def handle_info({Transport, transport, {:error, reason}}, %{transport: transport} = s),
     do: fail({:output, reason}, s)
 
-  def handle_info({:DOWN, _, :process, _, _}, s), do: {:stop, :normal, s}
+  # A semantic turn check runs in a monitored process, so its :DOWN message must
+  # reach the input before the clause that stops the session.
+  def handle_info({:DOWN, _, :process, _, _} = message, s) do
+    case RtpInput.handle_info(s.input, message) do
+      {:ok, input} -> {:noreply, %{s | input: input}}
+      :unknown -> {:stop, :normal, s}
+    end
+  end
+
   def handle_info({:EXIT, _, _}, s), do: {:stop, :normal, s}
   def handle_info(_, s), do: {:noreply, s}
 
-  defp reorder(packet, s) do
-    case Reorder.push(s.reorder, packet) do
-      {:ok, packets, reorder} -> play(packets, %{s | reorder: reorder})
-      {:error, reason} -> fail(reason, s)
+  defp input({:ok, input}, s), do: {:noreply, %{s | input: input}}
+  defp input({:error, reason}, s), do: fail(reason, s)
+
+  defp turn_check(message, s) do
+    case RtpInput.handle_info(s.input, message) do
+      {:ok, input} -> {:noreply, %{s | input: input}}
+      :unknown -> {:noreply, s}
     end
   end
 
@@ -173,7 +189,9 @@ defmodule AudioFlow.WebRTC.Session do
       ]
       when channels in [nil, 1] ->
         if String.downcase(mime) == "audio/pcmu",
-          do: {:noreply, %{s | track: id}},
+          do:
+            {:noreply,
+             %{s | track: id, input: RtpInput.restart(s.input, PCMUDecoder.new(), 8000)}},
           else: fail(:unsupported_audio_codec, s)
 
       _ ->
@@ -181,49 +199,9 @@ defmodule AudioFlow.WebRTC.Session do
     end
   end
 
-  defp play([], s), do: {:noreply, schedule_gap(s)}
-
-  defp play([%{timestamp: timestamp} | _], %{timestamp: last} = s)
-       when last != nil and timestamp != rem(last + 160, 4_294_967_296),
-       do: fail(:rtp_timestamp_gap, s)
-
-  defp play([packet | rest], s) do
-    {data, up} = RateConverter.up(MuLaw.decode(packet.payload), s.up)
-    {events, voice} = VoiceInput.push(s.voice, %Audio{data: data, sample_rate: 16_000})
-    Enum.each(events, &handle_voice_event(s, &1))
-    play(rest, %{s | timestamp: packet.timestamp, up: up, voice: voice})
-  end
-
-  # Waits for a missing packet while later packets are buffered.
-  defp schedule_gap(s) do
-    cond do
-      not Reorder.waiting?(s.reorder) ->
-        if s.gap, do: Process.cancel_timer(elem(s.gap, 0))
-        %{s | gap: nil}
-
-      s.gap == nil ->
-        token = make_ref()
-        %{s | gap: {Process.send_after(self(), {:gap, token}, s.timeout), token}}
-
-      true ->
-        s
-    end
-  end
-
-  defp handle_voice_event(s, :speech_started), do: AudioFlow.cancel(s.session)
-
-  defp handle_voice_event(s, {:utterance, audio, reason}) do
-    notify(s, {:utterance, reason})
-
-    case AudioFlow.submit(s.session, audio) do
-      {:ok, _} -> :ok
-      {:error, reason} -> notify(s, {:error, {:submit, reason}})
-    end
-  end
-
   @impl true
   def terminate(_, s) do
-    if s.gap, do: Process.cancel_timer(elem(s.gap, 0))
+    RtpInput.stop(s.input)
     # Release a Session possibly waiting for Output.finish before stopping it.
     safely(fn -> GenServer.stop(s.transport) end)
     safely(fn -> AudioFlow.stop_session(s.session) end)

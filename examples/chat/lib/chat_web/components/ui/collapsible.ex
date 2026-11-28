@@ -40,6 +40,7 @@ defmodule ChatWeb.Components.UI.Collapsible do
   attr(:composed, :boolean, default: false, doc: "Render caller-owned trigger and content parts.")
 
   attr(:controlled, :boolean, default: false, doc: "Let server assigns own the disclosure state.")
+
   attr(:open, :boolean,
     default: false,
     doc:
@@ -78,12 +79,16 @@ defmodule ChatWeb.Components.UI.Collapsible do
       class={[@class]}
       phx-mounted={if not @controlled, do: Disclosure.owned_attributes(:item)}
       {Map.drop(@rest, [:"data-slot"])}
-    ><%= if @composed do %>{render_slot(@inner_block)}<% else %>
-      <.dynamic_tag :if={@wrapper_tag} tag_name={@wrapper_tag} {@wrapper_attrs}>
-        <.collapsible_parts {assigns} />
-      </.dynamic_tag>
-      <.collapsible_parts :if={is_nil(@wrapper_tag)} {assigns} />
-      <% end %></div>
+    >
+      <%= if @composed do %>
+        {render_slot(@inner_block)}
+      <% else %>
+        <.dynamic_tag :if={@wrapper_tag} tag_name={@wrapper_tag} {@wrapper_attrs}>
+          <.collapsible_parts {assigns} />
+        </.dynamic_tag>
+        <.collapsible_parts :if={is_nil(@wrapper_tag)} {assigns} />
+      <% end %>
+    </div>
     """
   end
 
@@ -132,7 +137,10 @@ defmodule ChatWeb.Components.UI.Collapsible do
         interactive(
           @disabled,
           caller_click(
-            if(@controlled, do: %JS{}, else: Disclosure.toggle(item: @for, root: @for, multiple: true)),
+            if(@controlled,
+              do: %JS{},
+              else: Disclosure.toggle(item: @for, root: @for, multiple: true)
+            ),
             @rest[:"phx-click"]
           )
         )

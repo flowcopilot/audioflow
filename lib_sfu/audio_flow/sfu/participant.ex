@@ -9,15 +9,20 @@ defmodule AudioFlow.SFU.Participant do
 
   Options: `:room`, `:identity` and `:session` (session options) are
   required, with `:vad` (a 16 kHz VoiceInput detector tuple). Optional:
-  `:sfu`, `:owner` (default caller), `:name`, `:voice_input`,
+  `:sfu`, `:owner` (default caller), `:name`, `:voice_input` (options of
+  `AudioFlow.VoiceInput.new/2`; `async_turn` is on unless you set it, so a
+  semantic turn check never blocks the participant),
   `:gap_timeout_ms` (200), `:reorder_window` (32), `:max_queue_packets` (100),
   and `:join` (extra `AudioFlowSFU.Native.join/4` options, such as
   `:resume_token` to take back a participant after a restart).
 
   The participant listens to one remote audio track at a time: the first
   track of a member that is not an agent. It decodes Opus or PCMU, resamples
-  to 16 kHz and feeds VoiceInput. Speech start cancels output. A lost packet
-  becomes 20 ms of silence after `:gap_timeout_ms`; the call does not end.
+  to 16 kHz and feeds VoiceInput. Speech start cancels output. The RTP
+  timestamps place the audio on a clock: a lost packet (after
+  `:gap_timeout_ms`), a burst loss beyond `:reorder_window`, and the packets
+  that Opus DTX leaves out all become silence (at most one second per gap).
+  The call does not end.
 
   Events for the owner are `{AudioFlow.SFU.Participant, pid, event}`:
   `{:joined, join}`, `{:session, turn, event}`, `{:utterance, reason}`,
@@ -25,17 +30,12 @@ defmodule AudioFlow.SFU.Participant do
   `{:error, reason}` and `{:closed, reason}`.
   """
   use GenServer
-  alias AudioFlow.Audio
-  alias AudioFlow.Resampler
-  alias AudioFlow.RTP.Reorder
+  alias AudioFlow.SFU.OpusDecoder
   alias AudioFlow.SFU.Transport
-  alias AudioFlow.Telephony.MuLaw
-  alias AudioFlow.Telephony.RateConverter
-  alias AudioFlow.VoiceInput
-  alias Membrane.Opus.Decoder.Native, as: Decoder
+  alias AudioFlow.Transport.PCMUDecoder
+  alias AudioFlow.Transport.RtpInput
 
   @vsn 1
-  @silence_20ms :binary.copy(<<0, 0>>, 320)
 
   def start_link(options),
     do: GenServer.start_link(__MODULE__, Keyword.put_new(options, :owner, self()))
@@ -56,8 +56,19 @@ defmodule AudioFlow.SFU.Participant do
     sfu = Keyword.get(options, :sfu, node())
     room = Keyword.fetch!(options, :room)
     identity = Keyword.fetch!(options, :identity)
-    voice = VoiceInput.new(Keyword.fetch!(options, :vad), Keyword.get(options, :voice_input, []))
-    unless voice.rate == 16_000, do: raise(ArgumentError, "SFU VAD requires 16 kHz")
+
+    input =
+      RtpInput.new(
+        Keyword.take(options, [:voice_input, :endpoint_options]) ++
+          [
+            owner: owner,
+            tag: __MODULE__,
+            vad: Keyword.fetch!(options, :vad),
+            reorder_window: Keyword.get(options, :reorder_window, 32),
+            gap_timeout_ms: Keyword.get(options, :gap_timeout_ms, 200),
+            loss: :silence
+          ]
+      )
 
     join_options =
       Keyword.merge(
@@ -95,16 +106,9 @@ defmodule AudioFlow.SFU.Participant do
         track: track,
         transport: transport,
         session: session,
-        voice: voice,
+        input: %{input | session: session},
         members: Map.new(join.others, &{&1.sid, &1}),
-        source: nil,
-        reorder: Reorder.new(Keyword.get(options, :reorder_window, 32)),
-        gap_timeout: Keyword.get(options, :gap_timeout_ms, 200),
-        gap: nil,
-        # For an Opus source: channel count => decoder, set by choose_source/1.
-        decoder: nil,
-        resampler: nil,
-        up: %RateConverter{}
+        source: nil
       }
 
       {:ok, choose_source(state)}
@@ -133,7 +137,7 @@ defmodule AudioFlow.SFU.Participant do
   @impl true
   def handle_info({:audio_flow_sfu, 1, p, {:rtp, sid, rtp}}, %{join: %{participant: p}} = s) do
     if s.source && sid == s.source.sid,
-      do: reorder(rtp, s),
+      do: input(RtpInput.push(s.input, rtp), s),
       else: {:noreply, s}
   end
 
@@ -161,25 +165,31 @@ defmodule AudioFlow.SFU.Participant do
     {:noreply, s}
   end
 
-  def handle_info({:gap, token}, %{gap: {_, token}} = s) do
-    {lost, packets, reorder} = Reorder.skip(s.reorder)
-    s = %{s | gap: nil, reorder: reorder}
-    s = Enum.reduce(1..lost//1, s, fn _, s -> listen(s, @silence_20ms) end)
-    play(packets, s)
-  end
+  def handle_info({:gap, token}, s), do: input(RtpInput.gap(s.input, token), s)
+
+  def handle_info({:audio_flow_turn, _, _} = message, s), do: turn_check(message, s)
+  def handle_info({:audio_flow_turn_timeout, _} = message, s), do: turn_check(message, s)
 
   def handle_info({:DOWN, _, :process, pid, reason}, %{join: %{participant: pid}} = s) do
     notify(s.owner, {:error, {:sfu_participant_down, reason}})
     {:stop, :normal, s}
   end
 
-  def handle_info({:DOWN, _, :process, _, _}, s), do: {:stop, :normal, s}
+  # A semantic turn check runs in a monitored process, so its :DOWN message must
+  # reach the input before the clause that stops the participant.
+  def handle_info({:DOWN, _, :process, _, _} = message, s) do
+    case RtpInput.handle_info(s.input, message) do
+      {:ok, input} -> {:noreply, %{s | input: input}}
+      :unknown -> {:stop, :normal, s}
+    end
+  end
+
   def handle_info({:EXIT, _, _}, s), do: {:stop, :normal, s}
   def handle_info(_, s), do: {:noreply, s}
 
   @impl true
   def terminate(_, s) do
-    if s.gap, do: Process.cancel_timer(elem(s.gap, 0))
+    RtpInput.stop(s.input)
     # Release a session that may wait in Output.finish before stopping it.
     safely(fn -> GenServer.stop(s.transport) end)
     safely(fn -> AudioFlow.stop_session(s.session) end)
@@ -188,7 +198,8 @@ defmodule AudioFlow.SFU.Participant do
 
   ## Listening
 
-  # The first audio track of a member that is not an agent.
+  # The first audio track of a member that is not an agent. A member update
+  # (such as a mute) keeps the stream state of a track that stays the same.
   defp choose_source(s) do
     candidate =
       s.members
@@ -198,93 +209,28 @@ defmodule AudioFlow.SFU.Participant do
       |> Enum.find_value(fn info -> List.first(info.tracks) end)
 
     cond do
-      candidate == s.source ->
-        s
+      same_track?(candidate, s.source) ->
+        %{s | source: candidate}
 
       candidate != nil and candidate.mime_type == "audio/opus" ->
-        %{s | source: candidate, reorder: Reorder.new(s.reorder.window)}
-        |> Map.merge(%{decoder: %{}, resampler: Resampler.new(48_000, 16_000)})
+        %{s | source: candidate, input: RtpInput.restart(s.input, OpusDecoder.new(), 48_000)}
 
       true ->
-        %{s | source: candidate, reorder: Reorder.new(s.reorder.window), up: %RateConverter{}}
+        %{s | source: candidate, input: RtpInput.restart(s.input, PCMUDecoder.new(), 8000)}
     end
   end
 
-  defp reorder(rtp, s) do
-    case Reorder.push(s.reorder, rtp) do
-      {:ok, packets, reorder} -> play(packets, %{s | reorder: reorder})
-      {:error, reason} -> fail(reason, s)
-    end
-  end
+  defp same_track?(nil, nil), do: true
+  defp same_track?(%{sid: sid}, %{sid: sid}), do: true
+  defp same_track?(_, _), do: false
 
-  defp play(packets, s) do
-    s =
-      Enum.reduce(packets, s, fn packet, s ->
-        {pcm, s} = decode(s, packet.payload)
-        listen(s, pcm)
-      end)
+  defp input({:ok, input}, s), do: {:noreply, %{s | input: input}}
+  defp input({:error, reason}, s), do: fail(reason, s)
 
-    {:noreply, schedule_gap(s)}
-  rescue
-    error -> fail({:decode, Exception.message(error)}, s)
-  end
-
-  defp decode(%{source: %{mime_type: "audio/PCMU"}} = s, payload) do
-    {data, up} = RateConverter.up(MuLaw.decode(payload), s.up)
-    {data, %{s | up: up}}
-  end
-
-  # Browsers can send stereo Opus (`stereo=1`). The TOC byte says how many
-  # channels a packet has; a stereo packet is decoded in stereo and mixed down.
-  defp decode(s, <<_::5, stereo::1, _::2, _::binary>> = payload) do
-    channels = stereo + 1
-    decoder = Map.get_lazy(s.decoder, channels, fn -> Decoder.create(48_000, channels) end)
-    pcm = Decoder.decode_packet(decoder, payload)
-    pcm = if channels == 2, do: downmix(pcm), else: pcm
-    {Resampler.push(s.resampler, pcm), %{s | decoder: Map.put(s.decoder, channels, decoder)}}
-  end
-
-  defp decode(s, _payload), do: {<<>>, s}
-
-  defp downmix(pcm) do
-    for <<l::little-signed-16, r::little-signed-16 <- pcm>>,
-      into: <<>>,
-      do: <<div(l + r, 2)::little-signed-16>>
-  end
-
-  defp listen(s, <<>>), do: s
-
-  defp listen(s, pcm) do
-    {events, voice} = VoiceInput.push(s.voice, %Audio{data: pcm, sample_rate: 16_000})
-    Enum.each(events, &voice_event(s, &1))
-    %{s | voice: voice}
-  end
-
-  defp voice_event(s, :speech_started), do: AudioFlow.cancel(s.session)
-
-  defp voice_event(s, {:utterance, audio, reason}) do
-    notify(s.owner, {:utterance, reason})
-
-    case AudioFlow.submit(s.session, audio) do
-      {:ok, _} -> :ok
-      {:error, reason} -> notify(s.owner, {:error, {:submit, reason}})
-    end
-  end
-
-  defp voice_event(_s, _event), do: :ok
-
-  defp schedule_gap(s) do
-    cond do
-      not Reorder.waiting?(s.reorder) ->
-        if s.gap, do: Process.cancel_timer(elem(s.gap, 0))
-        %{s | gap: nil}
-
-      s.gap == nil ->
-        token = make_ref()
-        %{s | gap: {Process.send_after(self(), {:gap, token}, s.gap_timeout), token}}
-
-      true ->
-        s
+  defp turn_check(message, s) do
+    case RtpInput.handle_info(s.input, message) do
+      {:ok, input} -> {:noreply, %{s | input: input}}
+      :unknown -> {:noreply, s}
     end
   end
 
