@@ -70,5 +70,59 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
       assert_receive {AudioFlow, ^session, ^next_turn, {:done, _}}
       assert_end_of_stream(pipeline, :input)
     end
+
+    defmodule CompleteTurn do
+      def init(options), do: options
+
+      def predict(_audio, options) do
+        send(options[:owner], :turn_started)
+        0.9
+      end
+    end
+
+    test "async semantic checks submit the utterance from handle_info" do
+      {:ok, session} = AudioFlow.start_session(Demo.options())
+      on_exit(fn -> if Process.alive?(session), do: AudioFlow.stop_session(session) end)
+
+      data =
+        :binary.copy(<<32_000::little-signed-16>>, 512 * 3) <> :binary.copy(<<0, 0>>, 512 * 2)
+
+      # The source stays open after its buffers, so only handle_info can end the utterance.
+      source = %Membrane.Testing.Source{
+        output:
+          {[data],
+           fn
+             [], _size ->
+               receive do
+                 :never -> {[], []}
+               end
+
+             [payload | rest], _size ->
+               {[buffer: {:output, %Membrane.Buffer{payload: payload}}, redemand: :output], rest}
+           end},
+        stream_format: %Membrane.RawAudio{
+          sample_format: :s16le,
+          channels: 1,
+          sample_rate: 16_000
+        }
+      }
+
+      spec =
+        child(:source, source)
+        |> child(:input, %AudioFlow.PCMSink{
+          session: session,
+          vad: {AudioFlow.Test.FrameDetector, []},
+          endpoint_options: [
+            pre_roll_ms: 0,
+            min_silence_ms: 64,
+            turn_detector: {CompleteTurn, owner: self()},
+            async_turn: true
+          ]
+        })
+
+      pipeline = Pipeline.start_link_supervised!(spec: spec)
+      assert_receive :turn_started, 2000
+      assert_pipeline_notified(pipeline, :input, {:audio_flow_input, {:ok, _turn}}, 2000)
+    end
   end
 end
