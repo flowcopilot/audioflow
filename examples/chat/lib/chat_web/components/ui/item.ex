@@ -47,19 +47,19 @@ defmodule ChatWeb.Components.UI.Item do
   defp upstream_fact(key), do: Map.fetch!(@upstream_facts, key)
 
   @variant_classes (for {"cva/" <> path, value} <- @upstream_facts,
-                       [table, "variant", group, choice] <- [String.split(path, "/")],
-                       reduce: %{} do
-    variants ->
-      put_in(
-        variants,
-        [
-          Access.key(table, %{}),
-          Access.key(group, %{}),
-          Access.key(choice, nil)
-        ],
-        value
-      )
-  end)
+                        [table, "variant", group, choice] <- [String.split(path, "/")],
+                        reduce: %{} do
+                      variants ->
+                        put_in(
+                          variants,
+                          [
+                            Access.key(table, %{}),
+                            Access.key(group, %{}),
+                            Access.key(choice, nil)
+                          ],
+                          value
+                        )
+                    end)
 
   @doc "The `item` part."
   attr(:size, :string,
@@ -157,7 +157,7 @@ defmodule ChatWeb.Components.UI.Item do
     ~H"""
     <div
       data-slot={@rest[:"data-slot"] || "item-actions"}
-      class={[upstream_fact("jsx/ItemActions/class/0"), (@class || "")]}
+      class={[upstream_fact("jsx/ItemActions/class/0"), @class || ""]}
       {Map.drop(@rest, [:"data-slot"])}
     >
       {render_slot(@inner_block)}
@@ -195,7 +195,7 @@ defmodule ChatWeb.Components.UI.Item do
     <LiveShadcn.UI.Separator.separator
       data-slot={@rest[:"data-slot"] || "item-separator"}
       orientation="horizontal"
-      class={[upstream_fact("jsx/ItemSeparator/class/0"), (@class || "")]}
+      class={[upstream_fact("jsx/ItemSeparator/class/0"), @class || ""]}
       {Map.drop(@rest, [:"data-slot"])}
     >
       {render_slot(@inner_block)}
@@ -233,7 +233,7 @@ defmodule ChatWeb.Components.UI.Item do
       data-slot={@rest[:"data-slot"] || "item-description"}
       class={[
         upstream_fact("jsx/ItemDescription/class/0"),
-        (@class || "")
+        @class || ""
       ]}
       {Map.drop(@rest, [:"data-slot"])}
     >
@@ -252,7 +252,7 @@ defmodule ChatWeb.Components.UI.Item do
     ~H"""
     <div
       data-slot={@rest[:"data-slot"] || "item-header"}
-      class={[upstream_fact("jsx/ItemHeader/class/0"), (@class || "")]}
+      class={[upstream_fact("jsx/ItemHeader/class/0"), @class || ""]}
       {Map.drop(@rest, [:"data-slot"])}
     >
       {render_slot(@inner_block)}
@@ -270,7 +270,7 @@ defmodule ChatWeb.Components.UI.Item do
     ~H"""
     <div
       data-slot={@rest[:"data-slot"] || "item-footer"}
-      class={[upstream_fact("jsx/ItemFooter/class/0"), (@class || "")]}
+      class={[upstream_fact("jsx/ItemFooter/class/0"), @class || ""]}
       {Map.drop(@rest, [:"data-slot"])}
     >
       {render_slot(@inner_block)}
