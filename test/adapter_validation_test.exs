@@ -7,8 +7,10 @@ defmodule AudioFlow.AdapterValidationTest do
   alias AudioFlow.Adapters.FishAudio
   alias AudioFlow.Adapters.FishAudioAPI
   alias AudioFlow.Adapters.GeminiLive
+  alias AudioFlow.Adapters.OpenAIRealtime
   alias AudioFlow.Adapters.Providers.Socket
   alias AudioFlow.Adapters.ReqLLM
+  alias AudioFlow.Duplex
   alias AudioFlow.STT
 
   @secret "sk-test-secret-value"
@@ -46,6 +48,7 @@ defmodule AudioFlow.AdapterValidationTest do
           {FishAudioAPI, fish_api()},
           {FishAudio, []},
           {FishAudio, [api_key: "", endpoint: "http://127.0.0.1:8080/v1/tts"]},
+          {OpenAIRealtime, [model: "m", api_key: @secret, instructions: ""]},
           {GeminiLive, [model: "m", api_key: @secret]},
           {ReqLLM, [model: "openai:gpt-4o-mini"]},
           {STT.ReqLLM, [model: "deepgram:nova-3", api_key: @secret]}
@@ -66,6 +69,9 @@ defmodule AudioFlow.AdapterValidationTest do
           {FishAudioAPI, fish_api(latency: "fast"), "latency must be one of"},
           {FishAudioAPI, fish_api(api_key: 5), "api_key must be a nonempty string or a function"},
           {FishAudio, [api_key: 5], "api_key must be a string or a function"},
+          {OpenAIRealtime, [api_key: @secret], "model is required"},
+          {OpenAIRealtime, [model: "m", api_key: 5], "api_key must be a nonempty string"},
+          {OpenAIRealtime, [model: "m", api_key: @secret, instructions: 5], "instructions must"},
           {GeminiLive, [model: "m"], "api_key is required"},
           {ReqLLM, [api_key: @secret], "model is required"},
           {ReqLLM, [model: "m", audio_flow: [max_text_bytes: 0]], "max_text_bytes must be"},
@@ -97,5 +103,20 @@ defmodule AudioFlow.AdapterValidationTest do
     for options <- [[], [api_key: nil], [api_key: ""], [api_key: fn -> nil end], [api_key: 5]] do
       assert message(fn -> Socket.key(options) end) =~ "api_key must be a nonempty string"
     end
+  end
+
+  test "the continuous OpenAI adapter validates through the shared helpers" do
+    assert %{sample_rate: 24_000} = Duplex.OpenAIRealtime.config(model: "m", api_key: @secret)
+
+    assert "unknown options [:bogus]" =
+             message(fn ->
+               Duplex.OpenAIRealtime.config(model: "m", api_key: @secret, bogus: 1)
+             end)
+
+    assert message(fn -> Duplex.OpenAIRealtime.config(api_key: @secret) end) =~
+             "model is required"
+
+    assert message(fn -> Duplex.OpenAIRealtime.config(model: "m", api_key: 5) end) =~
+             "api_key must be a nonempty string or a function"
   end
 end

@@ -229,8 +229,28 @@ OpenAI uses the GA Realtime WebSocket protocol, waits for `session.updated`,
 disables VAD, appends and commits the input, then requests a response. Input and
 output PCM must be 24 kHz. Input transcription defaults to
 `gpt-4o-mini-transcribe` (`:transcription_model` overrides it). Success waits for
-both a completed response and input transcription. Failed or cancelled
+both a completed response and input transcription. OpenAI sends the transcript
+on its own schedule: if it has not arrived `:transcript_grace_ms` (3,000) after
+`response.done`, the turn fails with `:transcript_timeout`. Failed or cancelled
 responses, transcription failures and tool calls return errors.
+
+For these WebSocket adapters, `:timeout_ms` (30,000) bounds the time that the
+adapter waits for the provider. Time in the output callback (back pressure, or
+speech synthesis in the Session) does not count, so a slow consumer cannot fail
+a healthy stream. The turn deadline of the Session bounds the whole turn. The
+HTTP language-model adapter works the same way, see the
+[HTTP inference guide](../../guides/http-inference/).
+
+## Option validation
+
+`AudioFlow.Adapter.validate!/1` checks one `{module, options}` tuple before any
+call. It raises `ArgumentError` for wrong options, for example a missing
+`:voice_id`, an unsupported `:sample_rate` or an empty `:api_key`. Adapters
+implement the optional `c:AudioFlow.Adapter.validate_options/1` callback, with
+the helpers in `AudioFlow.Adapters.Options`. The message names the option key
+and never its value, because options can hold API keys and the message can
+reach a client. `run/3` makes the same check, so a direct call fails the same
+way.
 
 Gemini uses Live v1beta, waits for `setupComplete`, disables automatic activity
 detection and wraps the audio in `activityStart` / `activityEnd`. Input is

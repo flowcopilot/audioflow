@@ -3,15 +3,34 @@ defmodule AudioFlow.Adapters.OpenAIRealtime do
   One committed audio turn over OpenAI's GA Realtime WebSocket protocol.
   `run/3` emits `{:transcript, text}`, `{:text, delta}`, `{:audio, Audio}`.
   Use directly or in Session `:speech_to_speech`, never an STT/LLM/TTS slot.
+
+  The turn ends when the response is done and the input transcript has
+  arrived. OpenAI sends the transcript on its own schedule. If it has not
+  arrived `:transcript_grace_ms` (default 3000) after `response.done`, the turn
+  fails with `:transcript_timeout`.
+
   See
   https://flowcopilot.github.io/audioflow/docs/features/providers/
   for options and integration limits.
   """
   @behaviour AudioFlow.Adapter
+  alias AudioFlow.Adapters.Options
+  alias AudioFlow.Adapters.Providers.OpenAIRealtime, as: Protocol
   alias AudioFlow.Adapters.Providers.Socket
+  alias AudioFlow.Audio
 
+  @impl true
+  def validate_options(options) do
+    Protocol.validate_options!(options)
+    Options.positive!(options, :transcript_grace_ms, 3_000)
+    Socket.validate_options!(options)
+  end
+
+  @impl true
   def run(audio, options, emit) do
-    Socket.audio!(audio, 24_000)
+    :ok = validate_options(options)
+    Socket.audio!(audio, Protocol.rate())
+    grace = Keyword.get(options, :transcript_grace_ms, 3_000)
 
     input = [
       Socket.json(%{type: "input_audio_buffer.append", audio: Base.encode64(audio.data)}),
@@ -20,97 +39,63 @@ defmodule AudioFlow.Adapters.OpenAIRealtime do
     ]
 
     url =
-      Socket.url(Keyword.get(options, :endpoint, "wss://api.openai.com/v1/realtime"), %{
+      Socket.url(Keyword.get(options, :endpoint, Protocol.endpoint()), %{
         "model" => options[:model]
       })
 
     Socket.run(
       url,
       [{"authorization", "Bearer " <> Socket.key(options)}],
-      [Socket.json(%{type: "session.update", session: session(options)})],
+      [Socket.json(%{type: "session.update", session: Protocol.session(options, nil)})],
       %{sent: false, response: false, transcript: false},
-      &event(&1, &2, input, emit),
+      &event(Protocol.decode(&1), &2, input, emit, grace),
       options
     )
   end
 
-  defp session(options) do
-    %{
-      type: "realtime",
-      model: Keyword.fetch!(options, :model),
-      output_modalities: ["audio"],
-      instructions: Keyword.get(options, :instructions, ""),
-      audio: %{
-        input: %{
-          format: %{type: "audio/pcm", rate: 24_000},
-          turn_detection: nil,
-          transcription: %{
-            model: Keyword.get(options, :transcription_model, "gpt-4o-mini-transcribe")
-          }
-        },
-        output: %{
-          format: %{type: "audio/pcm", rate: 24_000},
-          voice: Keyword.get(options, :voice, "marin")
-        }
-      }
-    }
-  end
-
-  defp event(%{"type" => "session.updated"}, state, input, _emit) when not state.sent,
+  defp event(:session_updated, %{sent: false} = state, input, _emit, _grace),
     do: {:cont, %{state | sent: true}, input}
 
-  defp event(%{"type" => "error"}, _state, _input, _emit), do: {:error, :remote_error}
+  defp event({:remote_error, _error}, _state, _input, _emit, _grace), do: {:error, :remote_error}
 
-  defp event(%{"type" => "conversation.item.input_audio_transcription.failed"}, _, _, _),
+  defp event({:transcript_failed, _item}, _state, _input, _emit, _grace),
     do: {:error, :transcription_failed}
 
-  defp event(
-         %{
-           "type" => "conversation.item.input_audio_transcription.completed",
-           "transcript" => text
-         },
-         state,
-         _input,
-         emit
-       )
-       when is_binary(text) do
+  defp event({:transcript, _item, text}, state, _input, emit, grace) do
     :ok = emit.({:transcript, text})
-    finish(%{state | transcript: true})
+    finish(%{state | transcript: true}, grace)
   end
 
-  defp event(%{"type" => "response.output_audio.delta", "delta" => data}, state, _input, emit)
-       when is_binary(data) do
-    case Socket.audio_event(data, 24_000, emit) do
-      :ok -> {:cont, state, []}
-      error -> error
-    end
+  defp event({:audio, %{pcm: pcm}}, state, _input, emit, _grace) do
+    :ok = emit.({:audio, %Audio{data: pcm, sample_rate: Protocol.rate()}})
+    {:cont, state, []}
   end
 
-  defp event(%{"type" => type, "delta" => text}, state, _input, emit)
-       when type in ["response.output_audio_transcript.delta", "response.output_text.delta"] and
-              is_binary(text) do
+  defp event(:invalid_audio, _state, _input, _emit, _grace), do: {:error, :invalid_audio}
+
+  defp event({:text, _response, text}, state, _input, emit, _grace) do
     :ok = emit.({:text, text})
     {:cont, state, []}
   end
 
-  defp event(
-         %{
-           "type" => "response.done",
-           "response" => %{"status" => "completed", "output" => output}
-         },
-         state,
-         _input,
-         _emit
-       ) do
-    if Enum.any?(output, &(&1["type"] == "function_call")),
-      do: {:error, :unsupported_tool_call},
-      else: finish(%{state | response: true})
-  end
+  defp event({:response_done, %{tool_call?: true}}, _state, _input, _emit, _grace),
+    do: {:error, :unsupported_tool_call}
 
-  defp event(%{"type" => "response.done"}, _state, _input, _emit), do: {:error, :response_failed}
-  defp event(%{"type" => _}, state, _input, _emit), do: {:cont, state, []}
-  defp event(_event, _state, _input, _emit), do: {:error, :invalid_event}
+  defp event({:response_done, %{status: :completed}}, state, _input, _emit, grace),
+    do: finish(%{state | response: true}, grace)
 
-  defp finish(%{response: true, transcript: true}), do: :done
-  defp finish(state), do: {:cont, state, []}
+  defp event({:response_done, _response}, _state, _input, _emit, _grace),
+    do: {:error, :response_failed}
+
+  defp event({:invalid, _type}, _state, _input, _emit, _grace), do: {:error, :invalid_event}
+  defp event(_ignored, state, _input, _emit, _grace), do: {:cont, state, []}
+
+  # Without a transcript, the response is complete but the turn waits for it, for
+  # the grace time at most.
+  defp finish(%{response: true, transcript: true}, _grace), do: :done
+
+  defp finish(%{response: true} = state, grace),
+    do: {:wait, state, [], grace, :transcript_timeout}
+
+  defp finish(state, _grace), do: {:cont, state, []}
 end

@@ -7,6 +7,16 @@ defmodule AudioFlow.Adapters.Providers.Socket do
   # The byte budget also bounds fragmented messages before WebSocket decoding.
   # `decode` maps each `{:text | :binary, data}` frame to a handler event; the
   # default accepts JSON objects only.
+  #
+  # `:timeout_ms` bounds the time spent waiting for the provider: connect,
+  # handshake and reads. Time inside the handler (the output callback applies
+  # back pressure, and speech synthesis can run in it) moves the deadline, so a
+  # slow consumer cannot fail a healthy stream. The session deadline bounds the
+  # whole turn.
+  #
+  # A handler can return `{:wait, state, frames, ms, reason}` to expect the next
+  # event within `ms` of provider time. The call then fails with `{:error, reason}`
+  # when the event does not arrive in time.
   def run(url, headers, frames, state, handler, options, decode \\ &json_event/1) do
     endpoint!(url)
     timeout = positive!(options, :timeout_ms, 30_000)
@@ -20,6 +30,7 @@ defmodule AudioFlow.Adapters.Providers.Socket do
           ws: ws,
           ref: ref,
           deadline: deadline,
+          grace: nil,
           bytes: 0,
           limit: limit,
           decode: decode
@@ -101,19 +112,19 @@ defmodule AudioFlow.Adapters.Providers.Socket do
   defp check({:error, _, _}), do: throw({:provider_socket, :socket_error})
   defp check(result), do: result
 
-  defp receive_data(conn, deadline) do
+  defp receive_data(conn, deadline, reason \\ :timeout) do
     remaining = deadline - System.monotonic_time(:millisecond)
-    if remaining <= 0, do: throw({:provider_socket, :timeout})
+    if remaining <= 0, do: throw({:provider_socket, reason})
 
     case WS.recv(conn, 0, remaining) do
       {:ok, conn, responses} ->
         {conn, responses}
 
       {:error, _, %Mint.TransportError{reason: :timeout}, _} ->
-        throw({:provider_socket, :timeout})
+        throw({:provider_socket, reason})
 
       {:error, _, :timeout, _} ->
-        throw({:provider_socket, :timeout})
+        throw({:provider_socket, reason})
 
       _ ->
         throw({:provider_socket, :incomplete_stream})
@@ -147,7 +158,13 @@ defmodule AudioFlow.Adapters.Providers.Socket do
   end
 
   defp loop(socket, [], state, handler) do
-    {conn, responses} = receive_data(socket.conn, socket.deadline)
+    {deadline, reason} =
+      case socket.grace do
+        {grace, reason} when grace < socket.deadline -> {grace, reason}
+        _ -> {socket.deadline, :timeout}
+      end
+
+    {conn, responses} = receive_data(socket.conn, deadline, reason)
     loop(%{socket | conn: conn}, responses, state, handler)
   end
 
@@ -177,10 +194,23 @@ defmodule AudioFlow.Adapters.Providers.Socket do
   defp frames(socket, [{kind, data} | rest], state, handler) when kind in [:text, :binary] do
     case socket.decode.({kind, data}) do
       {:ok, event} ->
-        case handler.(event, state) do
-          {:cont, state, outgoing} -> frames(send_frames(socket, outgoing), rest, state, handler)
-          :done -> :ok
-          {:error, _} = error -> error
+        started = System.monotonic_time(:millisecond)
+        result = handler.(event, state)
+        socket = pause(socket, System.monotonic_time(:millisecond) - started)
+
+        case result do
+          {:cont, state, outgoing} ->
+            frames(send_frames(socket, outgoing), rest, state, handler)
+
+          {:wait, state, outgoing, ms, reason} ->
+            socket = %{socket | grace: {System.monotonic_time(:millisecond) + ms, reason}}
+            frames(send_frames(socket, outgoing), rest, state, handler)
+
+          :done ->
+            :ok
+
+          {:error, _} = error ->
+            error
         end
 
       :error ->
@@ -189,6 +219,12 @@ defmodule AudioFlow.Adapters.Providers.Socket do
   end
 
   defp frames(_, _, _, _), do: {:error, :invalid_frame}
+
+  # Time that the handler used is not provider time.
+  defp pause(socket, elapsed) do
+    grace = with {at, reason} <- socket.grace, do: {at + elapsed, reason}
+    %{socket | deadline: socket.deadline + elapsed, grace: grace}
+  end
 
   defp json_event({_kind, data}) do
     case JSON.decode(data) do
