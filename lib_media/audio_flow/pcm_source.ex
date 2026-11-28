@@ -1,10 +1,16 @@
 defmodule AudioFlow.PCMSource do
-  @moduledoc "Demand-driven PCM output from an AudioFlow.Playback queue."
+  @moduledoc """
+  Demand-driven PCM output from an AudioFlow.Playback queue.
+
+  The source outlives turns. `:end_of_turn` pads the device block, tells the
+  parent, restarts timestamps and keeps asking for the next turn's audio.
+  `:end_of_stream` ends the stream.
+  """
   use Membrane.Source
 
   def_options(
     playback: [spec: pid()],
-    key: [spec: AudioFlow.Output.key()],
+    id: [spec: reference()],
     sample_rate: [spec: pos_integer()],
     alignment_samples: [spec: pos_integer(), default: 1]
   )
@@ -32,7 +38,7 @@ defmodule AudioFlow.PCMSource do
   @impl true
   def handle_demand(:output, _size, _unit, _ctx, %{request: nil} = state) do
     request = make_ref()
-    send(state.options.playback, {:take_pcm, state.options.key, self(), request})
+    send(state.options.playback, {:take_pcm, state.options.id, self(), request})
     {[], %{state | request: request}}
   end
 
@@ -49,21 +55,27 @@ defmodule AudioFlow.PCMSource do
   end
 
   def handle_info({:pcm, request, :end_of_stream}, _ctx, %{request: request} = state) do
-    # PortAudio's callback only consumes complete device buffers.
-    remainder = rem(state.samples_sent, state.options.alignment_samples)
-    padding = if remainder == 0, do: 0, else: state.options.alignment_samples - remainder
+    {pad(state) ++ [end_of_stream: :output], %{state | request: nil}}
+  end
 
-    actions =
-      if padding == 0,
-        do: [],
-        else: [
-          buffer:
-            {:output,
-             %Membrane.Buffer{payload: :binary.copy(<<0, 0>>, padding), pts: state.position}}
-        ]
-
-    {actions ++ [end_of_stream: :output], %{state | request: nil}}
+  def handle_info({:pcm, request, :end_of_turn}, _ctx, %{request: request} = state) do
+    {pad(state) ++ [notify_parent: :end_of_turn, redemand: :output],
+     %{state | request: nil, position: 0, samples_sent: 0}}
   end
 
   def handle_info(_message, _ctx, state), do: {[], state}
+
+  # PortAudio's callback only consumes complete device buffers.
+  defp pad(state) do
+    remainder = rem(state.samples_sent, state.options.alignment_samples)
+    padding = if remainder == 0, do: 0, else: state.options.alignment_samples - remainder
+
+    if padding == 0,
+      do: [],
+      else: [
+        buffer:
+          {:output,
+           %Membrane.Buffer{payload: :binary.copy(<<0, 0>>, padding), pts: state.position}}
+      ]
+  end
 end

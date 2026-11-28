@@ -85,7 +85,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
       assert_receive {Playback, ^player, ^next, :drained}, 2000
     end
 
-    test "session cancellation stops output while the turn worker waits for capacity" do
+    test "session cancellation drops queued output while the turn worker waits for capacity" do
       player = player()
       owner = self()
 
@@ -108,18 +108,21 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
       key = {session, turn}
       assert_receive {:worker, worker}
       ref = Process.monitor(worker)
-      assert_receive {Playback, ^player, ^key, {:pipeline_started, pipeline}}
-      pipeline_ref = Process.monitor(pipeline)
+      assert_receive {Playback, ^player, ^key, {:pipeline_started, _pipeline}}
+      assert_receive {:sink_ready, sink}, 2000
       assert_receive {Playback, ^player, ^key, {:backpressure, _}}, 2000
       assert :ok = AudioFlow.cancel(session)
       assert_receive {AudioFlow, ^session, ^turn, {:cancelled, _}}
       assert_receive {:DOWN, ^ref, :process, ^worker, :killed}
-      assert_receive {:DOWN, ^pipeline_ref, :process, ^pipeline, _}
       assert %{queued_bytes: 0, blocked?: false, key: nil} = Playback.stats(player)
+      demand(sink, 3)
+      [two, three] = [audio(2).data, audio(3).data]
+      refute_receive {:played, ^sink, %Membrane.Buffer{payload: ^two}}, 200
+      refute_receive {:played, ^sink, %Membrane.Buffer{payload: ^three}}, 10
       assert {:ok, _} = AudioFlow.submit(session, audio(0))
     end
 
-    test "a completed turn can still be interrupted while output is queued" do
+    test "a completed turn can still be interrupted while its audio sits in the sink" do
       player = player()
       tts = {AudioFlow.Adapters.Function, run: fn _, emit -> emit.(audio(1)) end}
 
@@ -134,10 +137,126 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
       key = {session, turn}
       assert_receive {Playback, ^player, ^key, {:pipeline_started, pipeline}}
       ref = Process.monitor(pipeline)
+      assert_receive {Playback, ^player, ^key, {:first_buffer, _}}, 2000
       assert_receive {AudioFlow, ^session, ^turn, {:done, _}}
       assert :ok = AudioFlow.cancel(session)
       assert_receive {:DOWN, ^ref, :process, ^pipeline, _}
-      assert %{queued_bytes: 0, key: nil} = Playback.stats(player)
+      assert %{queued_bytes: 0, key: nil, pipeline: nil} = Playback.stats(player)
+    end
+
+    test "one pipeline serves consecutive turns" do
+      player = player()
+      first = {self(), make_ref()}
+      :ok = Playback.start_turn(player, first)
+      :ok = Playback.push(player, first, audio(1))
+      assert_receive {Playback, ^player, ^first, {:pipeline_started, pipeline}}
+      assert_receive {:sink_ready, sink}, 2000
+      :ok = Playback.finish(player, first)
+      demand(sink, 1)
+      one = audio(1).data
+      assert_receive {:played, ^sink, %Membrane.Buffer{payload: ^one, pts: 0}}, 2000
+      assert_receive {Playback, ^player, ^first, :drained}, 2000
+
+      second = {self(), make_ref()}
+      :ok = Playback.start_turn(player, second)
+      assert %{pipeline: ^pipeline} = Playback.stats(player)
+      :ok = Playback.push(player, second, audio(2))
+      :ok = Playback.finish(player, second)
+      demand(sink, 1)
+      two = audio(2).data
+      assert_receive {:played, ^sink, %Membrane.Buffer{payload: ^two, pts: 0}}, 2000
+      assert_receive {Playback, ^player, ^second, :drained}, 2000
+      assert %{pipeline: ^pipeline} = Playback.stats(player)
+      refute_received {Playback, ^player, _, {:pipeline_started, _}}
+      refute_received {:sink_ready, _}
+    end
+
+    test "flush keeps a pipeline that holds no audio from the flushed turn" do
+      player = player()
+      key = {self(), make_ref()}
+      :ok = Playback.start_turn(player, key)
+      :ok = Playback.push(player, key, audio(1))
+      assert_receive {Playback, ^player, ^key, {:pipeline_started, pipeline}}
+      assert_receive {:sink_ready, sink}, 2000
+      :ok = Playback.finish(player, key)
+      demand(sink, 1)
+      assert_receive {Playback, ^player, ^key, :drained}, 2000
+
+      next = {self(), make_ref()}
+      :ok = Playback.start_turn(player, next)
+      assert :ok = Playback.flush(player, next)
+      assert_receive {Playback, ^player, ^next, {:flushed, %{control_us: us}}}
+      assert us < 1_000_000
+      assert %{pipeline: ^pipeline, queued_bytes: 0, key: nil} = Playback.stats(player)
+
+      later = {self(), make_ref()}
+      :ok = Playback.start_turn(player, later)
+      :ok = Playback.push(player, later, audio(3))
+      demand(sink, 1)
+      three = audio(3).data
+      assert_receive {:played, ^sink, %Membrane.Buffer{payload: ^three}}, 2000
+    end
+
+    test "flush stops a pipeline that already holds audio and the next turn starts a new one" do
+      player = player()
+      key = {self(), make_ref()}
+      :ok = Playback.start_turn(player, key)
+      :ok = Playback.push(player, key, audio(1))
+      assert_receive {Playback, ^player, ^key, {:pipeline_started, pipeline}}
+      ref = Process.monitor(pipeline)
+      assert_receive {:sink_ready, old_sink}, 2000
+      assert_receive {Playback, ^player, ^key, {:first_buffer, _}}, 2000
+      :ok = Playback.push(player, key, audio(2))
+      assert :ok = Playback.flush(player, key)
+      assert %{pipeline: nil, queued_bytes: 0} = Playback.stats(player)
+      assert_receive {:DOWN, ^ref, :process, ^pipeline, _}, 2000
+      demand(old_sink, 2)
+      two = audio(2).data
+      refute_receive {:played, ^old_sink, %Membrane.Buffer{payload: ^two}}, 200
+
+      next = {self(), make_ref()}
+      :ok = Playback.start_turn(player, next)
+      :ok = Playback.push(player, next, audio(3))
+      assert_receive {Playback, ^player, ^next, {:pipeline_started, new_pipeline}}
+      assert new_pipeline != pipeline
+    end
+
+    test "a sample rate change between turns starts a new pipeline" do
+      player = player()
+      first = {self(), make_ref()}
+      :ok = Playback.start_turn(player, first)
+      :ok = Playback.push(player, first, audio(1))
+      assert_receive {Playback, ^player, ^first, {:pipeline_started, pipeline}}
+      ref = Process.monitor(pipeline)
+      assert_receive {:sink_ready, sink}, 2000
+      :ok = Playback.finish(player, first)
+      demand(sink, 1)
+      assert_receive {Playback, ^player, ^first, :drained}, 2000
+
+      second = {self(), make_ref()}
+      :ok = Playback.start_turn(player, second)
+      other = %{audio(2) | sample_rate: 24_000}
+      :ok = Playback.push(player, second, other)
+      assert_receive {Playback, ^player, ^second, {:pipeline_started, replacement}}
+      assert replacement != pipeline
+      assert_receive {:DOWN, ^ref, :process, ^pipeline, _}, 2000
+      assert {:error, :sample_rate_changed} = Playback.push(player, second, audio(3))
+    end
+
+    test "a failed pipeline is replaced on the next turn" do
+      player = player()
+      key = {self(), make_ref()}
+      :ok = Playback.start_turn(player, key)
+      :ok = Playback.push(player, key, audio(1))
+      assert_receive {:sink_ready, sink}, 2000
+      send(sink, :crash)
+      assert_receive {Playback, ^player, ^key, {:failed, _}}, 2000
+
+      next = {self(), make_ref()}
+      :ok = Playback.start_turn(player, next)
+      :ok = Playback.push(player, next, audio(2))
+      assert_receive {Playback, ^player, ^next, {:pipeline_started, _}}
+      assert_receive {:sink_ready, _new_sink}, 2000
     end
 
     test "endpoint acknowledgements update offsets without treating dispatch as heard" do
