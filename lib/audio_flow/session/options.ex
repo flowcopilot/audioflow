@@ -119,18 +119,35 @@ defmodule AudioFlow.Session.Options do
   @doc "Documentation of all session options."
   def docs, do: NimbleOptions.docs(schema())
 
+  @adapter_stages [:stt, :llm, :tts, :vision, :speech_to_speech]
+
   @doc """
   Returns the validated options with defaults applied, or raises
-  `ArgumentError` for unknown keys and invalid values.
+  `ArgumentError` for unknown keys and invalid values. Each stage adapter also
+  goes through `AudioFlow.Adapter.validate!/1`, so a wrong adapter option fails
+  when the session starts and not in the middle of a call.
   """
   @spec validate!(keyword()) :: keyword()
   def validate!(options) do
     case NimbleOptions.validate(options, schema()) do
       {:ok, validated} ->
+        for stage <- @adapter_stages, adapter = validated[stage] do
+          validate_adapter!(stage, adapter)
+        end
+
         validated
 
       {:error, error} ->
         raise ArgumentError, "invalid session options: " <> Exception.message(error)
     end
+  end
+
+  defp validate_adapter!(stage, adapter) do
+    AudioFlow.Adapter.validate!(adapter)
+  rescue
+    error in ArgumentError ->
+      reraise ArgumentError,
+              "invalid session options: #{inspect(stage)} adapter: " <> Exception.message(error),
+              __STACKTRACE__
   end
 end

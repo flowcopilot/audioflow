@@ -27,6 +27,31 @@ defmodule AudioFlow.SessionOptionsTest do
     end
   end
 
+  test "a misconfigured stage adapter raises at start, naming the stage and the key" do
+    secret = "sk-test-secret"
+
+    for {stage, adapter, expected} <- [
+          {:llm, {AudioFlow.Adapters.ReqLLM, [api_key: secret]}, "model is required"},
+          {:stt, {AudioFlow.STT.ReqLLM, [model: "m", api_key: 5]}, "api_key must be"},
+          {:tts, {AudioFlow.Adapters.Cartesia, [api_key: secret]}, "model is required"}
+        ] do
+      error =
+        assert_raise ArgumentError, ~r/#{stage}/, fn ->
+          AudioFlow.start_session(Keyword.put(Demo.options(), stage, adapter))
+        end
+
+      assert error.message =~ expected
+      refute error.message =~ secret
+    end
+
+    assert_raise ArgumentError, ~r/:speech_to_speech/, fn ->
+      AudioFlow.start_session(
+        owner: self(),
+        speech_to_speech: {AudioFlow.Adapters.OpenAIRealtime, [api_key: "k"]}
+      )
+    end
+  end
+
   test "valid options, a nil output and an explicit owner start a session" do
     options = Keyword.merge(Demo.options(), owner: self(), output: nil, history: [max_turns: 2])
     assert {:ok, session} = AudioFlow.start_session(options)
