@@ -32,6 +32,13 @@ defmodule AudioFlow.Output do
   def provisional(session, timeout_ms \\ 2_000),
     do: GenServer.call(session, {:provisional, timeout_ms})
 
+  @doc """
+  Resolve a provisional pause. `:confirm` cancels the turn. `:resume` needs the
+  endpoint's pause acknowledgement first (see `control_ack/5`); before it, or
+  while a resume waits for its own acknowledgement, it returns
+  `{:error, :not_paused}` and the candidate stays live. A candidate that no
+  longer exists returns `{:error, :stale_candidate}`.
+  """
   def resolve(session, candidate, decision) when decision in [:resume, :confirm],
     do: GenServer.call(session, {:resolve, candidate, decision})
 

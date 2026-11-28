@@ -202,6 +202,11 @@ defmodule AudioFlow.Session do
     end
   end
 
+  # The candidate is live but the endpoint has not acknowledged the pause yet
+  # (or is already resuming), so a resume cannot apply.
+  def handle_call({:resolve, id, :resume}, _from, %{candidate: %{id: id}} = state),
+    do: {:reply, {:error, :not_paused}, state}
+
   def handle_call({:resolve, _, _}, _from, state),
     do: {:reply, {:error, :stale_candidate}, state}
 
@@ -404,6 +409,9 @@ defmodule AudioFlow.Session do
       )
       when candidate != nil do
     Process.demonitor(ref, [:flush])
+    # The candidate deadline bounds the wait now. A turn timeout during the
+    # pause would drop the finished turn and its heard reply.
+    Process.cancel_timer(state.active.timer)
     {:noreply, %{state | pending_result: result}}
   end
 
