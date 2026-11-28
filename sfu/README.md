@@ -37,8 +37,10 @@ This application does not depend on `:audio_flow`. Run it as its own release.
   supported.
 - `AudioFlowSFU.Signaling.Telephony` takes Twilio and Telnyx Media Streams
   at `/telephony/twilio` and `/telephony/telnyx`. The phone call joins as a
-  participant of kind `sip` with a PCMU track. Opus from the other members is
-  decoded at 8 kHz and sent back as μ-law. Twilio passes the token as the
+  participant of kind `sip` with a PCMU track. The other members come back as
+  one stream: each is decoded to 8 kHz PCM, mixed every 20 ms (a clipping sum,
+  `Membrane.AudioMixer.Adder`) and sent as μ-law. A member's queue holds
+  100 ms, so the phone delay stays bounded. Twilio passes the token as the
   `access_token` custom parameter of `<Stream>`.
 - `AudioFlowSFU.Native` lets BEAM processes, such as AudioFlow agents on
   other nodes, join rooms over Erlang distribution.
