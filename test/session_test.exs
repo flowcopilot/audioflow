@@ -186,6 +186,26 @@ defmodule AudioFlow.SessionTest do
     assert_receive {:DOWN, ^ref, :process, ^worker, _}, 1_000
   end
 
+  test "client functions on AudioFlow.Session cover the whole message protocol" do
+    alias AudioFlow.Session
+    session = start()
+    assert Session.idle?(session)
+    assert {:error, :no_conversation} = Session.conversation_state(session)
+    assert {:error, :no_conversation} = Session.conversation_event(session, :go)
+    assert {:error, :stale_turn} = Session.conversation_event(session, make_ref(), :go)
+    assert {:error, :stale_turn} = Session.acknowledge(session, make_ref(), 0)
+    assert {:error, :no_active_turn} = Session.provisional(session, 100)
+    assert {:error, :stale_candidate} = Session.resolve(session, make_ref(), :resume)
+
+    assert {:error, :stale_control} =
+             Session.control_ack(session, make_ref(), make_ref(), :pause, 0)
+
+    assert {:ok, turn} = Session.submit(session, audio())
+    assert_receive {AudioFlow, ^session, ^turn, {:done, _}}
+    assert :ok = Session.clear_history(session)
+    assert :ok = Session.cancel(session)
+  end
+
   test "a timeout stops inference and leaves the session ready" do
     session =
       start(

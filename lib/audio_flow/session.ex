@@ -73,6 +73,98 @@ defmodule AudioFlow.Session do
   @doc "Session resource limits:\n\n" <> NimbleOptions.docs(@limits_schema)
   def start_link(options), do: GenServer.start_link(__MODULE__, options)
 
+  ## Client functions
+  #
+  # The message protocol of the session lives here. Other modules call these
+  # functions instead of building `GenServer.call/3` messages themselves.
+
+  @typedoc "A session pid or registered name."
+  @type session :: GenServer.server()
+  @typedoc "Turn reference from `submit/2`."
+  @type turn :: reference()
+  @typedoc "Provisional pause reference from `provisional/2`."
+  @type candidate :: reference()
+  @typedoc "Input a turn accepts."
+  @type input :: AudioFlow.Audio.t() | AudioFlow.Image.t() | AudioFlow.Text.t()
+
+  @doc """
+  Start a turn. Returns `{:ok, turn}`, or `{:error, reason}` when the input is
+  invalid or too large, the session lacks the needed stage, the output refuses
+  the turn (`{:error, {:output, reason}}`), or a turn is running (`:busy`).
+  """
+  @spec submit(session(), input()) :: {:ok, turn()} | {:error, term()}
+  def submit(session, input), do: GenServer.call(session, {:submit, input})
+
+  @doc """
+  Cancel the running turn and flush the output. Retains the reply the user
+  heard. Returns `:ok` when no turn runs, or `{:error, reason}` when the output
+  flush fails.
+  """
+  @spec cancel(session()) :: :ok | {:error, term()}
+  def cancel(session), do: GenServer.call(session, :cancel)
+
+  @doc "True when the session has no turn and no pending interruption."
+  @spec idle?(session()) :: boolean()
+  def idle?(session), do: GenServer.call(session, :idle?)
+
+  @doc "Clear saved conversation text while idle. Returns `{:error, :busy}` during a turn."
+  @spec clear_history(session()) :: :ok | {:error, :busy}
+  def clear_history(session), do: GenServer.call(session, :clear_history)
+
+  @doc """
+  Report rendered PCM in cumulative nanoseconds. See `AudioFlow.Output.acknowledge/3`.
+  """
+  @spec acknowledge(session(), turn(), integer()) :: :ok | {:error, term()}
+  def acknowledge(session, turn, nanoseconds),
+    do: GenServer.call(session, {:played, turn, nanoseconds})
+
+  @doc """
+  Pause the output for up to `timeout_ms` (1 to 30,000) while the caller decides
+  whether the user really interrupted. Returns `{:ok, candidate}`. See
+  `AudioFlow.Output.provisional/2`.
+  """
+  @spec provisional(session(), integer()) :: {:ok, candidate()} | {:error, term()}
+  def provisional(session, timeout_ms), do: GenServer.call(session, {:provisional, timeout_ms})
+
+  @doc """
+  Resolve a provisional pause with `:confirm` (cancel the turn) or `:resume`.
+  `:resume` returns `{:error, :not_paused}` until the endpoint acknowledged the
+  pause, and `{:error, :stale_candidate}` for a candidate that no longer exists.
+  """
+  @spec resolve(session(), candidate(), :resume | :confirm) :: :ok | {:error, term()}
+  def resolve(session, candidate, decision) when decision in [:resume, :confirm],
+    do: GenServer.call(session, {:resolve, candidate, decision})
+
+  @doc """
+  Endpoint acknowledgement that a pause or resume took effect, with the
+  cumulative rendered nanoseconds.
+  """
+  @spec control_ack(session(), turn(), candidate(), :pause | :resume, integer()) ::
+          :ok | {:error, term()}
+  def control_ack(session, turn, candidate, action, nanoseconds),
+    do: GenServer.call(session, {:control_ack, turn, candidate, action, nanoseconds})
+
+  @doc """
+  Send a conversation event. During a turn the transition commits only if the
+  turn succeeds; otherwise it applies at once.
+  """
+  @spec conversation_event(session(), term()) :: :ok | {:error, term()}
+  def conversation_event(session, event),
+    do: GenServer.call(session, {:conversation_event, event})
+
+  @doc """
+  Send a conversation event for one turn, from that turn's task (for example a
+  handoff tool). Waits without a timeout, because the turn timer bounds the
+  task. Returns `{:error, :stale_turn}` after the turn ended.
+  """
+  @spec conversation_event(session(), turn(), term()) :: :ok | {:error, term()}
+  def conversation_event(session, turn, event),
+    do: GenServer.call(session, {:conversation_event, turn, event}, :infinity)
+
+  @doc "Current conversation state name, or `{:error, :no_conversation}`."
+  @spec conversation_state(session()) :: {:ok, term()} | {:error, :no_conversation}
+  def conversation_state(session), do: GenServer.call(session, :conversation_state)
+
   # State version for hot code upgrades. Bump it when the state shape changes,
   # and migrate the old state in code_change/3 (see the hot-upgrades guide).
   @vsn 1

@@ -11,23 +11,25 @@ defmodule AudioFlow do
   `{kind, value, node_id}`, where kind can also be `:image` or `:vector`.
   """
 
+  alias AudioFlow.Session
+
   def start_session(options) do
     options = Keyword.put_new(options, :owner, self())
     DynamicSupervisor.start_child(AudioFlow.Sessions, {AudioFlow.Session, options})
   end
 
-  def submit(session, %AudioFlow.Audio{} = audio), do: GenServer.call(session, {:submit, audio})
-  def submit(session, %AudioFlow.Image{} = image), do: GenServer.call(session, {:submit, image})
-  def submit(session, %AudioFlow.Text{} = text), do: GenServer.call(session, {:submit, text})
-  def cancel(session), do: GenServer.call(session, :cancel)
+  def submit(session, %AudioFlow.Audio{} = audio), do: Session.submit(session, audio)
+  def submit(session, %AudioFlow.Image{} = image), do: Session.submit(session, image)
+  def submit(session, %AudioFlow.Text{} = text), do: Session.submit(session, text)
+  def cancel(session), do: Session.cancel(session)
 
   @doc "True when the session has no turn and no pending interruption."
-  def idle?(session), do: GenServer.call(session, :idle?)
+  defdelegate idle?(session), to: Session
 
   @doc "Transcribe long PCM audio with an STT adapter. See `AudioFlow.Transcription`."
   defdelegate transcribe(audio, stt, options \\ []), to: AudioFlow.Transcription
 
   @doc "Clear saved conversation text while idle. Returns `{:error, :busy}` during a turn."
-  def clear_history(session), do: GenServer.call(session, :clear_history)
+  defdelegate clear_history(session), to: Session
   def stop_session(session), do: DynamicSupervisor.terminate_child(AudioFlow.Sessions, session)
 end
