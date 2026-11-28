@@ -201,6 +201,83 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
       assert after_update.source.muted
     end
 
+    defp output(options \\ []) do
+      {:ok, transport} =
+        Transport.start_link([participant: self(), track: "TR_agent"] ++ options)
+
+      key = {self(), make_ref()}
+      :ok = Transport.start_turn(transport, key)
+      {transport, key}
+    end
+
+    defp frames(count),
+      do: %Audio{data: :binary.copy(<<0x10, 0x27>>, 960 * count), sample_rate: 48_000}
+
+    defp packets(count) do
+      for _ <- 1..count do
+        assert_receive {:audio_flow_sfu, 1, {:rtp, "TR_agent", rtp}}, 1000
+        rtp
+      end
+    end
+
+    test "output packets leave on absolute 20 ms deadlines" do
+      {transport, key} = output()
+      started = System.monotonic_time(:millisecond)
+      :ok = Transport.push(transport, key, frames(25))
+      packets(25)
+
+      # Each tick moves the deadline by exactly 20 ms, whatever its own delay.
+      # A deadline taken from the time of the tick would have drifted by now.
+      assert (:sys.get_state(transport).next_at - started - 500) in 0..10
+    end
+
+    test "a talkspurt after silence skips the idle time and sets the marker" do
+      {transport, key} = output()
+      :ok = Transport.push(transport, key, frames(3))
+      first = packets(3)
+      Process.sleep(300)
+      :ok = Transport.push(transport, key, frames(3))
+      second = packets(3)
+
+      assert Enum.map(first, & &1.marker) == [true, false, false]
+      assert Enum.map(second, & &1.marker) == [true, false, false]
+      last = List.last(first)
+      idle = rem(hd(second).timestamp - last.timestamp - 960 + 4_294_967_296, 4_294_967_296)
+      assert idle in (250 * 48)..(400 * 48)
+      assert hd(second).sequence_number == rem(last.sequence_number + 1, 65_536)
+    end
+
+    test "a push into a full queue waits for the queue to drain" do
+      {transport, key} = output(max_queue_packets: 5)
+      :ok = Transport.push(transport, key, frames(5))
+      push = Task.async(fn -> Transport.push(transport, key, frames(3)) end)
+
+      assert Task.yield(push, 10) == nil
+      assert Task.await(push) == :ok
+      assert :queue.len(:sys.get_state(transport).queue) <= 5
+      packets(8)
+    end
+
+    test "a push of more than the queue limit is accepted into an empty queue" do
+      {transport, key} = output(max_queue_packets: 5)
+      assert :ok = Transport.push(transport, key, frames(8))
+      packets(8)
+    end
+
+    test "flush releases a waiting push and finish does not wait" do
+      {transport, key} = output(max_queue_packets: 5)
+      :ok = Transport.push(transport, key, frames(5))
+      push = Task.async(fn -> Transport.push(transport, key, frames(3)) end)
+      assert Task.yield(push, 10) == nil
+      assert :ok = Transport.flush(transport, key)
+      assert Task.await(push) == {:error, :stale_turn}
+
+      key = {self(), make_ref()}
+      :ok = Transport.start_turn(transport, key)
+      :ok = Transport.push(transport, key, frames(5))
+      assert :ok = Transport.finish(transport, key)
+    end
+
     test "agent members are not used as the audio source" do
       other_agent = %{@user | sid: "PA_bot", identity: "bot", kind: :agent, joined_at: 0}
       {agent, participant} = start(others: [other_agent, @user])

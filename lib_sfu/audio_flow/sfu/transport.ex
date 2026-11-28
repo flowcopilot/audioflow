@@ -5,9 +5,17 @@ defmodule AudioFlow.SFU.Transport do
 
   Accepts mono PCM16LE at any rate, resamples it to 48 kHz, encodes 20 ms
   Opus frames and sends one RTP map every 20 ms to the native participant:
-  `{:audio_flow_sfu, 1, {:rtp, track_sid, rtp}}`. Queue overflow fails the
-  turn. `finish/2` drains (with a padded final frame); `flush/2` discards
-  pending audio. Sent audio cannot be recalled and never implies playout.
+  `{:audio_flow_sfu, 1, {:rtp, track_sid, rtp}}`. Packets leave on absolute
+  20 ms deadlines, so a late tick does not slow the stream. After silence the
+  RTP timestamp skips the idle time and the first packet of the new talkspurt
+  has the marker bit.
+
+  `push/3` applies back pressure: while `:max_queue_packets` (default 100,
+  2 s) are queued, a push waits until enough audio has left, and `flush/2`,
+  a new turn, `retarget/3` or a stop release it with `{:error, :stale_turn}`.
+  A push into an empty queue is always accepted. `finish/2` never waits: it
+  drains with a padded final frame. `flush/2` discards pending audio. Sent
+  audio cannot be recalled and never implies playout.
   """
   use GenServer
   @behaviour AudioFlow.Output
@@ -17,6 +25,11 @@ defmodule AudioFlow.SFU.Transport do
 
   @rate 48_000
   @frame_bytes 1920
+  @frame_ms 20
+  @samples_per_ms 48
+  # A stream that is later than this resyncs to the clock instead of bursting.
+  @max_behind_ms 60
+  @timestamp_modulus 4_294_967_296
   # libopus OPUS_APPLICATION_VOIP, OPUS_AUTO bitrate, OPUS_SIGNAL_VOICE.
   @application 2048
   @bitrate -1000
@@ -29,7 +42,7 @@ defmodule AudioFlow.SFU.Transport do
   @impl AudioFlow.Output
   def start_turn(pid, key), do: GenServer.call(pid, {:start, key})
   @impl AudioFlow.Output
-  def push(pid, key, audio), do: GenServer.call(pid, {:push, key, audio})
+  def push(pid, key, audio), do: GenServer.call(pid, {:push, key, audio}, :infinity)
   @impl AudioFlow.Output
   def finish(pid, key), do: GenServer.call(pid, {:finish, key}, :infinity)
   @impl AudioFlow.Output
@@ -56,6 +69,7 @@ defmodule AudioFlow.SFU.Transport do
        pending: <<>>,
        queue: :queue.new(),
        timer: nil,
+       held: nil,
        sealed: false,
        sequence: :rand.uniform(65_536) - 1,
        timestamp: :rand.uniform(4_294_967_296) - 1,
@@ -70,7 +84,7 @@ defmodule AudioFlow.SFU.Transport do
 
   @impl GenServer
   def handle_call({:retarget, participant, track}, _, s),
-    do: {:reply, :ok, %{s | participant: participant, track: track}}
+    do: {:reply, :ok, %{release(s) | participant: participant, track: track}}
 
   def handle_call({:start, key}, _, s) when not is_nil(key),
     do: {:reply, :ok, %{clear(s) | key: key}}
@@ -92,7 +106,10 @@ defmodule AudioFlow.SFU.Transport do
 
   def handle_call({:finish, _}, _, %{sealed: true} = s), do: {:reply, :ok, s}
 
-  def handle_call({:push, _, audio}, _, s) do
+  def handle_call({:push, _, _}, _, %{held: held} = s) when held != nil,
+    do: {:reply, {:error, :push_pending}, s}
+
+  def handle_call({:push, _, audio}, from, s) do
     cond do
       not Audio.valid?(audio) ->
         {:reply, {:error, :unsupported_pcm}, s}
@@ -102,21 +119,21 @@ defmodule AudioFlow.SFU.Transport do
 
       true ->
         s = %{s | rate: audio.sample_rate, resampler: s.resampler || resampler(audio.sample_rate)}
-        enqueue(s, resample(s.resampler, audio.data))
+        data = s.pending <> resample(s.resampler, audio.data)
+        admit(%{s | pending: <<>>}, from, data)
     end
   end
 
+  # The session calls finish inside its server, so it never waits for room.
   def handle_call({:finish, _}, _, s) do
     tail = if s.resampler, do: Resampler.flush(s.resampler), else: <<>>
     data = s.pending <> tail
     padding = rem(@frame_bytes - rem(byte_size(data), @frame_bytes), @frame_bytes)
 
-    case enqueue(%{s | pending: <<>>}, data <> <<0::size(padding * 8)>>) do
-      # The session calls finish inside its server. Keep draining afterwards
-      # so that it can still accept cancellation and deadline messages.
-      {:reply, :ok, s} -> {:reply, :ok, schedule(%{s | sealed: true, resampler: nil})}
-      error -> error
-    end
+    # Keep draining afterwards so that the session can still accept
+    # cancellation and deadline messages.
+    s = enqueue(%{s | pending: <<>>}, data <> <<0::size(padding * 8)>>)
+    {:reply, :ok, schedule(%{s | sealed: true, resampler: nil})}
   end
 
   @impl GenServer
@@ -139,14 +156,21 @@ defmodule AudioFlow.SFU.Transport do
         timer: nil,
         marker: false,
         sequence: rem(s.sequence + 1, 65_536),
-        timestamp: rem(s.timestamp + 960, 4_294_967_296),
-        next_at: System.monotonic_time(:millisecond) + 20
+        timestamp: rem(s.timestamp + @frame_ms * @samples_per_ms, @timestamp_modulus),
+        # The next deadline follows the previous one, not the time of this tick.
+        next_at: s.next_at + @frame_ms
     }
 
-    {:noreply, schedule(s)}
+    {:noreply, s |> admit_held() |> schedule()}
   end
 
   def handle_info(_, s), do: {:noreply, s}
+
+  @impl GenServer
+  def terminate(_, s) do
+    release(s)
+    :ok
+  end
 
   # 48 kHz audio needs no resampler.
   defp resampler(@rate), do: nil
@@ -155,44 +179,90 @@ defmodule AudioFlow.SFU.Transport do
   defp resample(nil, data), do: data
   defp resample(resampler, data), do: Resampler.push(resampler, data)
 
-  defp enqueue(s, data) do
-    data = s.pending <> data
-    count = div(byte_size(data), @frame_bytes)
-
-    if :queue.len(s.queue) + count > s.limit do
-      {:reply, {:error, :queue_limit}, s}
+  # Accepts audio that fits in the queue, or any audio when the queue is empty.
+  # Otherwise the push waits in `held` and its reply waits with it.
+  defp admit(s, from, data) do
+    if fits?(s, data) do
+      {:reply, :ok, enqueue(s, data)}
     else
-      size = count * @frame_bytes
-      <<frames::binary-size(^size), rest::binary>> = data
-
-      queue =
-        for <<frame::binary-size(@frame_bytes) <- frames>>, reduce: s.queue do
-          queue ->
-            {:ok, packet} = Encoder.encode_packet(s.encoder, frame, div(@frame_bytes, 2))
-            :queue.in(packet, queue)
-        end
-
-      {:reply, :ok, schedule(%{s | queue: queue, pending: rest})}
+      {:noreply, %{s | held: {from, data}}}
     end
+  end
+
+  defp admit_held(%{held: {from, data}} = s) do
+    if fits?(s, data) do
+      GenServer.reply(from, :ok)
+      enqueue(%{s | held: nil}, data)
+    else
+      s
+    end
+  end
+
+  defp admit_held(s), do: s
+
+  defp fits?(s, data) do
+    count = div(byte_size(data), @frame_bytes)
+    count == 0 or :queue.is_empty(s.queue) or :queue.len(s.queue) + count <= s.limit
+  end
+
+  defp enqueue(s, data) do
+    size = div(byte_size(data), @frame_bytes) * @frame_bytes
+    <<frames::binary-size(^size), rest::binary>> = data
+
+    queue =
+      for <<frame::binary-size(@frame_bytes) <- frames>>, reduce: s.queue do
+        queue ->
+          {:ok, packet} = Encoder.encode_packet(s.encoder, frame, div(@frame_bytes, 2))
+          :queue.in(packet, queue)
+      end
+
+    schedule(%{s | queue: queue, pending: rest})
   end
 
   defp schedule(%{timer: nil} = s) do
     if :queue.is_empty(s.queue) do
       s
     else
+      s = resync(s, System.monotonic_time(:millisecond))
       token = make_ref()
-      delay = max(0, s.next_at - System.monotonic_time(:millisecond))
-      %{s | timer: {Process.send_after(self(), {:tick, token}, delay), token}}
+      timer = Process.send_after(self(), {:tick, token}, s.next_at, abs: true)
+      %{s | timer: {timer, token}}
     end
   end
 
   defp schedule(s), do: s
 
+  # The start of a talkspurt, or a stream that fell far behind, begins at the
+  # clock. The RTP timestamp skips the idle time, and the marker bit tells the
+  # receiver that a new talkspurt starts.
+  defp resync(s, now) do
+    behind = now - s.next_at
+
+    if behind > @max_behind_ms or (s.marker and behind > 0) do
+      %{
+        s
+        | next_at: now,
+          marker: true,
+          timestamp: rem(s.timestamp + behind * @samples_per_ms, @timestamp_modulus)
+      }
+    else
+      s
+    end
+  end
+
+  # Answers a waiting push, because its turn has ended.
+  defp release(%{held: {from, _}} = s) do
+    GenServer.reply(from, {:error, :stale_turn})
+    %{s | held: nil}
+  end
+
+  defp release(s), do: s
+
   defp clear(s) do
     if s.timer, do: Process.cancel_timer(elem(s.timer, 0))
 
     %{
-      s
+      release(s)
       | queue: :queue.new(),
         pending: <<>>,
         resampler: nil,
