@@ -53,7 +53,8 @@ directory. The root project does not compile them.
   `mix credo diff` against `HEAD`, gitleaks, whitespace, shellcheck).
 - `pre-push`: the pre-commit set, plus typecheck, dialyzer, deps audit and tests
   for the core build, the all-profiles build in Docker
-  (`scripts/docker-test.sh`), and tests for `sfu/`, `ui/` and `examples/chat`.
+  (`scripts/docker-test.sh`), tests for `sfu/` (also in Docker), `ui/` and
+  `examples/chat`.
 - `hk check` runs the slow set on demand.
 
 ## All-profiles build in Docker

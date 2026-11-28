@@ -11,20 +11,25 @@ local elixir_glob = List("**/*.ex", "**/*.exs")
 
 // ui/, sfu/ and examples/chat are separate Mix projects. Their formatter plugins and
 // tests need their own deps, so their steps run inside the project directory.
-// `test_env` is a prefix for the test command, such as "CHAT_PROFILE=demo ".
-local function subproject_steps(name: String, path: String, test_env: String) = new Mapping<String, Step> {
-  ["\(name)-format"] {
-    dir = path
-    glob = elixir_glob
-    check = "mix deps.get --check-locked > /dev/null && mix format --check-formatted"
+// `test_env` is a prefix for the test command, such as "CHAT_PROFILE=demo ". With
+// `docker`, the tests run in the Linux container of scripts/docker-test.sh, for
+// projects whose native libraries (ex_libsrtp) do not load on every host.
+local function subproject_steps(name: String, path: String, test_env: String, docker: Boolean) =
+  new Mapping<String, Step> {
+    ["\(name)-format"] {
+      dir = path
+      glob = elixir_glob
+      check = "mix deps.get --check-locked > /dev/null && mix format --check-formatted"
+    }
+    ["\(name)-test"] {
+      dir = path
+      glob = elixir_glob
+      check =
+        if (docker) clean_git_env + "../scripts/docker-test.sh --project \(path)"
+        else clean_git_env + test_env + "mix deps.get --check-locked > /dev/null && " + test_env + "mix test"
+      depends = List("\(name)-format")
+    }
   }
-  ["\(name)-test"] {
-    dir = path
-    glob = elixir_glob
-    check = clean_git_env + test_env + "mix deps.get --check-locked > /dev/null && " + test_env + "mix test"
-    depends = List("\(name)-format")
-  }
-}
 
 // Shared steps: these make up the pre-commit, check and fix hooks.
 steps = new Mapping<String, Step | Group> {
@@ -101,10 +106,10 @@ local slow_steps = new Mapping<String, Step> {
     // Same MIX_ENV and build directory as mix-typecheck.
     depends = List("mix-typecheck")
   }
-  ...subproject_steps("sfu", "sfu", "")
-  ...subproject_steps("ui", "ui", "")
+  ...subproject_steps("sfu", "sfu", "", true)
+  ...subproject_steps("ui", "ui", "", false)
   // The chat tests expect the demo profile (no model processes). Its default on macOS is native.
-  ...subproject_steps("chat", "examples/chat", "CHAT_PROFILE=demo ")
+  ...subproject_steps("chat", "examples/chat", "CHAT_PROFILE=demo ", false)
 }
 
 hooks {
