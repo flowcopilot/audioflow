@@ -34,9 +34,11 @@ input = AudioFlow.VoiceInput.new({AudioFlow.Silero, serving: silero},
 `push/3` requires equally sized capture/reference chunks with the same sample
 rate. Splits across detector frames are buffered together. `push/2` supplies zero
 reference: noise suppression still runs, but this cannot cancel speaker echo.
-Worker failure/200 ms timeout raises, preventing accidental unfiltered VAD; restart
-the input stream and its worker explicitly. The native executable accepts
-`aec-only` to disable preprocessing for isolation/diagnostics.
+A worker failure or 200 ms timeout raises, preventing accidental unfiltered VAD.
+The worker process survives it: after a timeout it drops the late reply (or, if
+replies keep backing up, restarts the native program), and after a program exit it
+starts a new one. A restarted program has fresh adaptive-filter state. The native
+executable accepts `aec-only` to disable preprocessing for isolation/diagnostics.
 
 For Membrane, pass the same `:preprocessor` in `:endpoint_options` to
 `AudioFlow.Input.attach/3` or `InputPipeline.start_link/1`. The PCMSink runs it
@@ -99,16 +101,35 @@ utterance, allowing resumed speech to join it. Inference retries at most once pe
 `turn_retry_ms` of audio. Two seconds of continuous silence forces
 `:semantic_limit`; the existing maximum utterance and EOS bounds still apply.
 Errors, invalid probabilities, and timeouts emit `:semantic_fallback`, using the
-already satisfied silence endpoint. The Smart Turn worker bounds each native
-request to 500 ms and terminates on timeout so late results cannot be reused.
-VoiceInput bounds the whole model call (1–5000 ms configurable); workers have a
-30-second startup limit. Callers own worker supervision and shutdown.
+already satisfied silence endpoint. A Smart Turn request has a 500 ms deadline
+that covers queue time and inference. On timeout the worker keeps running: it
+drops the late result, and restarts the Python process only if results keep
+backing up, so a slow call does not disable semantic checks for the rest of the
+stream. VoiceInput bounds the whole model call (1–5000 ms configurable); workers
+have a 30-second startup limit. Callers own worker supervision and shutdown.
+The model sees at most the last eight seconds of the utterance.
 
-Calls are synchronous: each silence decision may pause capture processing for up
-to the configured timeout. Capture queued during inference is processed on the
-next push; this is not an asynchronous speech-resumption invalidation mechanism.
-Use a worker per stream to avoid cross-session inference queues. These tests
-establish execution and endpoint behavior, not speech accuracy or latency targets.
+By default calls are synchronous: each silence decision may pause the calling
+process (a connection, session, or Membrane sink) for up to the configured
+timeout. Set `async_turn: true` to avoid this. `push/2,3` then only starts the
+check and returns; capture keeps being buffered, and the owner passes the check's
+messages to `VoiceInput.handle_info/2`, which returns `{:ok, events, input}` or
+`:unknown`. The resulting utterance holds every frame consumed up to that call.
+Speech that resumes while a check is pending, a hard limit, or `flush/1` drops the
+check. `AudioFlow.PCMSink` routes these messages itself. See the
+`AudioFlow.VoiceInput` module documentation for the exact event order.
+
+Several streams can share one Smart Turn worker: it keeps no per-stream state.
+Requests are served in order, a request whose deadline passed or whose caller
+exited is skipped without reaching Python, and a failed check only costs that
+stream a `:semantic_fallback`. The trade-off is that one Python process runs one
+inference at a time. When many streams reach a silence decision together, later
+ones wait in line and may exceed the 500 ms deadline, so they fall back to the
+silence endpoint. Use a worker per stream (or per few streams) when you need
+predictable latency under load, and a shared worker when memory matters more.
+Do not share SpeexDSP workers: their adaptive filter state belongs to one
+microphone. These tests establish execution and endpoint behavior, not speech
+accuracy or latency targets.
 
 ## Verification
 
