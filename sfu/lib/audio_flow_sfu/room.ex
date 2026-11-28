@@ -18,6 +18,9 @@ defmodule AudioFlowSFU.Room do
 
   @vsn 1
 
+  # One registry lookup, then two attempts through the supervisor.
+  @attempts 3
+
   def child_spec(name) do
     %{id: {__MODULE__, name}, start: {__MODULE__, :start_link, [name]}, restart: :transient}
   end
@@ -38,8 +41,8 @@ defmodule AudioFlowSFU.Room do
   Adds a member. Starts the room when needed. Returns the room PID and the
   other members as `{info, pid}` pairs.
   """
-  def join(name, info, pid, attempts \\ 2) do
-    room = ensure_started(name)
+  def join(name, info, pid, attempts \\ @attempts) do
+    room = ensure_started(name, attempts)
 
     case GenServer.call(room, {:join, info, pid}) do
       {:ok, others} -> {:ok, room, others}
@@ -51,8 +54,8 @@ defmodule AudioFlowSFU.Room do
   end
 
   @doc "Adds a member again after a room restart. Other members get no join event."
-  def rejoin(name, info, pid, attempts \\ 2) do
-    room = ensure_started(name)
+  def rejoin(name, info, pid, attempts \\ @attempts) do
+    room = ensure_started(name, attempts)
     :ok = GenServer.call(room, {:rejoin, info, pid})
     {:ok, room}
   catch
@@ -64,14 +67,21 @@ defmodule AudioFlowSFU.Room do
   def leave(room, sid), do: GenServer.call(room, {:leave, sid})
   def participants(room), do: GenServer.call(room, :participants)
 
-  # A join to a running room is a registry read. Only a missing room goes
-  # through the supervisor, which settles a race between two first joins.
-  defp ensure_started(name) do
-    with nil <- whereis(name) do
-      case DynamicSupervisor.start_child(AudioFlowSFU.Rooms, {__MODULE__, name}) do
-        {:ok, pid} -> pid
-        {:error, {:already_started, pid}} -> pid
-      end
+  # A join to a running room is a registry read. A missing room goes through
+  # the supervisor, which settles a race between two first joins. So does a
+  # retry: the registry can still list a room that has just crashed, while the
+  # supervisor has handled its exit and restarted it.
+  defp ensure_started(name, attempts) do
+    case attempts == @attempts && whereis(name) do
+      pid when is_pid(pid) -> pid
+      _ -> start_room(name)
+    end
+  end
+
+  defp start_room(name) do
+    case DynamicSupervisor.start_child(AudioFlowSFU.Rooms, {__MODULE__, name}) do
+      {:ok, pid} -> pid
+      {:error, {:already_started, pid}} -> pid
     end
   end
 
