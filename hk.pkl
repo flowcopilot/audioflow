@@ -11,7 +11,8 @@ local elixir_glob = List("**/*.ex", "**/*.exs")
 
 // ui/, sfu/ and examples/chat are separate Mix projects. Their formatter plugins and
 // tests need their own deps, so their steps run inside the project directory.
-local function subproject_steps(name: String, path: String) = new Mapping<String, Step> {
+// `test_env` is a prefix for the test command, such as "CHAT_PROFILE=demo ".
+local function subproject_steps(name: String, path: String, test_env: String) = new Mapping<String, Step> {
   ["\(name)-format"] {
     dir = path
     glob = elixir_glob
@@ -20,7 +21,7 @@ local function subproject_steps(name: String, path: String) = new Mapping<String
   ["\(name)-test"] {
     dir = path
     glob = elixir_glob
-    check = clean_git_env + "mix deps.get --check-locked > /dev/null && mix test"
+    check = clean_git_env + test_env + "mix deps.get --check-locked > /dev/null && " + test_env + "mix test"
     depends = List("\(name)-format")
   }
 }
@@ -100,9 +101,10 @@ local slow_steps = new Mapping<String, Step> {
     // Same MIX_ENV and build directory as mix-typecheck.
     depends = List("mix-typecheck")
   }
-  ...subproject_steps("sfu", "sfu")
-  ...subproject_steps("ui", "ui")
-  ...subproject_steps("chat", "examples/chat")
+  ...subproject_steps("sfu", "sfu", "")
+  ...subproject_steps("ui", "ui", "")
+  // The chat tests expect the demo profile (no model processes). Its default on macOS is native.
+  ...subproject_steps("chat", "examples/chat", "CHAT_PROFILE=demo ")
 }
 
 hooks {

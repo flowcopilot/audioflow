@@ -56,6 +56,17 @@ directory. The root project does not compile them.
   `ui/` and `examples/chat`.
 - `hk check` runs the slow set on demand.
 
+## macOS notes
+
+- WebRTC and SFU tests fail with `ExLibSRTP.Native.Nif.unifex_create/0 is undefined`
+  when Homebrew links OpenSSL 4. The precompiled libsrtp2 loads
+  `@rpath/libcrypto.3.dylib`, and `openssl@3` is keg-only. Link it where the
+  loader looks: `ln -s "$(brew --prefix openssl@3)/lib/libcrypto.3.dylib" /opt/homebrew/lib/`.
+  Linking it into `deps/bundlex/priv/shared/precompiled/*srtp*/lib/` also works,
+  but `mix deps.clean` removes it.
+- `examples/chat` picks the native profile on macOS, and its tests expect the demo
+  profile. Run them with `CHAT_PROFILE=demo mix test`. The `chat-test` hook step does.
+
 ## Benchmarks
 
 `mix bench.hot` runs `bench/hot_paths.exs` (single process CPU paths). Others:
