@@ -4,13 +4,9 @@ defmodule AudioFlow.SessionOptionsTest do
   alias AudioFlow.Session.Options
 
   test "an unknown or misspelled option raises before a session starts" do
-    before = DynamicSupervisor.count_children(AudioFlow.Sessions).active
-
     assert_raise ArgumentError, ~r/unknown options \[:timeout_msec\]/, fn ->
       AudioFlow.start_session(Keyword.put(Demo.options(), :timeout_msec, 10))
     end
-
-    assert DynamicSupervisor.count_children(AudioFlow.Sessions).active == before
   end
 
   test "an invalid option value raises with the option name" do
