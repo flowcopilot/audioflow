@@ -102,7 +102,7 @@ defmodule AudioFlow.SFU.Transport do
 
       true ->
         s = %{s | rate: audio.sample_rate, resampler: s.resampler || resampler(audio.sample_rate)}
-        enqueue(s, resample(s, audio.data))
+        enqueue(s, resample(s.resampler, audio.data))
     end
   end
 
@@ -148,11 +148,12 @@ defmodule AudioFlow.SFU.Transport do
 
   def handle_info(_, s), do: {:noreply, s}
 
-  defp resampler(@rate), do: :none
+  # 48 kHz audio needs no resampler.
+  defp resampler(@rate), do: nil
   defp resampler(rate), do: Resampler.new(rate, @rate)
 
-  defp resample(%{resampler: :none}, data), do: data
-  defp resample(s, data), do: Resampler.push(s.resampler, data)
+  defp resample(nil, data), do: data
+  defp resample(resampler, data), do: Resampler.push(resampler, data)
 
   defp enqueue(s, data) do
     data = s.pending <> data

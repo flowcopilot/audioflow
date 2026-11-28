@@ -3,6 +3,7 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
     use ExUnit.Case, async: false
     alias AudioFlow.Audio
     alias AudioFlow.SFU.Participant
+    alias AudioFlow.SFU.Transport
     alias Membrane.Opus.Decoder.Native, as: Decoder
     alias Membrane.Opus.Encoder.Native, as: Encoder
 
@@ -137,6 +138,18 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
       send_user(agent, participant, opus_frames(10, 10), [104])
       assert_receive {:heard, %Audio{}}, 2000
       assert Process.alive?(agent)
+    end
+
+    test "48 kHz TTS audio finishes its turn without a resampler" do
+      {:ok, transport} = Transport.start_link(participant: self(), track: "TR_agent")
+      key = {self(), make_ref()}
+      :ok = Transport.start_turn(transport, key)
+      pcm = :binary.copy(<<0x10, 0x27>>, 960 * 3)
+      :ok = Transport.push(transport, key, %Audio{data: pcm, sample_rate: 48_000})
+      assert :ok = Transport.finish(transport, key)
+
+      for _ <- 1..3, do: assert_receive({:audio_flow_sfu, 1, {:rtp, "TR_agent", _}}, 1000)
+      assert Process.alive?(transport)
     end
 
     test "agent members are not used as the audio source" do
