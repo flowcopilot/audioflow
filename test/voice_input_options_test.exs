@@ -23,8 +23,8 @@ defmodule AudioFlow.VoiceInput.OptionsTest do
                  [async_turn: true, min_speech_ms: 32]
       end)
 
-    assert [_] = Regex.scan(~r/\[warning\]/, log)
-    assert log =~ ":endpoint_options option is deprecated, use :voice_input"
+    # The log is global, so other tests can add lines of their own.
+    assert [_] = Regex.scan(~r/:endpoint_options option is deprecated, use :voice_input/, log)
   end
 
   test ":voice_input wins when both are given" do
