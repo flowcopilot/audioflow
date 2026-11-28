@@ -47,7 +47,7 @@ defmodule AudioFlow.Test.CallStoreContract do
 
         assert {:error, :stale} = CallStore.save(store, id, "a", v2, %{turns: 2})
         assert {:ok, []} = CallStore.renew(store, "a", [id], 60_000)
-        assert {:ok, [%{id: ^id}]} = CallStore.renew(store, "b", [id], 60_000)
+        assert {:ok, [^id]} = CallStore.renew(store, "b", [id], 60_000)
         assert {:ok, %{turns: 1, history: [{"hi", "hello"}]}} = CallStore.get(store, id)
         assert {:ok, _} = CallStore.save(store, id, "b", v3, %{status: :ended})
         :ok = CallStore.release(store, id, "b")
@@ -59,6 +59,35 @@ defmodule AudioFlow.Test.CallStoreContract do
         {:ok, [_]} = CallStore.claim(store, "a", 1, 100) |> only(id)
         Process.sleep(20)
         assert {:ok, [%{lease_owner: "b"}]} = CallStore.claim(store, "b", 60_000, 100) |> only(id)
+      end
+
+      test "a claim leaves out the excluded calls", %{store: store} do
+        {:ok, %{id: id}} = new_call(store)
+        assert {:ok, []} = CallStore.claim(store, "a", 60_000, 100, [id]) |> only(id)
+        assert {:ok, [%{id: ^id}]} = CallStore.claim(store, "a", 60_000, 100, []) |> only(id)
+      end
+
+      test "a save can append to the history", %{store: store} do
+        {:ok, %{id: id}} = new_call(store)
+        {:ok, [%{version: v1}]} = CallStore.claim(store, "a", 60_000, 100) |> only(id)
+
+        assert {:ok, %{history: [{"a", "b"}], version: v2}} =
+                 CallStore.save(store, id, "a", v1, %{history: {:append, [{"a", "b"}]}})
+
+        assert {:ok, %{history: [{"a", "b"}, {"c", "d"}], turns: 2, version: v3}} =
+                 CallStore.save(store, id, "a", v2, %{
+                   history: {:append, [{"c", "d"}]},
+                   turns: 2
+                 })
+
+        assert {:ok, %{history: [{"e", "f"}]}} =
+                 CallStore.save(store, id, "a", v3, %{history: [{"e", "f"}]})
+
+        assert {:ok, %{history: [{"e", "f"}]}} = CallStore.get(store, id)
+      end
+
+      test "the store clock is close to the clock of this node", %{store: store} do
+        assert_in_delta CallStore.now(store), CallStore.now(), 5_000
       end
 
       # Other tests can share the store: keep only this test's call.

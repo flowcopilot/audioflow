@@ -32,7 +32,9 @@ defmodule AudioFlow.CallStore.Memory do
       case calls do
         %{^id => %{version: ^version, lease_owner: ^owner} = call} ->
           call =
-            Map.merge(call, Map.take(changes, writable())) |> Map.update!(:version, &(&1 + 1))
+            call
+            |> apply_changes(Map.take(changes, writable()))
+            |> Map.update!(:version, &(&1 + 1))
 
           {{:ok, call}, Map.put(calls, id, call)}
 
@@ -43,14 +45,14 @@ defmodule AudioFlow.CallStore.Memory do
   end
 
   @impl true
-  def claim(store, owner, lease_ms, limit) do
+  def claim(store, owner, lease_ms, limit, exclude) do
     now = CallStore.now()
 
     Agent.get_and_update(store, fn calls ->
       claimed =
         calls
         |> Map.values()
-        |> Enum.filter(&(&1.status == :active and expired?(&1, now)))
+        |> Enum.filter(&(&1.status == :active and expired?(&1, now) and &1.id not in exclude))
         |> Enum.take(limit)
         |> Enum.map(&lease(&1, owner, now + lease_ms))
 
@@ -68,7 +70,7 @@ defmodule AudioFlow.CallStore.Memory do
             %{lease_owner: ^owner, status: :active} = call <- [calls[id]],
             do: %{call | lease_expires_at: until}
 
-      {{:ok, renewed}, Enum.reduce(renewed, calls, &Map.put(&2, &1.id, &1))}
+      {{:ok, Enum.map(renewed, & &1.id)}, Enum.reduce(renewed, calls, &Map.put(&2, &1.id, &1))}
     end)
   end
 
@@ -83,6 +85,16 @@ defmodule AudioFlow.CallStore.Memory do
           calls
       end
     end)
+  end
+
+  defp apply_changes(call, changes) do
+    case changes do
+      %{history: {:append, entries}} ->
+        Map.merge(call, %{changes | history: call.history ++ entries})
+
+      _ ->
+        Map.merge(call, changes)
+    end
   end
 
   defp expired?(%{lease_expires_at: nil}, _now), do: true

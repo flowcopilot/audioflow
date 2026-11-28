@@ -56,7 +56,7 @@ defmodule AudioFlow.Calls.Claimer do
 
       case CallStore.renew(store, owner, ids, lease_ms) do
         {:ok, renewed} ->
-          kept = MapSet.new(renewed, & &1.id)
+          kept = MapSet.new(renewed)
 
           for {id, pid} <- local, id not in kept do
             Logger.warning("call #{id}: lease taken by another node, stopping")

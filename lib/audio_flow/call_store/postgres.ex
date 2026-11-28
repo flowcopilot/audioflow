@@ -6,7 +6,13 @@ defmodule AudioFlow.CallStore.Postgres do
   back.
 
   Claims use `FOR UPDATE SKIP LOCKED`, so nodes that claim at the same time
-  get different calls. Lease times use the database clock.
+  get different calls. Lease times, and the times that calls compare across
+  nodes, use the database clock.
+
+  Only a save that matches no row (another version or owner) returns
+  `{:error, :stale}`. Any other database error is returned as it is, so the
+  caller can retry. A save sends only the fields in `changes`, and appends
+  new history entries to the stored history.
   """
   @behaviour AudioFlow.CallStore
 
@@ -62,10 +68,6 @@ defmodule AudioFlow.CallStore.Postgres do
   def get(config, id) do
     query(config, "SELECT #{@columns} FROM #{table(config)} WHERE id = $1::text::uuid", [id])
     |> one()
-    |> case do
-      {:ok, call} -> {:ok, call}
-      {:error, _} -> {:error, :not_found}
-    end
   end
 
   @impl true
@@ -75,7 +77,7 @@ defmodule AudioFlow.CallStore.Postgres do
       |> Map.take([:history, :conversation_state, :turns, :pending_input, :resume_token, :status])
       |> Enum.with_index(4)
       |> Enum.map(fn {{key, value}, n} ->
-        {"#{key} = #{placeholder(key, n)}", encode(key, value)}
+        {assignment(key, value, n), encode(key, value)}
       end)
       |> Enum.unzip()
 
@@ -92,13 +94,13 @@ defmodule AudioFlow.CallStore.Postgres do
     )
     |> one()
     |> case do
-      {:ok, call} -> {:ok, call}
-      {:error, _} -> {:error, :stale}
+      {:error, :not_found} -> {:error, :stale}
+      result -> result
     end
   end
 
   @impl true
-  def claim(config, owner, lease_ms, limit) do
+  def claim(config, owner, lease_ms, limit, exclude) do
     table = table(config)
 
     query(
@@ -110,13 +112,14 @@ defmodule AudioFlow.CallStore.Postgres do
       WHERE id IN (
         SELECT id FROM #{table}
         WHERE status = 'active' AND (lease_expires_at IS NULL OR lease_expires_at <= now())
+          AND NOT (id = ANY($4::text[]::uuid[]))
         ORDER BY lease_expires_at NULLS FIRST
         LIMIT $3
         FOR UPDATE SKIP LOCKED
       )
       RETURNING #{@columns}
       """,
-      [owner, lease_ms, limit]
+      [owner, lease_ms, limit, exclude]
     )
     |> all()
   end
@@ -128,30 +131,48 @@ defmodule AudioFlow.CallStore.Postgres do
       """
       UPDATE #{table(config)} SET lease_expires_at = now() + $3 * interval '1 millisecond'
       WHERE id = ANY($2::text[]::uuid[]) AND lease_owner = $1 AND status = 'active'
-      RETURNING #{@columns}
+      RETURNING id::text
       """,
       [owner, ids, lease_ms]
     )
-    |> all()
+    |> case do
+      {:ok, %{rows: rows}} -> {:ok, Enum.map(rows, fn [id] -> id end)}
+      {:error, reason} -> {:error, reason}
+    end
   end
 
   @impl true
   def release(config, id, owner) do
-    query(
-      config,
-      """
-      UPDATE #{table(config)} SET lease_expires_at = now()
-      WHERE id = $1::text::uuid AND lease_owner = $2
-      """,
-      [id, owner]
-    )
-
-    :ok
+    case query(
+           config,
+           """
+           UPDATE #{table(config)} SET lease_expires_at = now()
+           WHERE id = $1::text::uuid AND lease_owner = $2
+           """,
+           [id, owner]
+         ) do
+      {:ok, _} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
   end
+
+  @impl true
+  def now(config) do
+    case query(config, "SELECT (extract(epoch from clock_timestamp()) * 1000)::bigint", []) do
+      {:ok, %{rows: [[now]]}} -> {:ok, now}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # Appends to the stored history. The version check in the WHERE clause makes
+  # it the history that the writer saw.
+  defp assignment(:history, {:append, _}, n), do: "history = history || $#{n}::text::jsonb"
+  defp assignment(key, _value, n), do: "#{key} = #{placeholder(key, n)}"
 
   defp placeholder(key, n) when key in [:history, :pending_input], do: "$#{n}::text::jsonb"
   defp placeholder(_key, n), do: "$#{n}"
 
+  defp encode(:history, {:append, turns}), do: encode(:history, turns)
   defp encode(:history, turns), do: JSON.encode!(Enum.map(turns, fn {u, a} -> [u, a] end))
   defp encode(:pending_input, nil), do: nil
   defp encode(:pending_input, input), do: JSON.encode!(input)
