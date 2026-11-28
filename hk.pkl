@@ -98,7 +98,8 @@ local slow_steps = new Mapping<String, Step> {
   }
   ["mix-deps-audit"] {
     glob = List("mix.exs", "mix.lock")
-    check = "mix deps.audit && mix hex.audit"
+    // mix_audit runs git in its advisory checkout; the hook's GIT_DIR would point it here.
+    check = clean_git_env + "mix deps.audit && mix hex.audit"
   }
   ["mix-test"] {
     glob = elixir_glob
