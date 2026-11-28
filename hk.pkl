@@ -9,11 +9,6 @@ local clean_git_env = "env -u GIT_DIR -u GIT_WORK_TREE -u GIT_COMMON_DIR -u GIT_
 
 local elixir_glob = List("**/*.ex", "**/*.exs")
 
-// Every optional source directory in one build profile (_build/test/ml_media_webrtc_sfu),
-// so flag-gated modules and tests are compiled and run before a push. Model tests stay
-// excluded by test/test_helper.exs.
-local all_profiles = "AUDIOFLOW_ML=1 AUDIOFLOW_MEDIA=1 AUDIOFLOW_WEBRTC=1 AUDIOFLOW_SFU=1 "
-
 // ui/, sfu/ and examples/chat are separate Mix projects. Their formatter plugins and
 // tests need their own deps, so their steps run inside the project directory.
 local function subproject_steps(name: String, path: String) = new Mapping<String, Step> {
@@ -83,11 +78,13 @@ local slow_steps = new Mapping<String, Step> {
     glob = elixir_glob
     check = "mix typecheck"
   }
-  // Builds into its own _build directory, so it runs alongside the core steps. Needs
-  // the OpenSSL dev headers for ex_dtls and downloads the EXLA archive on first use.
-  ["mix-typecheck-all-profiles"] {
+  // Every optional source directory (ML, media, WebRTC, SFU) in one build, typechecked
+  // and tested in a Linux container with its own deps and _build volumes, so native
+  // libraries do not depend on the host. Model tests stay excluded by
+  // test/test_helper.exs. Needs a running Docker daemon.
+  ["all-profiles-docker"] {
     glob = elixir_glob
-    check = all_profiles + "mix deps.get --check-locked > /dev/null && " + all_profiles + "mix typecheck"
+    check = clean_git_env + "scripts/docker-test.sh"
   }
   ["mix-dialyzer"] {
     glob = elixir_glob
@@ -102,11 +99,6 @@ local slow_steps = new Mapping<String, Step> {
     check = clean_git_env + "mix test --warnings-as-errors"
     // Same MIX_ENV and build directory as mix-typecheck.
     depends = List("mix-typecheck")
-  }
-  ["mix-test-all-profiles"] {
-    glob = elixir_glob
-    check = clean_git_env + all_profiles + "mix test --warnings-as-errors"
-    depends = List("mix-typecheck-all-profiles")
   }
   ...subproject_steps("sfu", "sfu")
   ...subproject_steps("ui", "ui")
