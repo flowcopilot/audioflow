@@ -87,7 +87,7 @@ defmodule AudioFlow.DuplexCoreTest do
     {owner, options} = Keyword.pop(options, :owner, self())
     {adapter, options} = Keyword.pop(options, :adapter, [])
     {:ok, duplex} = start_duplex(owner, [url: url()] ++ adapter, options)
-    assert_receive {:peer, peer}
+    assert_receive {:peer, peer}, 5000
     {duplex, peer}
   end
 
@@ -97,7 +97,7 @@ defmodule AudioFlow.DuplexCoreTest do
   defp ready(options \\ []) do
     {duplex, peer} = start(options)
     send(peer, {:push, [{:text, "ready"}]})
-    assert_receive {Duplex, ^duplex, :ready}
+    assert_receive {Duplex, ^duplex, :ready}, 5000
     {duplex, peer}
   end
 

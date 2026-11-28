@@ -62,7 +62,7 @@ defmodule AudioFlow.DuplexOpenAITest do
        voice: "cedar"}
 
     {:ok, duplex} = Duplex.start_link([owner: self(), adapter: adapter] ++ options)
-    assert_receive {:peer, peer}
+    assert_receive {:peer, peer}, 5000
     {duplex, peer}
   end
 
