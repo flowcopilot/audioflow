@@ -175,7 +175,12 @@ defmodule AudioFlow.TranscriptionTest do
       assert {:error, {:section, 1, :quota}} =
                AudioFlow.transcribe(timeline(3000), stt, chunk_ms: 1000)
 
-      slow = function(fn _, _ -> Process.sleep(1000) end)
+      slow =
+        function(fn _, _ ->
+          receive do
+            :never -> :ok
+          end
+        end)
 
       assert {:error, {:section, 0, :timeout}} =
                AudioFlow.transcribe(timeline(100), slow, timeout_ms: 20)
