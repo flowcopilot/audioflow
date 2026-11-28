@@ -674,7 +674,7 @@ defmodule AudioFlow.Session do
       fn -> Adapter.run(adapter, input, &speech_event(&1, session, turn, output)) end
     )
   rescue
-    error -> {:error, {:exception, Exception.message(error)}}
+    error -> exception_result(error, __STACKTRACE__)
   catch
     reason -> {:error, reason}
   end
@@ -708,7 +708,7 @@ defmodule AudioFlow.Session do
 
       :ok
     rescue
-      error -> {:error, {:exception, Exception.message(error)}}
+      error -> exception_result(error, __STACKTRACE__)
     catch
       reason -> {:error, reason}
     after
@@ -835,9 +835,16 @@ defmodule AudioFlow.Session do
 
     Runner.run(plan, input, callbacks)
   rescue
-    error -> {:error, {:exception, Exception.message(error)}}
+    error -> exception_result(error, __STACKTRACE__)
   catch
     reason -> {:error, reason}
+  end
+
+  # The event keeps only the message (transports sanitize wire text); the log
+  # keeps the stacktrace.
+  defp exception_result(error, stacktrace) do
+    Logger.error("AudioFlow turn failed: " <> Exception.format(:error, error, stacktrace))
+    {:error, {:exception, Exception.message(error)}}
   end
 
   defp input_context(_, ""), do: ""

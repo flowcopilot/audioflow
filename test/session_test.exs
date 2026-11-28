@@ -131,6 +131,19 @@ defmodule AudioFlow.SessionTest do
     assert_receive {AudioFlow, ^session, ^turn, {:done, _}}, 1_000
   end
 
+  test "an adapter exception is logged with its stacktrace and reported by message" do
+    session = start(llm: function(fn _, _ -> raise "boom" end))
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        {:ok, turn} = AudioFlow.submit(session, audio())
+        assert_receive {AudioFlow, ^session, ^turn, {:error, {:exception, "boom"}, _}}
+      end)
+
+    assert log =~ "** (RuntimeError) boom"
+    assert log =~ "session_test.exs"
+  end
+
   test "a timeout stops inference and leaves the session ready" do
     session =
       start(
@@ -148,6 +161,7 @@ defmodule AudioFlow.SessionTest do
     assert {:ok, _} = AudioFlow.submit(session, audio())
   end
 
+  @tag :capture_log
   test "adapter errors and crashes do not stop other sessions" do
     for adapter <- [
           function(fn _, _ -> {:error, :offline} end),
