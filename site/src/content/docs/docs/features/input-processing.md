@@ -40,7 +40,7 @@ replies keep backing up, restarts the native program), and after a program exit 
 starts a new one. A restarted program has fresh adaptive-filter state. The native
 executable accepts `aec-only` to disable preprocessing for isolation/diagnostics.
 
-For Membrane, pass the same `:preprocessor` in `:endpoint_options` to
+For Membrane, pass the same `:preprocessor` in `:voice_input` to
 `AudioFlow.Input.attach/3` or `InputPipeline.start_link/1`. The PCMSink runs it
 after FFmpeg resampling and before VAD. `InputPipeline.reference(pipeline, audio)`
 queues speaker PCM for subsequent capture. Reference must already be resampled to
@@ -84,7 +84,7 @@ last eight seconds of 16 kHz PCM, left zero padding, normalized Whisper features
 {:ok, turn} = AudioFlow.SmartTurn.start_link(
   executable: "/tmp/audioflow-turn/bin/python",
   args: [Path.expand("priv/audio_flow/smart_turn.py"), "/absolute/path/smart-turn-v3.1-cpu.onnx"])
-endpoint_options = [
+voice_input = [
   preprocessor: {AudioFlow.SpeexDSP, worker: dsp},
   turn_detector: {AudioFlow.SmartTurn, worker: turn},
   turn_threshold: 0.5,
@@ -92,8 +92,8 @@ endpoint_options = [
   turn_retry_ms: 320,
   max_semantic_silence_ms: 2000
 ]
-input = AudioFlow.VoiceInput.new({AudioFlow.Silero, serving: silero}, endpoint_options)
-# Or supply endpoint_options to InputPipeline.start_link/1.
+input = AudioFlow.VoiceInput.new({AudioFlow.Silero, serving: silero}, voice_input)
+# Or supply voice_input to InputPipeline.start_link/1.
 ```
 
 After minimum VAD silence, completion emits `:semantic`; incompletion retains the

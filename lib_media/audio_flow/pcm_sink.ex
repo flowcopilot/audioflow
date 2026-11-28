@@ -7,7 +7,7 @@ defmodule AudioFlow.PCMSink do
   submits a complete utterance. Without `vad`, each buffer is one utterance.
   Busy input is reported to the parent; it is not queued.
 
-  Set `async_turn: true` in `endpoint_options` (with a `:turn_detector`) to run
+  Set `async_turn: true` in `voice_input` (with a `:turn_detector`) to run
   semantic turn checks without blocking the element. The sink routes the check's
   messages itself; the utterance is submitted when the check resolves, with the
   event order documented in `AudioFlow.VoiceInput`.
@@ -17,7 +17,7 @@ defmodule AudioFlow.PCMSink do
   def_options(
     session: [spec: pid()],
     vad: [spec: {module(), keyword()} | nil, default: nil],
-    endpoint_options: [spec: keyword(), default: []]
+    voice_input: [spec: keyword(), default: []]
   )
 
   def_input_pad(:input,
@@ -27,7 +27,7 @@ defmodule AudioFlow.PCMSink do
 
   @impl true
   def handle_init(_ctx, options) do
-    input = if options.vad, do: AudioFlow.VoiceInput.new(options.vad, options.endpoint_options)
+    input = if options.vad, do: AudioFlow.VoiceInput.new(options.vad, options.voice_input)
     {[], %{session: options.session, rate: nil, input: input, reference: <<>>}}
   end
 

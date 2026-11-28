@@ -55,7 +55,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
         |> child(:input, %AudioFlow.PCMSink{
           session: session,
           vad: {AudioFlow.Test.FrameDetector, []},
-          endpoint_options: [pre_roll_ms: 0, min_silence_ms: 64]
+          voice_input: [pre_roll_ms: 0, min_silence_ms: 64]
         })
 
       pipeline = Pipeline.start_link_supervised!(spec: spec)
@@ -112,7 +112,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
         |> child(:input, %AudioFlow.PCMSink{
           session: session,
           vad: {AudioFlow.Test.FrameDetector, []},
-          endpoint_options: [
+          voice_input: [
             pre_roll_ms: 0,
             min_silence_ms: 64,
             turn_detector: {CompleteTurn, owner: self()},

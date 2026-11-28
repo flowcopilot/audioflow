@@ -63,7 +63,7 @@ defmodule AudioFlow.NetworkProtocolTest do
           provider: @provider,
           session: Keyword.put(Demo.options(), :stt, stt),
           vad: {AudioFlow.Test.AlwaysSpeechDetector, []},
-          endpoint_options: [pre_roll_ms: 0, max_utterance_ms: 96]
+          voice_input: [pre_roll_ms: 0, max_utterance_ms: 96]
         )
 
       Client.send_json(socket, %{event: "connected"})
@@ -211,7 +211,7 @@ defmodule AudioFlow.NetworkProtocolTest do
         provider: :twilio,
         session: Keyword.put(Demo.options(), :tts, tts),
         vad: {AudioFlow.Test.AlwaysSpeechDetector, []},
-        endpoint_options: [pre_roll_ms: 0, max_utterance_ms: 96]
+        voice_input: [pre_roll_ms: 0, max_utterance_ms: 96]
       )
 
     Client.send_json(socket, start_message(:twilio))

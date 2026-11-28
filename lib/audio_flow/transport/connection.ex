@@ -11,6 +11,9 @@ defmodule AudioFlow.Transport.Connection do
   and the endpoint sends `{tag, result}` to `from` when it is ready for more
   audio. That lets an endpoint with a play-out queue apply back pressure.
   Wire error reasons are stable codes. See `reason_code/1`.
+
+  `init/1` reads the `AudioFlow.VoiceInput` options from `:voice_input`
+  (`:endpoint_options` is a deprecated alias).
   """
   @behaviour AudioFlow.Output
   require Logger
@@ -62,7 +65,7 @@ defmodule AudioFlow.Transport.Connection do
     rate = limits[:sample_rate]
     vad = Keyword.get(options, :vad)
 
-    input = if vad, do: VoiceInput.new(vad, Keyword.get(options, :endpoint_options, []))
+    input = if vad, do: VoiceInput.new(vad, VoiceInput.Options.fetch(options))
 
     if input && input.rate != rate,
       do: raise(ArgumentError, "sample_rate must match the detector rate #{input.rate}")

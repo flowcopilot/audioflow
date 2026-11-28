@@ -19,7 +19,7 @@ submits utterances after endpoint detection:
 %AudioFlow.PCMSink{
   session: session,
   vad: {AudioFlow.Silero, serving: AudioFlow.VAD},
-  endpoint_options: [min_speech_ms: 96, min_silence_ms: 320]
+  voice_input: [min_speech_ms: 96, min_silence_ms: 320]
 }
 ```
 
@@ -30,7 +30,7 @@ own recurrent state; only the weights are shared. Input must be 16 kHz. Pin the
 model with `load_options: [revision: "e71cae966052b992a7eca6b17738916ce0eca4ec"]`.
 Put a resampler before the sink for other rates.
 
-With a `:turn_detector` in `endpoint_options`, add `async_turn: true` so semantic
+With a `:turn_detector` in `voice_input`, add `async_turn: true` so semantic
 checks do not block the sink; it routes the check's messages itself.
 
 ## Barge-in

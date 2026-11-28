@@ -57,13 +57,15 @@ defmodule AudioFlow.SFU.Participant do
 
     input =
       RtpInput.new(
-        owner: owner,
-        tag: __MODULE__,
-        vad: Keyword.fetch!(options, :vad),
-        voice_input: Keyword.get(options, :voice_input, []),
-        reorder_window: Keyword.get(options, :reorder_window, 32),
-        gap_timeout_ms: Keyword.get(options, :gap_timeout_ms, 200),
-        loss: :silence
+        Keyword.take(options, [:voice_input, :endpoint_options]) ++
+          [
+            owner: owner,
+            tag: __MODULE__,
+            vad: Keyword.fetch!(options, :vad),
+            reorder_window: Keyword.get(options, :reorder_window, 32),
+            gap_timeout_ms: Keyword.get(options, :gap_timeout_ms, 200),
+            loss: :silence
+          ]
       )
 
     join_options =

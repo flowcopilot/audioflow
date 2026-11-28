@@ -2,7 +2,7 @@ defmodule AudioFlow.InputPipeline do
   @moduledoc """
   Input source → FFmpeg resampler → voice detector → session.
 
-  Options: `:source`, `:session`, `:vad`, `:endpoint_options`, `:sample_rate`
+  Options: `:source`, `:session`, `:vad`, `:voice_input`, `:sample_rate`
   (16,000), and `:observer` (caller). A source can be `PCMFileSource` or a
   PortAudio microphone. Notifications are sent as
   `{AudioFlow.InputPipeline, pipeline_pid, notification}`. The pipeline stops

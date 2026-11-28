@@ -45,13 +45,15 @@ defmodule AudioFlow.WebRTC.Session do
 
     input =
       RtpInput.new(
-        owner: owner,
-        tag: __MODULE__,
-        vad: Keyword.fetch!(opts, :vad),
-        voice_input: Keyword.get(opts, :voice_input, []),
-        reorder_window: Keyword.get(opts, :reorder_window, 32),
-        gap_timeout_ms: Keyword.get(opts, :gap_timeout_ms, 200),
-        loss: :fail
+        Keyword.take(opts, [:voice_input, :endpoint_options]) ++
+          [
+            owner: owner,
+            tag: __MODULE__,
+            vad: Keyword.fetch!(opts, :vad),
+            reorder_window: Keyword.get(opts, :reorder_window, 32),
+            gap_timeout_ms: Keyword.get(opts, :gap_timeout_ms, 200),
+            loss: :fail
+          ]
       )
 
     {:ok, peer} =

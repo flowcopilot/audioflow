@@ -48,7 +48,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
           source: source,
           session: session,
           vad: {AudioFlow.Test.AlwaysSpeechDetector, []},
-          endpoint_options: [min_speech_ms: 32, pre_roll_ms: 0]
+          voice_input: [min_speech_ms: 32, pre_roll_ms: 0]
         )
 
       assert_receive {AudioFlow.InputPipeline, ^pipeline, :end_of_stream}, 2000

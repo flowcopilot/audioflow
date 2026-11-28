@@ -21,7 +21,9 @@ defmodule AudioFlow.WebSocket do
       input through `AudioFlow.VoiceInput`. Confirmed speech cancels the active
       reply, and an endpoint submits the utterance. Without a detector, input
       collects until the client sends `commit`.
-    * `:endpoint_options` - options for `AudioFlow.VoiceInput.new/2`.
+    * `:voice_input` - options for `AudioFlow.VoiceInput.new/2`. A semantic turn
+      check runs without blocking the connection (`async_turn: true`) unless you
+      set it. `:endpoint_options` is a deprecated alias.
     * `:sample_rate` - input sample rate (16,000). With a detector, the rate
       must match the detector rate.
     * `:max_chunk_bytes` - largest binary input frame (64,000).

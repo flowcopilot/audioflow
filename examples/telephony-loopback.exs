@@ -20,7 +20,7 @@ defmodule AudioFlow.TelephonyExamplePlug do
         provider: provider,
         session: AudioFlow.Adapters.Demo.options(),
         vad: {AudioFlow.TelephonyExamplePlug.AlwaysSpeechDetector, []},
-        endpoint_options: [pre_roll_ms: 0, max_utterance_ms: 96]
+        voice_input: [pre_roll_ms: 0, max_utterance_ms: 96]
       ],
       []
     )

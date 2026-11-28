@@ -64,7 +64,8 @@ defmodule AudioFlow.Transport.RtpInput do
   @doc "Builds the input. Set `:session` when the session exists."
   @spec new(keyword()) :: t()
   def new(options) do
-    voice = VoiceInput.new(Keyword.fetch!(options, :vad), Keyword.get(options, :voice_input, []))
+    voice_options = VoiceInput.Options.fetch(options)
+    voice = VoiceInput.new(Keyword.fetch!(options, :vad), voice_options)
     unless voice.rate == 16_000, do: raise(ArgumentError, "VAD requires 16 kHz")
     window = Keyword.get(options, :reorder_window, 32)
     timeout = Keyword.get(options, :gap_timeout_ms, 200)

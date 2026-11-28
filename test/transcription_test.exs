@@ -156,7 +156,7 @@ defmodule AudioFlow.TranscriptionTest do
       {:ok, transcript} =
         AudioFlow.transcribe(%Audio{data: data, sample_rate: 16_000}, stt,
           vad: {AudioFlow.Test.FrameDetector, []},
-          endpoint_options: [pre_roll_ms: 0, min_speech_ms: 32, min_silence_ms: 320]
+          voice_input: [pre_roll_ms: 0, min_speech_ms: 32, min_silence_ms: 320]
         )
 
       assert transcript.text == "speech speech"

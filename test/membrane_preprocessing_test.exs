@@ -19,7 +19,7 @@ if System.get_env("AUDIOFLOW_MEDIA") == "1" do
       options = %{
         session: self(),
         vad: {AudioFlow.Test.FrameDetector, []},
-        endpoint_options: [min_speech_ms: 32, preprocessor: {CancelReference, []}]
+        voice_input: [min_speech_ms: 32, preprocessor: {CancelReference, []}]
       }
 
       {[], state} = PCMSink.handle_init(nil, options)

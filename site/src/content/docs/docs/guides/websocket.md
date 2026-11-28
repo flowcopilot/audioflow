@@ -38,7 +38,7 @@ than `:max_chunk_bytes` (64,000). Text frames are JSON commands:
 
 Without `:vad`, PCM collects until `commit`. The collected input must not be
 larger than `:max_buffer_bytes` (960,000). With `:vad`, PCM goes through
-`AudioFlow.VoiceInput`, and `:endpoint_options` sets its endpoint detection.
+`AudioFlow.VoiceInput`, and `:voice_input` sets its endpoint detection.
 Confirmed speech cancels the active reply, and an endpoint submits the
 utterance. The input rate must then be the detector rate.
 
