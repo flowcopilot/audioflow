@@ -52,18 +52,26 @@ directory. The root project does not compile them.
 - `pre-commit`: linters and formatters (rumdl, ruff, oxlint, `mix format`,
   `mix credo diff` against `HEAD`, gitleaks, whitespace, shellcheck).
 - `pre-push`: the pre-commit set, plus typecheck, dialyzer, deps audit and tests
-  for the core build and for the all-profiles build, and tests for `sfu/`,
-  `ui/` and `examples/chat`.
+  for the core build, the all-profiles build in Docker
+  (`scripts/docker-test.sh`), and tests for `sfu/`, `ui/` and `examples/chat`.
 - `hk check` runs the slow set on demand.
+
+## All-profiles build in Docker
+
+`scripts/docker-test.sh` typechecks and tests the combined ML, media, WebRTC and
+SFU build in a Linux container (`docker/test.Dockerfile`, same Elixir and OTP as
+`mise.toml`). `deps`, `_build` and `tmp` live in named volumes per checkout, so
+host builds stay untouched. Pass a command to run something else in it, e.g.
+`scripts/docker-test.sh mix test test/webrtc_test.exs`. It needs a running Docker
+daemon.
 
 ## macOS notes
 
-- WebRTC and SFU tests fail with `ExLibSRTP.Native.Nif.unifex_create/0 is undefined`
-  when Homebrew links OpenSSL 4. The precompiled libsrtp2 loads
-  `@rpath/libcrypto.3.dylib`, and `openssl@3` is keg-only. Link it where the
-  loader looks: `ln -s "$(brew --prefix openssl@3)/lib/libcrypto.3.dylib" /opt/homebrew/lib/`.
-  Linking it into `deps/bundlex/priv/shared/precompiled/*srtp*/lib/` also works,
-  but `mix deps.clean` removes it.
+- On the host, WebRTC and SFU tests fail with
+  `ExLibSRTP.Native.Nif.unifex_create/0 is undefined` when Homebrew links OpenSSL 4:
+  the precompiled libsrtp2 loads `@rpath/libcrypto.3.dylib`, and `openssl@3` is
+  keg-only. Run those tests through `scripts/docker-test.sh` instead of changing
+  the host OpenSSL setup.
 - `examples/chat` picks the native profile on macOS, and its tests expect the demo
   profile. Run them with `CHAT_PROFILE=demo mix test`. The `chat-test` hook step does.
 
