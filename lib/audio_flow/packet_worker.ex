@@ -67,6 +67,10 @@ defmodule AudioFlow.PacketWorker do
   def handle_info({port, {:exit_status, _status}}, %{port: port} = state),
     do: {:noreply, %{state | port: nil, stale: 0}, {:continue, :restart}}
 
+  # A late reply that arrives between requests settles one timed-out request.
+  def handle_info({port, {:data, _late}}, %{port: port, stale: stale} = state) when stale > 0,
+    do: {:noreply, %{state | stale: stale - 1}}
+
   def handle_info(_message, state), do: {:noreply, state}
 
   @impl true
