@@ -8,6 +8,9 @@ export default defineConfig({
   site: 'https://flowcopilot.github.io',
   base: '/audioflow',
   trailingSlash: 'always',
+  // Starlight 0.43 stopped forcing this. Keep the low-specificity :where()
+  // selectors that the overrides in src/styles/docs.css were written against.
+  scopedStyleStrategy: 'where',
   integrations: [
     starlight({
       title: 'AudioFlow',
