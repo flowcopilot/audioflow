@@ -93,6 +93,32 @@ defmodule AudioFlowSFU.TelephonyTest do
                    3000
   end
 
+  test "phone audio that is not a multiple of 20 ms is buffered, not dropped",
+       %{port: port, room: room} do
+    socket = twilio_call(port, room)
+    agent = TestAgent.start(self())
+    {:ok, _join} = await_join(room, agent)
+    audio = for n <- 0..319, into: <<>>, do: <<n::8>>
+
+    media = fn bytes ->
+      WS.send_json(socket, %{
+        event: "media",
+        streamSid: "MZ1",
+        media: %{track: "inbound", payload: Base.encode64(bytes)}
+      })
+    end
+
+    # 100 bytes make no packet; the next 220 complete two.
+    media.(binary_part(audio, 0, 100))
+    refute_receive {:agent, ^agent, {:audio_flow_sfu, 1, _, {:rtp, _, _}}}, 200
+    media.(binary_part(audio, 100, 220))
+
+    assert_receive {:agent, ^agent, {:audio_flow_sfu, 1, _, {:rtp, _, %{payload: first}}}}, 3000
+    assert_receive {:agent, ^agent, {:audio_flow_sfu, 1, _, {:rtp, _, %{payload: second}}}}, 3000
+    assert first <> second == audio
+    refute_receive {:agent, ^agent, {:audio_flow_sfu, 1, _, {:rtp, _, _}}}, 200
+  end
+
   test "a stream without a valid token is closed", %{port: port, room: room} do
     socket = WS.connect(port, "/telephony/telnyx?access_token=bad")
     WS.send_json(socket, %{event: "start", stream_id: "s", start: %{}})

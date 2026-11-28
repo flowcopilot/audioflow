@@ -32,6 +32,8 @@ defmodule AudioFlowSFU.Signaling.Telephony do
        participant: nil,
        track: nil,
        sequence: 0,
+       # Phone audio that does not fill a 20 ms packet yet.
+       inbound: <<>>,
        decoders: %{}
      }}
   end
@@ -90,9 +92,14 @@ defmodule AudioFlowSFU.Signaling.Telephony do
   defp incoming(event, _message, state) when event in ["mark", "dtmf"], do: {:ok, state}
   defp incoming(_event, _message, state), do: fail(:invalid_event, state)
 
-  # Phone audio in 20 ms RTP packets on the PCMU track.
+  # Phone audio in 20 ms RTP packets on the PCMU track. A message that does
+  # not end on a packet boundary leaves its remainder for the next one.
   defp publish(bytes, state) do
-    for <<chunk::binary-size(160) <- bytes>>, reduce: state do
+    bytes = state.inbound <> bytes
+    rest = byte_size(bytes) - rem(byte_size(bytes), 160)
+    <<whole::binary-size(^rest), remainder::binary>> = bytes
+
+    for <<chunk::binary-size(160) <- whole>>, reduce: %{state | inbound: remainder} do
       state ->
         rtp = %{
           sequence_number: rem(state.sequence, 65_536),
