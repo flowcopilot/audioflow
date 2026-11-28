@@ -58,7 +58,9 @@ AudioFlow.WebRTC.stop(peer)
 Both outgoing tracks are created before negotiation. Audio is PCMU mono at
 8 kHz, exactly 160 encoded bytes per 20 ms call. Video is VP8 at 90 kHz; frames
 are fragmented into <=1200 byte RTP payloads with RFC 7741 start and last-packet
-marker bits. Sequence numbers and 32-bit clock wrapping are maintained. PTS is
+marker bits. Audio packets have the marker bit at the start of a talkspurt (the
+first packet of a turn, or after a PTS gap of more than 20 ms). Sequence numbers
+and 32-bit clock wrapping are maintained. PTS is
 in microseconds on a shared epoch for the entire peer lifetime, monotonic per
 track even across turns. The producer must pace frames; a timestamp is not a
 scheduler. ExWebRTC handles ICE/DTLS/SRTP and RTCP, and forwards received track,
@@ -185,7 +187,9 @@ peer discovery or globally registered signaling destination. The bridge accepts
 one audio track negotiated as PCMU/8000 mono, RTP payload type 0, 160 bytes per
 20 ms, no RID. Other audio formats/packet durations are unsupported. Sequence
 and timestamp wrap are supported; up to 32 future packets wait at most 200 ms
-for gaps. Stale/duplicate sequence numbers are discarded; persistent loss,
+for gaps. The first packets of a stream wait until three have arrived (or the
+gap deadline passes), so a packet that arrives early keeps its place.
+Stale/duplicate sequence numbers are discarded; persistent loss,
 changed SSRC, unexpected tracks, invalid packet length, timestamp discontinuity
 or excessive reordering closes the bridge and its Session/output/peer. No loss
 concealment or adaptive jitter buffering is claimed. Video is not a Session input.
@@ -196,21 +200,26 @@ previous turn/output before endpoint submission. Egress accepts mono PCM16LE
 at 8 or 16 kHz (the latter uses the telephony low-pass decimator), preserving
 filter state across chunks. Other rates and mid-turn format changes fail the
 turn. Final filter tail and partial packets are padded with silence. Queue size
-is bounded (100 packets by default, configurable 1–1500); overflow fails rather
-than accumulating unbounded delay. Producers should stream small PCM chunks.
+is bounded (100 packets by default, configurable 1–1500): while the queue is
+full a push waits until enough audio has left, so a reply that is longer than
+the queue is not an error. Cancel, a new turn or a stop releases a waiting push
+with `{:error, :stale_turn}`. A push into an empty queue is always accepted.
 
-Output is sent one packet per 20 ms without catch-up bursts. `finish` seals and
+Output is sent one packet per 20 ms on absolute deadlines. A stream that falls
+more than 60 ms behind resyncs to the clock instead of sending a burst. After
+silence the presentation time skips the idle time, and the first audio packet
+of the new talkspurt has the RTP marker bit. `finish` never waits; it seals and
 asynchronously drains the queue, allowing Session to remain responsive to cancel.
 A Session `done` event means generation finished, not delivery or remote playout.
 Cancel/timeout/stale keys clear unsent media, resampler/pending bytes and timers;
 RTP already accepted by the peer cannot be recalled. The RTP clock remains
-monotonic across turns. No Output acknowledgement is emitted, so playback-aware
+monotonic across turns and follows wall-clock time over silence. No Output acknowledgement is emitted, so playback-aware
 history cannot claim unheard replies were heard. Session owner, peer, Session
 or transport exit tears down the complete bridge.
 
 Tests cover local two-peer host ICE/DTLS/SRTP, transcript/text/audio routing,
 byte-exact codec/rate conversion, RTP clocks, reordering/wrap, gap deadlines,
-queue limits, barge-in/stale output, Session timeout and owner cleanup. Remaining:
+back pressure, barge-in/stale output, Session timeout and owner cleanup. Remaining:
 browser signaling/client UI and interoperability, production signaling auth,
 acoustic/AEC quality, congestion adaptation, packet-loss concealment, NAT/TURN
 validation and live inference. These are not claimed by the local tests.

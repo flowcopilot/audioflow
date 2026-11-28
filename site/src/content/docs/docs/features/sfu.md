@@ -22,6 +22,24 @@ process keeps only the member list; media goes directly between member
 processes. If a room process crashes, its members join the restarted room
 with the same IDs, and media does not stop.
 
+## Agent audio
+
+An agent joins with `AudioFlow.SFU.Participant` (`AUDIOFLOW_SFU=1`). It
+listens to the first audio track of a member that is not an agent, decodes
+Opus or PCMU to 16 kHz and feeds VoiceInput. The RTP timestamps place the
+audio on a clock. A lost packet (after `gap_timeout_ms`), a burst loss beyond
+`reorder_window`, and the packets that Opus DTX leaves out all become silence
+for the voice detector, at most one second per gap, so an utterance can end
+and the call does not. A mute or other member update keeps the stream state of
+the same track.
+
+The reply goes out as paced Opus. Packets leave on absolute 20 ms deadlines,
+and a stream that falls more than 60 ms behind resyncs to the clock instead
+of sending a burst. After silence the RTP timestamp skips the idle time and
+the first packet of the new talkspurt has the marker bit. A push waits while
+`max_queue_packets` (100, 2 s) are queued, so a long reply never fails for
+being ahead of real time. Cancel, a new turn or a stop releases it.
+
 ## LiveKit client SDKs
 
 LiveKit client SDKs connect with a LiveKit URL and token. Tokens are HS256
