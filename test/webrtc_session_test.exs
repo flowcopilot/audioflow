@@ -211,6 +211,39 @@ if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
       assert :sys.get_state(state.session).playback_history.playout.played == 0
     end
 
+    test "a pending semantic turn check does not block RTP, and its result submits the utterance" do
+      {peer, bridge} =
+        pair(
+          voice_input: [
+            min_speech_ms: 20,
+            min_silence_ms: 20,
+            pre_roll_ms: 0,
+            turn_timeout_ms: 5000,
+            turn_detector: {AudioFlow.Test.GatedTurn, owner: self()}
+          ]
+        )
+
+      speak(peer)
+      assert_receive {:turn_gate, gate, _audio}, 2000
+      assert :sys.get_state(bridge).input.voice.turn
+
+      # Two more packets are consumed while the detector still works.
+      turn = make_ref()
+      :ok = WebRTC.start_turn(peer, turn)
+      silence = :binary.copy(<<255>>, 160)
+      :ok = WebRTC.publish(peer, turn, :audio, silence, 80_000)
+      :ok = WebRTC.publish(peer, turn, :audio, silence, 100_000)
+      await(fn -> :sys.get_state(bridge, 500).input.reorder.expected == 6 end)
+      refute_received {Session, ^bridge, {:utterance, _}}
+      refute_received {:input, _}
+
+      send(gate, :release)
+      assert_receive {Session, ^bridge, {:utterance, :semantic}}, 1000
+      assert_receive {:input, %Audio{sample_rate: 16_000, data: input}}, 1000
+      assert byte_size(input) >= 1280 + 2 * 640
+      assert :sys.get_state(bridge).input.voice.turn == nil
+    end
+
     test "cancel flushes finished turn queues and rejects stale pushes without changing next turn clocks" do
       {peer, bridge} = pair()
       s = :sys.get_state(bridge)

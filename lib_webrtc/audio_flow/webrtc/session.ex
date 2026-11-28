@@ -16,6 +16,10 @@ defmodule AudioFlow.WebRTC.Session do
   (200 ms). This deliberately fails on loss rather than inventing speech.
   `:reorder_window` defaults to 32 (max 256). VoiceInput handles silence/length
   endpoints; speech start cancels output. Owner/peer/session exit closes all work.
+
+  `:voice_input` holds the options of `AudioFlow.VoiceInput.new/2`. A semantic
+  turn check runs beside the session (`async_turn: true` unless you set it), so
+  RTP and output keep flowing while the detector works.
   """
   use GenServer
   alias AudioFlow.Transport.PCMUDecoder
@@ -145,15 +149,33 @@ defmodule AudioFlow.WebRTC.Session do
 
   def handle_info({:gap, token}, s), do: input(RtpInput.gap(s.input, token), s)
 
+  def handle_info({:audio_flow_turn, _, _} = message, s), do: turn_check(message, s)
+  def handle_info({:audio_flow_turn_timeout, _} = message, s), do: turn_check(message, s)
+
   def handle_info({Transport, transport, {:error, reason}}, %{transport: transport} = s),
     do: fail({:output, reason}, s)
 
-  def handle_info({:DOWN, _, :process, _, _}, s), do: {:stop, :normal, s}
+  # A semantic turn check runs in a monitored process, so its :DOWN message must
+  # reach the input before the clause that stops the session.
+  def handle_info({:DOWN, _, :process, _, _} = message, s) do
+    case RtpInput.handle_info(s.input, message) do
+      {:ok, input} -> {:noreply, %{s | input: input}}
+      :unknown -> {:stop, :normal, s}
+    end
+  end
+
   def handle_info({:EXIT, _, _}, s), do: {:stop, :normal, s}
   def handle_info(_, s), do: {:noreply, s}
 
   defp input({:ok, input}, s), do: {:noreply, %{s | input: input}}
   defp input({:error, reason}, s), do: fail(reason, s)
+
+  defp turn_check(message, s) do
+    case RtpInput.handle_info(s.input, message) do
+      {:ok, input} -> {:noreply, %{s | input: input}}
+      :unknown -> {:noreply, s}
+    end
+  end
 
   defp accept_track(id, s) do
     case WebRTC.track_codecs(s.peer, id) do

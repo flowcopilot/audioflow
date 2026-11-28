@@ -13,7 +13,9 @@ defmodule AudioFlow.Transport.Connection do
   Wire error reasons are stable codes. See `reason_code/1`.
 
   `init/1` reads the `AudioFlow.VoiceInput` options from `:voice_input`
-  (`:endpoint_options` is a deprecated alias).
+  (`:endpoint_options` is a deprecated alias) and turns on `async_turn: true`
+  unless the caller sets it. A semantic turn check then never blocks the
+  endpoint process, which must pass its messages to `handle_info/2`.
   """
   @behaviour AudioFlow.Output
   require Logger
@@ -65,7 +67,7 @@ defmodule AudioFlow.Transport.Connection do
     rate = limits[:sample_rate]
     vad = Keyword.get(options, :vad)
 
-    input = if vad, do: VoiceInput.new(vad, VoiceInput.Options.fetch(options))
+    input = if vad, do: VoiceInput.new(vad, VoiceInput.Options.fetch(options, async_turn: true))
 
     if input && input.rate != rate,
       do: raise(ArgumentError, "sample_rate must match the detector rate #{input.rate}")
@@ -182,6 +184,14 @@ defmodule AudioFlow.Transport.Connection do
 
   def handle_info({:DOWN, ref, :process, _, reason}, %{session_ref: ref} = state),
     do: {:stop, {:session_exit, reason}, {1011, "session stopped"}, %{state | session: nil}}
+
+  # A semantic turn check that ran beside the connection process.
+  def handle_info(message, %{input: %VoiceInput{} = input} = state) do
+    case VoiceInput.handle_info(input, message) do
+      {:ok, events, input} -> voice_events(events, %{state | input: input})
+      :unknown -> {:ok, state}
+    end
+  end
 
   def handle_info(_message, state), do: {:ok, state}
 

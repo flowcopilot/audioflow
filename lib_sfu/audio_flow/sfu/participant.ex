@@ -9,7 +9,9 @@ defmodule AudioFlow.SFU.Participant do
 
   Options: `:room`, `:identity` and `:session` (session options) are
   required, with `:vad` (a 16 kHz VoiceInput detector tuple). Optional:
-  `:sfu`, `:owner` (default caller), `:name`, `:voice_input`,
+  `:sfu`, `:owner` (default caller), `:name`, `:voice_input` (options of
+  `AudioFlow.VoiceInput.new/2`; `async_turn` is on unless you set it, so a
+  semantic turn check never blocks the participant),
   `:gap_timeout_ms` (200), `:reorder_window` (32), `:max_queue_packets` (100),
   and `:join` (extra `AudioFlowSFU.Native.join/4` options, such as
   `:resume_token` to take back a participant after a restart).
@@ -165,12 +167,23 @@ defmodule AudioFlow.SFU.Participant do
 
   def handle_info({:gap, token}, s), do: input(RtpInput.gap(s.input, token), s)
 
+  def handle_info({:audio_flow_turn, _, _} = message, s), do: turn_check(message, s)
+  def handle_info({:audio_flow_turn_timeout, _} = message, s), do: turn_check(message, s)
+
   def handle_info({:DOWN, _, :process, pid, reason}, %{join: %{participant: pid}} = s) do
     notify(s.owner, {:error, {:sfu_participant_down, reason}})
     {:stop, :normal, s}
   end
 
-  def handle_info({:DOWN, _, :process, _, _}, s), do: {:stop, :normal, s}
+  # A semantic turn check runs in a monitored process, so its :DOWN message must
+  # reach the input before the clause that stops the participant.
+  def handle_info({:DOWN, _, :process, _, _} = message, s) do
+    case RtpInput.handle_info(s.input, message) do
+      {:ok, input} -> {:noreply, %{s | input: input}}
+      :unknown -> {:stop, :normal, s}
+    end
+  end
+
   def handle_info({:EXIT, _, _}, s), do: {:stop, :normal, s}
   def handle_info(_, s), do: {:noreply, s}
 
@@ -213,6 +226,13 @@ defmodule AudioFlow.SFU.Participant do
 
   defp input({:ok, input}, s), do: {:noreply, %{s | input: input}}
   defp input({:error, reason}, s), do: fail(reason, s)
+
+  defp turn_check(message, s) do
+    case RtpInput.handle_info(s.input, message) do
+      {:ok, input} -> {:noreply, %{s | input: input}}
+      :unknown -> {:noreply, s}
+    end
+  end
 
   defp fail(reason, s) do
     notify(s.owner, {:error, reason})

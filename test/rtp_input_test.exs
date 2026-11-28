@@ -1,5 +1,6 @@
 defmodule AudioFlow.Transport.RtpInputTest do
   use ExUnit.Case, async: true
+  alias AudioFlow.Adapters.Demo
   alias AudioFlow.Audio
   alias AudioFlow.Transport.PCMUDecoder
   alias AudioFlow.Transport.RtpInput
@@ -70,5 +71,57 @@ defmodule AudioFlow.Transport.RtpInputTest do
     held = push_all(input(loss: :fail, gap_timeout_ms: 10), [packet(5)])
     {_, token} = held.gap
     assert {:ok, %{gap: nil, next_timestamp: 960}} = RtpInput.gap(held, token)
+  end
+
+  describe "semantic turn checks" do
+    defp voice_input do
+      [
+        owner: self(),
+        tag: __MODULE__,
+        vad: {AudioFlow.Test.AmplitudeDetector, []},
+        voice_input: [
+          min_speech_ms: 20,
+          min_silence_ms: 20,
+          pre_roll_ms: 0,
+          turn_timeout_ms: 5000,
+          turn_detector: {AudioFlow.Test.GatedTurn, owner: self()}
+        ]
+      ]
+    end
+
+    test "a resolved check submits the utterance and tells the owner" do
+      {:ok, session} = AudioFlow.start_session(Demo.options())
+      on_exit(fn -> if Process.alive?(session), do: AudioFlow.stop_session(session) end)
+
+      input =
+        voice_input()
+        |> RtpInput.new()
+        |> RtpInput.restart(PCMUDecoder.new(), 8000)
+
+      input = %{input | session: session}
+      assert input.voice.semantic.async
+
+      loud = %{sequence_number: 0, timestamp: 0, payload: :binary.copy(<<156>>, 160)}
+
+      quiet = fn n ->
+        %{sequence_number: n, timestamp: n * 160, payload: :binary.copy(<<255>>, 160)}
+      end
+
+      input = push_all(input, [loud | Enum.map(1..4, quiet)])
+
+      assert_receive {:turn_gate, gate, _audio}
+      assert input.voice.turn
+      refute_received {AudioFlow.Transport.RtpInputTest, _, {:utterance, _}}
+
+      # Packets keep arriving while the detector works.
+      input = push_all(input, Enum.map(5..6, quiet))
+
+      send(gate, :release)
+      assert_receive {:audio_flow_turn, _, _} = message
+      assert {:ok, input} = RtpInput.handle_info(input, message)
+      assert input.voice.turn == nil
+      assert_receive {AudioFlow.Transport.RtpInputTest, _, {:utterance, :semantic}}
+      assert RtpInput.handle_info(input, :other) == :unknown
+    end
   end
 end

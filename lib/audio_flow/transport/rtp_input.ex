@@ -7,7 +7,8 @@ defmodule AudioFlow.Transport.RtpInput do
 
   The transport process keeps the struct from `new/1` in its state, calls
   `push/2` for each RTP packet and `gap/2` for each `{:gap, token}` message,
-  and calls `stop/1` when it ends. All calls run in that process, which also
+  and calls `stop/1` when it ends. It also passes the messages of a semantic
+  turn check to `handle_info/2`. All calls run in that process, which also
   receives the gap timer message. Speech start cancels the session output. A
   finished utterance is sent to the session, and the owner gets
   `{tag, self(), {:utterance, reason}}` (and `{:error, {:submit, reason}}`).
@@ -18,7 +19,8 @@ defmodule AudioFlow.Transport.RtpInput do
   samples of the RTP clock a packet holds. The next packet should start there.
 
   Options of `new/1`: `:owner`, `:tag` (the first element of the owner
-  messages), `:vad` (a 16 kHz VoiceInput detector tuple), `:voice_input`,
+  messages), `:vad` (a 16 kHz VoiceInput detector tuple), `:voice_input`
+  (options of `AudioFlow.VoiceInput.new/2`; `async_turn` is on unless set),
   `:reorder_window` (32, at most 256), `:gap_timeout_ms` (200, at most 5000),
   and `:loss`:
 
@@ -64,7 +66,7 @@ defmodule AudioFlow.Transport.RtpInput do
   @doc "Builds the input. Set `:session` when the session exists."
   @spec new(keyword()) :: t()
   def new(options) do
-    voice_options = VoiceInput.Options.fetch(options)
+    voice_options = VoiceInput.Options.fetch(options, async_turn: true)
     voice = VoiceInput.new(Keyword.fetch!(options, :vad), voice_options)
     unless voice.rate == 16_000, do: raise(ArgumentError, "VAD requires 16 kHz")
     window = Keyword.get(options, :reorder_window, 32)
@@ -126,6 +128,24 @@ defmodule AudioFlow.Transport.RtpInput do
   end
 
   def gap(%__MODULE__{} = input, _token), do: {:ok, input}
+
+  @doc """
+  Handles a message of a pending semantic turn check (see `AudioFlow.VoiceInput`).
+  Returns `{:ok, input}`, or `:unknown` for any other message. The utterance of
+  a resolved check goes the same way as one from `push/2`. Call it before a
+  generic `:DOWN` clause, because the check runs in a monitored process.
+  """
+  @spec handle_info(t(), term()) :: {:ok, t()} | :unknown
+  def handle_info(%__MODULE__{} = input, message) do
+    case VoiceInput.handle_info(input.voice, message) do
+      {:ok, events, voice} ->
+        Enum.each(events, &voice_event(input, &1))
+        {:ok, %{input | voice: voice}}
+
+      :unknown ->
+        :unknown
+    end
+  end
 
   @doc "Cancels the gap timer."
   @spec stop(t()) :: :ok

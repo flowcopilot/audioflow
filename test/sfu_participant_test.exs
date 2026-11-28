@@ -26,7 +26,7 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
 
     defp function(fun), do: {AudioFlow.Adapters.Function, run: fun}
 
-    defp start(join \\ []) do
+    defp start(join \\ [], options \\ []) do
       test = self()
 
       session = [
@@ -44,13 +44,18 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
 
       {:ok, agent} =
         Participant.start_link(
-          room: "room",
-          identity: "agent",
-          session: session,
-          vad: {Detector, []},
-          voice_input: [min_speech_ms: 20, min_silence_ms: 60, pre_roll_ms: 0],
-          gap_timeout_ms: 50,
-          join: Keyword.merge([test: test, others: [@user]], join)
+          Keyword.merge(
+            [
+              room: "room",
+              identity: "agent",
+              session: session,
+              vad: {Detector, []},
+              voice_input: [min_speech_ms: 20, min_silence_ms: 60, pre_roll_ms: 0],
+              gap_timeout_ms: 50,
+              join: Keyword.merge([test: test, others: [@user]], join)
+            ],
+            options
+          )
         )
 
       assert_receive {:sfu_join, participant, ^agent, _}
@@ -115,6 +120,32 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
       decoder = Decoder.create(48_000, 1)
       assert byte_size(Decoder.decode_packet(decoder, hd(packets).payload)) == 1920
       assert_receive {Participant, ^agent, {:session, _, {:done, _}}}, 2000
+    end
+
+    test "a pending semantic turn check does not block the participant" do
+      {agent, participant} =
+        start([],
+          voice_input: [
+            min_speech_ms: 20,
+            min_silence_ms: 60,
+            pre_roll_ms: 0,
+            turn_timeout_ms: 5000,
+            turn_detector: {AudioFlow.Test.GatedTurn, owner: self()}
+          ]
+        )
+
+      send_user(agent, participant, opus_frames(10, 10))
+      assert_receive {:turn_gate, gate, _audio}, 2000
+
+      # The participant keeps taking packets while the detector works.
+      assert :sys.get_state(agent, 500).input.voice.turn
+      refute_received {:heard, _}
+      refute_received {Participant, ^agent, {:utterance, _}}
+
+      send(gate, :release)
+      assert_receive {:heard, %Audio{sample_rate: 16_000}}, 2000
+      assert_receive {Participant, ^agent, {:utterance, :semantic}}
+      assert :sys.get_state(agent).input.voice.turn == nil
     end
 
     test "stereo Opus packets, as browsers send with stereo=1, are mixed down" do
