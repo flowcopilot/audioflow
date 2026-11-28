@@ -75,8 +75,13 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
       end
     end
 
-    defp rtp(sequence, payload),
-      do: %{sequence_number: sequence, timestamp: sequence * 960, marker: false, payload: payload}
+    defp rtp(sequence, payload, timestamp \\ nil),
+      do: %{
+        sequence_number: sequence,
+        timestamp: timestamp || sequence * 960,
+        marker: false,
+        payload: payload
+      }
 
     defp send_user(agent, participant, frames, skip \\ []) do
       frames
@@ -150,6 +155,50 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
 
       for _ <- 1..3, do: assert_receive({:audio_flow_sfu, 1, {:rtp, "TR_agent", _}}, 1000)
       assert Process.alive?(transport)
+    end
+
+    test "a burst loss beyond the reorder window becomes silence and the call goes on" do
+      {agent, participant} = start()
+      frames = opus_frames(10, 10)
+      send_user(agent, participant, Enum.take(frames, 12))
+
+      # 288 packets are gone. The next one is far beyond the window of 32.
+      send(
+        agent,
+        {:audio_flow_sfu, 1, participant, {:rtp, "TR_user", rtp(400, Enum.at(frames, 12))}}
+      )
+
+      assert_receive {:heard, %Audio{sample_rate: 16_000}}, 2000
+      assert Process.alive?(agent)
+    end
+
+    test "packets that Opus DTX leaves out become silence from the RTP timestamps" do
+      {agent, participant} = start()
+      frames = opus_frames(10, 10)
+      send_user(agent, participant, Enum.take(frames, 11))
+
+      # The next sequence number, 400 ms later. 20 ms of silence alone is too
+      # short for the VAD to end the utterance.
+      next = rtp(111, Enum.at(frames, 11), 131 * 960)
+      send(agent, {:audio_flow_sfu, 1, participant, {:rtp, "TR_user", next}})
+
+      assert_receive {:heard, %Audio{sample_rate: 16_000}}, 2000
+    end
+
+    test "a member update keeps the stream state of the same track" do
+      {agent, participant} = start()
+      {loud, _} = Enum.split(opus_frames(10, 10), 5)
+      send_user(agent, participant, loud)
+      before = :sys.get_state(agent)
+      assert before.reorder.expected == 105
+
+      muted = %{@user | tracks: [Map.put(hd(@user.tracks), :muted, true)]}
+      send(agent, {:audio_flow_sfu, 1, participant, {:participant_updated, muted}})
+
+      after_update = :sys.get_state(agent)
+      assert after_update.reorder == before.reorder
+      assert after_update.decoder == before.decoder
+      assert after_update.source.muted
     end
 
     test "agent members are not used as the audio source" do

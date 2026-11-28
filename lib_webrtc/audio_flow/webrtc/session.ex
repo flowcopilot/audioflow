@@ -145,7 +145,13 @@ defmodule AudioFlow.WebRTC.Session do
     {:noreply, s}
   end
 
-  def handle_info({:gap, token}, %{gap: {_, token}} = s), do: fail(:rtp_gap_timeout, s)
+  def handle_info({:gap, token}, %{gap: {_, token}} = s) do
+    case Reorder.skip(s.reorder) do
+      # The start of the stream: the first packets only waited for an early one.
+      {0, packets, reorder} -> play(packets, %{s | gap: nil, reorder: reorder})
+      {_lost, _, _} -> fail(:rtp_gap_timeout, s)
+    end
+  end
 
   def handle_info({Transport, transport, {:error, reason}}, %{transport: transport} = s),
     do: fail({:output, reason}, s)
@@ -157,7 +163,7 @@ defmodule AudioFlow.WebRTC.Session do
   defp reorder(packet, s) do
     case Reorder.push(s.reorder, packet) do
       {:ok, packets, reorder} -> play(packets, %{s | reorder: reorder})
-      {:error, reason} -> fail(reason, s)
+      {:resync, _lost, _packets, _reorder} -> fail(:rtp_reorder_limit, s)
     end
   end
 

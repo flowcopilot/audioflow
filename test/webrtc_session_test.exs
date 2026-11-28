@@ -115,9 +115,9 @@ if System.get_env("AUDIOFLOW_WEBRTC") == "1" do
       {peer, bridge} = pair(gap_timeout_ms: 80)
       s = :sys.get_state(bridge)
       raw(peer, 65_535, 4_294_967_136)
-      await(fn -> :sys.get_state(bridge).reorder.expected == 0 end)
-      raw(peer, 1, 160)
       await(fn -> map_size(:sys.get_state(bridge).reorder.pending) == 1 end)
+      raw(peer, 1, 160)
+      await(fn -> map_size(:sys.get_state(bridge).reorder.pending) == 2 end)
       raw(peer, 0, 0)
       await(fn -> :sys.get_state(bridge).reorder.expected == 2 end)
       assert :sys.get_state(bridge).reorder.pending == %{}

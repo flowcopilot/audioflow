@@ -16,8 +16,11 @@ defmodule AudioFlow.SFU.Participant do
 
   The participant listens to one remote audio track at a time: the first
   track of a member that is not an agent. It decodes Opus or PCMU, resamples
-  to 16 kHz and feeds VoiceInput. Speech start cancels output. A lost packet
-  becomes 20 ms of silence after `:gap_timeout_ms`; the call does not end.
+  to 16 kHz and feeds VoiceInput. Speech start cancels output. The RTP
+  timestamps place the audio on a clock: a lost packet (after
+  `:gap_timeout_ms`), a burst loss beyond `:reorder_window`, and the packets
+  that Opus DTX leaves out all become silence (at most one second per gap).
+  The call does not end.
 
   Events for the owner are `{AudioFlow.SFU.Participant, pid, event}`:
   `{:joined, join}`, `{:session, turn, event}`, `{:utterance, reason}`,
@@ -35,7 +38,9 @@ defmodule AudioFlow.SFU.Participant do
   alias Membrane.Opus.Decoder.Native, as: Decoder
 
   @vsn 1
-  @silence_20ms :binary.copy(<<0, 0>>, 320)
+  # One gap of lost or untransmitted audio becomes at most one second of silence.
+  @max_silence_samples 16_000
+  @timestamp_modulus 4_294_967_296
 
   def start_link(options),
     do: GenServer.start_link(__MODULE__, Keyword.put_new(options, :owner, self()))
@@ -104,7 +109,10 @@ defmodule AudioFlow.SFU.Participant do
         # For an Opus source: channel count => decoder, set by choose_source/1.
         decoder: nil,
         resampler: nil,
-        up: %RateConverter{}
+        up: %RateConverter{},
+        # The RTP timestamp where the next packet should start, and the clock rate.
+        next_timestamp: nil,
+        clock: 48_000
       }
 
       {:ok, choose_source(state)}
@@ -162,10 +170,8 @@ defmodule AudioFlow.SFU.Participant do
   end
 
   def handle_info({:gap, token}, %{gap: {_, token}} = s) do
-    {lost, packets, reorder} = Reorder.skip(s.reorder)
-    s = %{s | gap: nil, reorder: reorder}
-    s = Enum.reduce(1..lost//1, s, fn _, s -> listen(s, @silence_20ms) end)
-    play(packets, s)
+    {_lost, packets, reorder} = Reorder.skip(s.reorder)
+    play(packets, %{s | gap: nil, reorder: reorder})
   end
 
   def handle_info({:DOWN, _, :process, pid, reason}, %{join: %{participant: pid}} = s) do
@@ -188,7 +194,8 @@ defmodule AudioFlow.SFU.Participant do
 
   ## Listening
 
-  # The first audio track of a member that is not an agent.
+  # The first audio track of a member that is not an agent. A member update
+  # (such as a mute) keeps the stream state of a track that stays the same.
   defp choose_source(s) do
     candidate =
       s.members
@@ -198,30 +205,42 @@ defmodule AudioFlow.SFU.Participant do
       |> Enum.find_value(fn info -> List.first(info.tracks) end)
 
     cond do
-      candidate == s.source ->
-        s
+      same_track?(candidate, s.source) ->
+        %{s | source: candidate}
 
       candidate != nil and candidate.mime_type == "audio/opus" ->
-        %{s | source: candidate, reorder: Reorder.new(s.reorder.window)}
-        |> Map.merge(%{decoder: %{}, resampler: Resampler.new(48_000, 16_000)})
+        %{s | source: candidate, reorder: Reorder.new(s.reorder.window), next_timestamp: nil}
+        |> Map.merge(%{decoder: %{}, resampler: Resampler.new(48_000, 16_000), clock: 48_000})
 
       true ->
-        %{s | source: candidate, reorder: Reorder.new(s.reorder.window), up: %RateConverter{}}
+        %{
+          s
+          | source: candidate,
+            reorder: Reorder.new(s.reorder.window),
+            up: %RateConverter{},
+            next_timestamp: nil,
+            clock: 8000
+        }
     end
   end
+
+  defp same_track?(nil, nil), do: true
+  defp same_track?(%{sid: sid}, %{sid: sid}), do: true
+  defp same_track?(_, _), do: false
 
   defp reorder(rtp, s) do
     case Reorder.push(s.reorder, rtp) do
       {:ok, packets, reorder} -> play(packets, %{s | reorder: reorder})
-      {:error, reason} -> fail(reason, s)
+      {:resync, _lost, packets, reorder} -> play(packets, %{s | reorder: reorder})
     end
   end
 
   defp play(packets, s) do
     s =
       Enum.reduce(packets, s, fn packet, s ->
-        {pcm, s} = decode(s, packet.payload)
-        listen(s, pcm)
+        s = idle(s, packet.timestamp)
+        {pcm, samples, s} = decode(s, packet.payload)
+        listen(%{s | next_timestamp: rem(packet.timestamp + samples, @timestamp_modulus)}, pcm)
       end)
 
     {:noreply, schedule_gap(s)}
@@ -229,9 +248,24 @@ defmodule AudioFlow.SFU.Participant do
     error -> fail({:decode, Exception.message(error)}, s)
   end
 
+  # Audio that the RTP timestamps place before this packet but that never
+  # arrived: lost packets, or packets that DTX did not send. VoiceInput hears
+  # it as silence, so that it can end an utterance.
+  defp idle(%{next_timestamp: nil} = s, _timestamp), do: s
+
+  defp idle(s, timestamp) do
+    gap = rem(timestamp - s.next_timestamp + @timestamp_modulus, @timestamp_modulus)
+    samples = min(div(gap * 16_000, s.clock), @max_silence_samples)
+
+    if gap in 1..2_147_483_647//1 and samples > 0,
+      do: listen(s, <<0::size(samples * 16)>>),
+      else: s
+  end
+
+  # Returns the 16 kHz PCM and the packet duration in RTP clock samples.
   defp decode(%{source: %{mime_type: "audio/PCMU"}} = s, payload) do
     {data, up} = RateConverter.up(MuLaw.decode(payload), s.up)
-    {data, %{s | up: up}}
+    {data, byte_size(payload), %{s | up: up}}
   end
 
   # Browsers can send stereo Opus (`stereo=1`). The TOC byte says how many
@@ -240,11 +274,14 @@ defmodule AudioFlow.SFU.Participant do
     channels = stereo + 1
     decoder = Map.get_lazy(s.decoder, channels, fn -> Decoder.create(48_000, channels) end)
     pcm = Decoder.decode_packet(decoder, payload)
+    samples = div(byte_size(pcm), 2 * channels)
     pcm = if channels == 2, do: downmix(pcm), else: pcm
-    {Resampler.push(s.resampler, pcm), %{s | decoder: Map.put(s.decoder, channels, decoder)}}
+
+    {Resampler.push(s.resampler, pcm), samples,
+     %{s | decoder: Map.put(s.decoder, channels, decoder)}}
   end
 
-  defp decode(s, _payload), do: {<<>>, s}
+  defp decode(s, _payload), do: {<<>>, 0, s}
 
   defp downmix(pcm) do
     for <<l::little-signed-16, r::little-signed-16 <- pcm>>,
