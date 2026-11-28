@@ -111,7 +111,7 @@ defmodule AudioFlow.RemoteProvidersTest do
 
   test "timeout_ms bounds provider time, not the time in the output callback" do
     owner = self()
-    options = socket_options() ++ [timeout_ms: 300]
+    options = socket_options() ++ [timeout_ms: 2000]
 
     task =
       Task.async(fn ->
@@ -120,7 +120,8 @@ defmodule AudioFlow.RemoteProvidersTest do
         OpenAIRealtime.run(audio, options, fn
           {:text, _} ->
             send(owner, :emitting)
-            Process.sleep(500)
+            # Longer than timeout_ms. The provider steps stay well inside it, even when loaded.
+            Process.sleep(2500)
             :ok
 
           _other ->
