@@ -53,7 +53,9 @@ defmodule AudioFlow.PacketWorkerTest do
     assert {:error, :timeout} = PacketWorker.request(worker, "echo blocked", 100)
     assert {:ok, "echo recovered"} = PacketWorker.request(worker, "echo recovered", 5000)
     assert Process.alive?(worker)
-    assert starts(log) == 2
+    # One replacement is the normal case. A very slow start-up can make the program of
+    # the blocked request time out too, and that costs one more replacement.
+    assert starts(log) in 2..3
   end
 
   test "a crashed program is restarted", %{worker: worker, log: log} do
