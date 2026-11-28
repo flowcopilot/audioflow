@@ -91,6 +91,15 @@ defmodule AudioFlow.DuplexCoreTest do
     {duplex, peer}
   end
 
+  # An owner that passes every message to the test.
+  defp relay(test) do
+    receive do
+      message -> send(test, {:owner_got, message})
+    end
+
+    relay(test)
+  end
+
   defp start_duplex(owner, adapter, options),
     do: Duplex.start_link([owner: owner, adapter: {Fake, adapter}] ++ options)
 
@@ -185,8 +194,13 @@ defmodule AudioFlow.DuplexCoreTest do
 
   describe "owner" do
     test "exit closes the connection without an owner message" do
-      owner = spawn(fn -> Process.sleep(:infinity) end)
-      {duplex, _peer} = start(owner: owner)
+      test = self()
+      owner = spawn(fn -> relay(test) end)
+      {duplex, peer} = start(owner: owner)
+
+      # Kill the owner once the session is connected, not while it still connects.
+      send(peer, {:push, [{:text, "ready"}]})
+      assert_receive {:owner_got, {Duplex, ^duplex, :ready}}
       ref = Process.monitor(duplex)
 
       Process.exit(owner, :kill)
