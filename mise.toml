@@ -17,7 +17,7 @@ protoc = "36.2"
 # service uses PostgreSQL 17 too.
 postgres = "17.12"
 # Git hooks and linters (see hk.pkl).
-hk = "2.11.0"
+hk = "2.14.0"
 gitleaks = "latest"
 ruff = "latest"
 "aqua:oxc-project/oxc/oxlint" = "latest"
