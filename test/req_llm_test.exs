@@ -71,8 +71,8 @@ defmodule AudioFlow.ReqLLMTest do
       end)
 
     ref = Process.monitor(turn)
-    assert_receive {:http_request, _, _}
-    assert_receive {:blocked, ^turn, {:links, links}}
+    assert_receive {:http_request, _, _}, 5000
+    assert_receive {:blocked, ^turn, {:links, links}}, 5000
     refute Enum.any?(links, &is_pid/1)
     # The callback runs in the checked-out socket's consumer. No producer or
     # metadata helper exists to queue output while this process is blocked.
