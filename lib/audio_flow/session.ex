@@ -6,15 +6,16 @@ defmodule AudioFlow.Session do
   turns without STT/LLM/TTS stages. Only audio input is supported; history replay,
   graphs and conversation flows are rejected in this mode. Provider instructions
   remain adapter options. Each turn starts a fresh provider connection.
-  `:max_output_bytes` (16,777,216) bounds cumulative event payload bytes per turn
-  in every mode, in addition to the event count and deadline.
 
-  Options: `:stt`, `:llm`, `:tts` adapter tuples; `:owner`; `:timeout_ms`
-  (30,000); `:max_input_bytes` (960,000); `:max_events` (1,024); optional
-  `:output` transport tuple `{module, target}` implementing `AudioFlow.Output`.
-  An optional `:vision` adapter converts RGB images to description strings.
+  ## Options
+
+  `AudioFlow.start_session/1` validates these options and raises
+  `ArgumentError` for unknown keys.
+
+  #{AudioFlow.Session.Options.docs()}
+
   `AudioFlow.Text` input goes directly to the LLM without an input stage.
-  `:max_image_bytes` defaults to 6,291,456. Image-only sessions can omit `:stt`.
+  Image-only sessions can omit `:stt`.
   Descriptions form one LLM prompt, then follow the same speech output path.
   Omit both `:llm` and `:tts` for a transcription session. Its turns end after
   the input stage, and text input returns `{:error, {:unsupported_input, :llm}}`.
@@ -22,10 +23,7 @@ defmodule AudioFlow.Session do
   `{:partial, text}`. These become `{:transcript, text}`, `{:segment, segment}`
   and `{:partial_transcript, text}` events. Partial text is an unstable hypothesis
   that follows the final text emitted so far. It is not part of the prompt or the
-  history.
-  Set `:history` to `true` or `[max_turns: 8, max_bytes: 16_384]` to retain
-  successful user/assistant pairs. The LLM then receives a list of role/content
-  message maps. History is disabled by default.
+  history. History is disabled by default.
 
   In place of the adapters, `:graph` takes an `AudioFlow.Graph.Plan` from
   `AudioFlow.Graph.session_options/2`. The input goes to the graph input nodes
@@ -62,13 +60,7 @@ defmodule AudioFlow.Session do
   alias AudioFlow.Text
   alias AudioFlow.Transcript.Segment
 
-  @limits_schema [
-    timeout_ms: [type: :pos_integer, default: 30_000],
-    max_input_bytes: [type: :pos_integer, default: 960_000],
-    max_image_bytes: [type: :pos_integer, default: 6_291_456],
-    max_events: [type: :pos_integer, default: 1024],
-    max_output_bytes: [type: :pos_integer, default: 16_777_216]
-  ]
+  @limits_schema AudioFlow.Session.Options.limits_schema()
 
   @doc "Session resource limits:\n\n" <> NimbleOptions.docs(@limits_schema)
   def start_link(options), do: GenServer.start_link(__MODULE__, options)

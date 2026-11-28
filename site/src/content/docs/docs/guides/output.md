@@ -50,6 +50,21 @@ loopback recording and a common clock.
 release blocked producers and stop old output. Use a separate playback process
 for each session.
 
+`start_turn/2`, `finish/2`, `flush/2`, `pause/3` and `resume/3` run inside the
+session process. They must return promptly: the session answers no call while
+one runs, and a call with an `:infinity` timeout can block it for good. Hand
+slow work to another process and return `{:error, reason}` on failure.
+
+## Provisional pause
+
+`AudioFlow.Output.provisional/2` pauses an output that supports pausing, and
+`resolve/3` then confirms the interruption (`:confirm`) or resumes
+(`:resume`). A resume needs the endpoint's pause acknowledgement
+(`control_ack/5`) first. Before it, `resolve(session, candidate, :resume)`
+returns `{:error, :not_paused}` and the candidate stays live. A turn that
+finishes during the pause waits for the decision, and only the candidate
+deadline bounds the wait.
+
 ## Full media example
 
 ```sh

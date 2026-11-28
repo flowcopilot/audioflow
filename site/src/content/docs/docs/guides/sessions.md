@@ -22,6 +22,20 @@ receive do
 end
 ```
 
+## Options
+
+`AudioFlow.start_session/1` validates all session options and raises
+`ArgumentError` for an unknown or misspelled key or an invalid value, before it
+starts the session. The `AudioFlow.Session` module documentation lists every
+option with its type and default. They are `:owner`, `:stt`, `:llm`, `:tts`,
+`:vision`, `:speech_to_speech`, `:graph`, `:conversation`, `:history`,
+`:restore`, `:on_commit`, `:output`, `:notify_audio` and the limits below.
+An invalid combination, such as `:speech_to_speech` with `:graph`, returns
+`{:error, reason}`.
+
+Set `notify_audio: false` when an `:output` transport already receives the
+audio. The owner then gets every event except `{:audio, audio}`.
+
 ## Turns
 
 Each turn has a unique reference. A session accepts one turn at a time. Further

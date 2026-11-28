@@ -12,9 +12,14 @@ defmodule AudioFlow do
   """
 
   alias AudioFlow.Session
+  alias AudioFlow.Session.Options
 
   def start_session(options) do
-    options = Keyword.put_new(options, :owner, self())
+    options =
+      options
+      |> Keyword.put_new(:owner, self())
+      |> Options.validate!()
+
     DynamicSupervisor.start_child(AudioFlow.Sessions, {AudioFlow.Session, options})
   end
 
