@@ -96,7 +96,8 @@ defmodule AudioFlow.Calls.Call do
           conversation_state: call.conversation_state,
           turns: call.turns
         },
-        on_commit: &send(me, {:commit, &1})
+        # Not a function: a closure fails after two hot code loads of this module.
+        on_commit: {me, :commit}
       )
 
     options =

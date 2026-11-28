@@ -35,11 +35,16 @@ defmodule AudioFlow.Session do
   retain only complete reply chunks covered by explicit playback acknowledgements.
   Durable calls: `:restore` takes `%{history: [{user, assistant}],
   conversation_state: name, turns: count}` from an earlier session, and
-  `:on_commit` is a one-argument function that gets the same map each time the
-  saved history or conversation state changes (a completed turn, the heard
-  part of a cancelled turn, a cleared history or a transition between turns).
-  It runs in the session process, so it must return quickly; send the
-  snapshot to another process. An exception in it is logged and ignored.
+  `:on_commit` gets the same map each time the saved history or conversation
+  state changes (a completed turn, the heard part of a cancelled turn, a
+  cleared history or a transition between turns). It is a one-argument
+  function, `{pid, tag}` (sends `{tag, snapshot}` to `pid`) or
+  `{module, function, args}` (calls the function with the snapshot appended).
+  Use `{pid, tag}` or `{module, function, args}` in a process that a hot
+  upgrade can replace: an anonymous function refers to the code of its module
+  and fails after two code loads. The callback runs in the session process, so
+  it must return quickly. An exception, throw or exit in it is logged with its
+  stacktrace and ignored.
   The session stops when its owner exits. Interrupted turns cannot deliver
   further output. Cancellation stops the caller task, but an inference engine
   may still finish a batch already submitted to shared hardware.
@@ -900,14 +905,23 @@ defmodule AudioFlow.Session do
 
     if Map.delete(snapshot, :turns) != before do
       try do
-        new.on_commit.(snapshot)
-      rescue
-        error -> Logger.warning("Session on_commit failed: #{Exception.message(error)}")
+        run_on_commit(new.on_commit, snapshot)
+      catch
+        kind, reason ->
+          Logger.warning(
+            "Session on_commit failed: " <> Exception.format(kind, reason, __STACKTRACE__)
+          )
       end
     end
 
     new
   end
+
+  defp run_on_commit(fun, snapshot) when is_function(fun, 1), do: fun.(snapshot)
+  defp run_on_commit({target, tag}, snapshot), do: send(target, {tag, snapshot})
+
+  defp run_on_commit({module, function, args}, snapshot),
+    do: apply(module, function, args ++ [snapshot])
 
   defp retain_heard(state, nil), do: state
   defp retain_heard(state, %{context: nil}), do: state

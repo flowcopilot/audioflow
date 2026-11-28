@@ -79,6 +79,38 @@ if System.get_env("AUDIOFLOW_SFU") == "1" do
       assert saved.history == [{"hello", "reply 1"}] and saved.turns == 1
     end
 
+    # Loads a changed version of the Call module, as a hot upgrade does. A second
+    # load removes the code of the first one, so a fun made by it breaks.
+    defp upgrade(pid, version) do
+      source =
+        "lib_sfu/audio_flow/calls/call.ex"
+        |> File.read!()
+        |> String.replace("@vsn 1\n", "@vsn 1\n  def version, do: #{version}\n")
+
+      :ok = :sys.suspend(pid)
+      Code.put_compiler_option(:ignore_module_conflict, true)
+      Code.compile_string(source)
+      Code.put_compiler_option(:ignore_module_conflict, false)
+      :ok = :sys.change_code(pid, Call, 1, [])
+      :ok = :sys.resume(pid)
+    end
+
+    test "a call keeps saving after two code loads of its module", %{store: store, call: call} do
+      {original, binary, file} =
+        :code.get_object_code(Call) |> then(&{elem(&1, 0), elem(&1, 1), elem(&1, 2)})
+
+      on_exit(fn -> :code.purge(original) && :code.load_binary(original, file, binary) end)
+      {pid, participant, agent} = start(store, call)
+      await_saved(store, call.id, &(&1.resume_token == "token"))
+
+      upgrade(pid, 2)
+      upgrade(pid, 3)
+
+      speak(agent, participant, 100)
+      saved = await_saved(store, call.id, &(&1.history != []))
+      assert saved.history == [{"hello", "reply 1"}]
+    end
+
     test "a call restarts from the saved history", %{store: store, call: call} do
       {:ok, call} =
         CallStore.save(store, call.id, "node-a", call.version, %{
