@@ -257,6 +257,12 @@ defmodule AudioFlowSFU.Participant.WebRTC do
         do: arm_answer_timer(%{state | answer_attempts: 0}),
         else: state
 
+    # The client may have missed a request for sections while it had no owner.
+    state =
+      if state.negotiation == :client,
+        do: negotiate(%{state | sections_requested: false}),
+        else: state
+
     {:reply, {:ok, join_info(state)}, health(state)}
   end
 
@@ -557,7 +563,9 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   defp negotiate(%{negotiation: :client} = state) do
     missing = Enum.count(state.subscriptions, fn {_, sub} -> sub.transceiver == nil end)
 
-    if (missing > 0 or state.renegotiate) and not state.sections_requested do
+    # Without an owner the request would be lost. A resume asks again.
+    if (missing > 0 or state.renegotiate) and not state.sections_requested and
+         state.owner != nil do
       Participant.notify(state.owner, {:media_sections, missing})
       %{state | sections_requested: true, renegotiate: false}
     else

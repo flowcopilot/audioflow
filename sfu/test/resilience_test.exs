@@ -140,6 +140,29 @@ defmodule AudioFlowSFU.ResilienceTest do
     assert_receive {:DOWN, ^ref, :process, ^participant, :normal}, 1000
   end
 
+  test "a client-negotiated participant that resumes asks for the sections it missed" do
+    name = room()
+    away = spawn(fn -> Process.sleep(:infinity) end)
+
+    {:ok, bob, %{resume_token: token}} =
+      WebRTC.start(TestClient.grants(name, "bob", %{can_publish: false}),
+        owner: away,
+        negotiation: :client
+      )
+
+    Process.exit(away, :kill)
+    await(fn -> :sys.get_state(bob).owner == nil end)
+
+    {:ok, alice} = TestClient.start(name, "alice")
+    connected(alice)
+    assert_receive {:client, ^alice, {:track_published, _}}, 5000
+    await(fn -> Enum.any?(:sys.get_state(bob).subscriptions) end)
+    refute_received {AudioFlowSFU.Participant, ^bob, {:media_sections, _}}
+
+    assert {:ok, ^bob, _} = WebRTC.resume(token, "bob", self())
+    assert_receive {AudioFlowSFU.Participant, ^bob, {:media_sections, 1}}, 1000
+  end
+
   test "a resume with another identity is refused" do
     {:ok, bob} = TestClient.start(room(), "bob", can_publish: false)
     %{resume_token: token} = TestClient.join_info(bob)
