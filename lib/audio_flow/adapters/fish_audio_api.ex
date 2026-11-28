@@ -15,24 +15,31 @@ defmodule AudioFlow.Adapters.FishAudioAPI do
   for configuration and shared HTTP bounds.
   """
   @behaviour AudioFlow.Adapter
+  alias AudioFlow.Adapters.Options
   alias AudioFlow.Adapters.Providers.PCMHTTP
   alias AudioFlow.Adapters.Providers.Socket
 
+  @rates [8_000, 16_000, 24_000, 32_000, 44_100]
+  @latencies ["normal", "balanced", "low"]
+
+  @impl true
+  def validate_options(options) do
+    Options.sample_rate!(options, @rates, 44_100)
+    for key <- [:model, :reference_id], do: Options.string!(options, key)
+    for key <- [:language, :endpoint], do: Options.optional_string!(options, key)
+    Options.one_of!(options, :latency, @latencies, "normal")
+    Options.api_key!(options)
+    PCMHTTP.validate_options!(options)
+  end
+
   @impl true
   def run(text, options, emit) when is_binary(text) do
+    :ok = validate_options(options)
     rate = Keyword.get(options, :sample_rate, 44_100)
-
-    unless rate in [8_000, 16_000, 24_000, 32_000, 44_100],
-      do: raise(ArgumentError, "unsupported Fish Audio PCM sample rate")
-
     key = Socket.key(options)
-    model = nonempty!(Keyword.fetch!(options, :model), :model)
-    reference = nonempty!(Keyword.fetch!(options, :reference_id), :reference_id)
-    key = nonempty!(key, :api_key)
+    model = Keyword.fetch!(options, :model)
+    reference = Keyword.fetch!(options, :reference_id)
     latency = Keyword.get(options, :latency, "normal")
-
-    unless latency in ["normal", "balanced", "low"],
-      do: raise(ArgumentError, "unsupported Fish Audio latency mode")
 
     body = %{
       text: text,
@@ -55,12 +62,5 @@ defmodule AudioFlow.Adapters.FishAudioAPI do
       options,
       emit
     )
-  end
-
-  defp nonempty!(value, name) do
-    unless is_binary(value) and String.trim(value) != "",
-      do: raise(ArgumentError, "#{name} must be a nonempty string")
-
-    value
   end
 end

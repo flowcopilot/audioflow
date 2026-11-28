@@ -16,6 +16,7 @@ defmodule AudioFlow.STT.DeepgramProvider do
     default_base_url: "https://api.deepgram.com",
     default_env_key: "DEEPGRAM_API_KEY"
 
+  alias AudioFlow.Adapters.Options
   alias ReqLLM.Error.Invalid.Parameter
   alias ReqLLM.Provider.Defaults
   alias ReqLLM.Step
@@ -23,6 +24,14 @@ defmodule AudioFlow.STT.DeepgramProvider do
 
   @impl ReqLLM.Provider
   def prepare_request(:transcription, model_spec, audio_data, opts) do
+    # Raises an `ArgumentError` that names the key and never shows its value.
+    Options.optional_api_key!(opts)
+
+    opts =
+      if is_function(opts[:api_key], 0),
+        do: Keyword.put(opts, :api_key, Options.resolve_key!(opts)),
+        else: opts
+
     with {:ok, model} <- ReqLLM.model(model_spec) do
       timeout = Keyword.get(opts, :receive_timeout, 120_000)
       http_options = Keyword.get(opts, :req_http_options, [])

@@ -1,6 +1,23 @@
 defmodule AudioFlow.Adapters.Providers.PCMHTTP do
   @moduledoc false
+  alias AudioFlow.Adapters.Options
   alias AudioFlow.Adapters.Providers.Socket
+
+  # Checks the options that `run/7` reads, for `validate_options/1` callbacks.
+  def validate_options!(options) do
+    if options[:endpoint],
+      do: validate_endpoint!(Options.string!(options, :endpoint))
+
+    for {key, default} <- [
+          max_response_bytes: 16_777_216,
+          timeout_ms: 30_000,
+          receive_timeout_ms: 10_000,
+          max_request_bytes: 65_536
+        ],
+        do: Socket.positive!(options, key, default)
+
+    :ok
+  end
 
   def run(endpoint, headers, body, rate, options, emit, format \\ :pcm) do
     validate_endpoint!(endpoint)

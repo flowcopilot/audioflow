@@ -1,5 +1,6 @@
 defmodule AudioFlow.Adapters.Providers.Socket do
   @moduledoc false
+  alias AudioFlow.Adapters.Options
   alias Mint.WebSocket, as: WS
 
   # Synchronous, caller-owned socket: terminating the turn closes the connection.
@@ -29,6 +30,14 @@ defmodule AudioFlow.Adapters.Providers.Socket do
       {:error, _} = error ->
         error
     end
+  end
+
+  # Checks the options that `run/7` reads, for `validate_options/1` callbacks.
+  def validate_options!(options) do
+    if options[:endpoint], do: endpoint!(Options.string!(options, :endpoint))
+    positive!(options, :timeout_ms, 30_000)
+    positive!(options, :max_response_bytes, 16_777_216)
+    :ok
   end
 
   def endpoint!(url) do
@@ -190,12 +199,8 @@ defmodule AudioFlow.Adapters.Providers.Socket do
 
   def json(value), do: {:text, JSON.encode!(value)}
 
-  def key(options) do
-    case Keyword.fetch!(options, :api_key) do
-      fun when is_function(fun, 0) -> fun.()
-      key when is_binary(key) -> key
-    end
-  end
+  # Raises `ArgumentError` that names the option only, never its value.
+  def key(options), do: Options.resolve_key!(options)
 
   def url(endpoint, params) do
     uri = URI.parse(endpoint)
@@ -228,12 +233,5 @@ defmodule AudioFlow.Adapters.Providers.Socket do
 
   def audio_event(_, _, _), do: {:error, :invalid_audio}
 
-  def positive!(options, key, default) do
-    value = Keyword.get(options, key, default)
-
-    unless is_integer(value) and value > 0,
-      do: raise(ArgumentError, "#{key} must be a positive integer")
-
-    value
-  end
+  defdelegate positive!(options, key, default), to: Options
 end

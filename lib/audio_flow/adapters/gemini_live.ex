@@ -6,9 +6,21 @@ defmodule AudioFlow.Adapters.GeminiLive do
   https://flowcopilot.github.io/audioflow/docs/features/providers/.
   """
   @behaviour AudioFlow.Adapter
+  alias AudioFlow.Adapters.Options
   alias AudioFlow.Adapters.Providers.Socket
 
+  @impl true
+  def validate_options(options) do
+    Options.string!(options, :model)
+    Options.api_key!(options)
+    Options.optional_string!(options, :endpoint)
+    Options.text!(options, :instructions)
+    Socket.validate_options!(options)
+  end
+
+  @impl true
   def run(audio, options, emit) do
+    :ok = validate_options(options)
     Socket.audio!(audio, 16_000)
 
     setup = %{

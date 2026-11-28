@@ -21,6 +21,7 @@ defmodule AudioFlow.Adapters.ReqLLM do
   Redirects, retries, cache replay and non-HTTP transports are not executed.
   """
   @behaviour AudioFlow.Adapter
+  alias AudioFlow.Adapters.Options, as: AdapterOptions
   alias AudioFlow.TextChunks
   alias AudioFlow.Tool
   alias ReqLLM.Context
@@ -36,8 +37,60 @@ defmodule AudioFlow.Adapters.ReqLLM do
     Keyword.put(options, :audio_flow, Keyword.put(execution, :tool_context, context))
   end
 
+  @limits [
+    max_request_bytes: 65_536,
+    max_event_bytes: 16_384,
+    max_response_bytes: 262_144,
+    max_text_bytes: 8_192,
+    max_tool_rounds: 4,
+    max_tool_calls: 8,
+    tool_timeout_ms: 10_000,
+    max_tool_result_bytes: 8_192
+  ]
+
+  @impl true
+  def validate_options(options) do
+    execution = Keyword.get(options, :audio_flow, [])
+
+    unless Keyword.keyword?(execution),
+      do: raise(ArgumentError, "audio_flow must be a keyword list")
+
+    if Keyword.get(options, :model) in [nil, ""], do: raise(ArgumentError, "model is required")
+
+    for {key, default} <- @limits, do: AdapterOptions.positive!(execution, key, default)
+
+    AdapterOptions.positive!(
+      execution,
+      :timeout_ms,
+      Keyword.get(options, :request_timeout, 30_000)
+    )
+
+    AdapterOptions.positive!(
+      execution,
+      :receive_timeout_ms,
+      Keyword.get(options, :receive_timeout, 10_000)
+    )
+
+    AdapterOptions.positive!(
+      execution,
+      :pool_timeout_ms,
+      Keyword.get(options, :pool_timeout, 5_000)
+    )
+
+    filler = Keyword.get(execution, :tool_filler)
+
+    unless filler == nil or (is_binary(filler) and String.valid?(filler)),
+      do: raise(ArgumentError, "tool_filler must be a string")
+
+    unless is_map(Keyword.get(execution, :tool_context, %{})),
+      do: raise(ArgumentError, "tool_context must be a map")
+
+    :ok
+  end
+
   @impl true
   def run(input, options, emit) do
+    :ok = validate_options(options)
     {execution, opts} = Keyword.pop(options, :audio_flow, [])
     {model_spec, opts} = Keyword.pop!(opts, :model)
     opts = ReqLLM.ModelInput.merge_tuple_defaults(model_spec, :chat, opts)
@@ -69,39 +122,46 @@ defmodule AudioFlow.Adapters.ReqLLM do
     opts = Keyword.put(opts, :tools, native_tools ++ converted)
     options = execution
     filler = Keyword.get(options, :tool_filler)
-
-    if not (filler == nil or (is_binary(filler) and String.valid?(filler))),
-      do: raise(ArgumentError, "tool_filler must be a string")
-
     tool_context = Keyword.get(options, :tool_context, %{})
-    if not is_map(tool_context), do: raise(ArgumentError, "tool_context must be a map")
 
     config = %{
       model: model,
       provider: provider,
       options: opts,
       native_tools: Map.new(native_tools, &{&1.name, &1}),
-      request_limit: positive!(options, :max_request_bytes, 65_536),
-      event_limit: positive!(options, :max_event_bytes, 16_384),
-      response_limit: positive!(options, :max_response_bytes, 262_144),
-      text_limit: positive!(options, :max_text_bytes, 8_192),
+      request_limit: AdapterOptions.positive!(options, :max_request_bytes, 65_536),
+      event_limit: AdapterOptions.positive!(options, :max_event_bytes, 16_384),
+      response_limit: AdapterOptions.positive!(options, :max_response_bytes, 262_144),
+      text_limit: AdapterOptions.positive!(options, :max_text_bytes, 8_192),
       tools: tools,
-      max_rounds: positive!(options, :max_tool_rounds, 4),
-      max_calls: positive!(options, :max_tool_calls, 8),
+      max_rounds: AdapterOptions.positive!(options, :max_tool_rounds, 4),
+      max_calls: AdapterOptions.positive!(options, :max_tool_calls, 8),
       tool_options: [
         context: tool_context,
-        timeout_ms: positive!(options, :tool_timeout_ms, 10_000),
-        max_result_bytes: positive!(options, :max_tool_result_bytes, 8_192)
+        timeout_ms: AdapterOptions.positive!(options, :tool_timeout_ms, 10_000),
+        max_result_bytes: AdapterOptions.positive!(options, :max_tool_result_bytes, 8_192)
       ],
       filler: filler,
       emit: emit,
       timeouts: [
         request_timeout:
-          positive!(options, :timeout_ms, Keyword.get(opts, :request_timeout, 30_000)),
+          AdapterOptions.positive!(
+            options,
+            :timeout_ms,
+            Keyword.get(opts, :request_timeout, 30_000)
+          ),
         receive_timeout:
-          positive!(options, :receive_timeout_ms, Keyword.get(opts, :receive_timeout, 10_000)),
+          AdapterOptions.positive!(
+            options,
+            :receive_timeout_ms,
+            Keyword.get(opts, :receive_timeout, 10_000)
+          ),
         pool_timeout:
-          positive!(options, :pool_timeout_ms, Keyword.get(opts, :pool_timeout, 5_000))
+          AdapterOptions.positive!(
+            options,
+            :pool_timeout_ms,
+            Keyword.get(opts, :pool_timeout, 5_000)
+          )
       ]
     }
 
@@ -548,10 +608,4 @@ defmodule AudioFlow.Adapters.ReqLLM do
   end
 
   defp fail(state, reason), do: {:halt, %{state | error: reason}}
-
-  defp positive!(options, key, default) do
-    value = Keyword.get(options, key, default)
-    if not (is_integer(value) and value > 0), do: raise(ArgumentError, "#{key} must be positive")
-    value
-  end
 end
