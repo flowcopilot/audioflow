@@ -1,6 +1,14 @@
-# Run: MIX_ENV=test mix run examples/telephony-loopback.exs
-# Offline wire demonstration only: the test detector marks all PCM as speech,
+# Run: mix run examples/telephony-loopback.exs
+# Offline wire demonstration only: the detector below marks all PCM as speech,
 # and Demo adapters return silent PCM. No provider call or inference is made.
+defmodule AudioFlow.TelephonyExamplePlug.AlwaysSpeechDetector do
+  @behaviour AudioFlow.VoiceDetector
+  @impl true
+  def init(_options), do: {512, 16_000, nil}
+  @impl true
+  def predict(_audio, state), do: {0.9, state}
+end
+
 defmodule AudioFlow.TelephonyExamplePlug do
   def init(provider), do: provider
 
@@ -11,7 +19,7 @@ defmodule AudioFlow.TelephonyExamplePlug do
       [
         provider: provider,
         session: AudioFlow.Adapters.Demo.options(),
-        vad: {AudioFlow.Test.AlwaysSpeechDetector, []},
+        vad: {AudioFlow.TelephonyExamplePlug.AlwaysSpeechDetector, []},
         endpoint_options: [pre_roll_ms: 0, max_utterance_ms: 96]
       ],
       []
@@ -19,6 +27,10 @@ defmodule AudioFlow.TelephonyExamplePlug do
     |> Plug.Conn.halt()
   end
 end
+
+# The client is a dependency-free test helper. MIX_ENV=test compiles it already.
+unless Code.ensure_loaded?(AudioFlow.Test.WebSocketClient),
+  do: Code.require_file("../test/support/web_socket_client.ex", __DIR__)
 
 alias AudioFlow.Test.WebSocketClient, as: Client
 
