@@ -49,11 +49,13 @@ defmodule AudioFlow.Session do
   """
   use GenServer, restart: :temporary
   require Logger
+  import AudioFlow.Session.Durable, only: [snapshot: 1]
   alias AudioFlow.Audio
   alias AudioFlow.Graph.Conversation
   alias AudioFlow.Graph.Plan
   alias AudioFlow.History
   alias AudioFlow.Image
+  alias AudioFlow.Session.Durable
   alias AudioFlow.Session.Pipeline
   alias AudioFlow.Telemetry
   alias AudioFlow.Text
@@ -177,7 +179,7 @@ defmodule AudioFlow.Session do
     telemetry = %{session: self(), owner: owner, graph?: graph != nil}
 
     {:ok,
-     restore(Keyword.get(options, :restore), %{
+     Durable.restore(Keyword.get(options, :restore), %{
        telemetry: telemetry,
        telemetry_started: Telemetry.session_start(telemetry),
        turns: 0,
@@ -765,37 +767,6 @@ defmodule AudioFlow.Session do
     if state.candidate, do: Process.cancel_timer(state.candidate.timer)
     if state.held, do: GenServer.reply(elem(state.held, 1), {:error, :stale_turn})
     %{state | candidate: nil, held: nil, pending_result: nil}
-  end
-
-  ## Durable state
-
-  defp snapshot(state) do
-    %{
-      history: History.snapshot(state.history),
-      conversation_state: state.conversation && state.conversation.current,
-      turns: state.turns
-    }
-  end
-
-  defp restore(nil, state), do: state
-
-  defp restore(%{} = saved, state) do
-    history = History.restore(state.history, Map.get(saved, :history, []))
-    conversation = restore_conversation(state.conversation, Map.get(saved, :conversation_state))
-    graph = if conversation, do: Conversation.plan(conversation), else: state.graph
-    turns = Map.get(saved, :turns, 0)
-    %{state | history: history, conversation: conversation, graph: graph, turns: turns}
-  end
-
-  # Only a state of this conversation can be restored.
-  defp restore_conversation(nil, _name), do: nil
-  defp restore_conversation(flow, nil), do: flow
-
-  defp restore_conversation(flow, name) do
-    case Enum.find(Map.keys(flow.states), &(to_string(&1) == to_string(name))) do
-      nil -> raise ArgumentError, "unknown conversation state #{inspect(name)}"
-      state -> %{flow | current: state}
-    end
   end
 
   # Calls :on_commit when the saved history or conversation state changed.
