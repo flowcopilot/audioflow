@@ -104,6 +104,8 @@ defmodule AudioFlow.WebSocket do
   defp encode({:events, events, state}),
     do: {:push, Enum.map(events, &encode_event/1), state}
 
+  # The producer already has the rejection and the failed turn reports it.
+  defp encode({:output_rejected, _reason, state}), do: {:ok, state}
   defp encode(result), do: result
   defp encode_event({:event, message}), do: {:text, JSON.encode!(message)}
   defp encode_event({:audio, data}), do: {:binary, data}

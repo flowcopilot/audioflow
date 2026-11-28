@@ -2,6 +2,7 @@ defmodule AudioFlow.WebSocketTest do
   use ExUnit.Case, async: true
   alias AudioFlow.Adapters.Demo
   alias AudioFlow.Test.WebSocketClient, as: Client
+  alias AudioFlow.Transport.Connection
 
   defmodule Endpoint do
     @behaviour Plug
@@ -208,6 +209,89 @@ defmodule AudioFlow.WebSocketTest do
     assert_json(socket, %{"type" => "turn_started", "turn" => 2})
     assert_json(socket, %{"type" => "transcript", "turn" => 2})
     assert_receive {:llm, "Hello"}
+  end
+
+  @tag :capture_log
+  test "an adapter exception reaches the client only as a stable code" do
+    llm = function(fn _, _ -> raise KeyError, key: :api_key, term: [api_key: "sk-secret-123"] end)
+    socket = connect(session: Keyword.put(Demo.options(), :llm, llm))
+    ready(socket)
+    Client.send_json(socket, %{type: "text", text: "Hi"})
+    assert_json(socket, %{"type" => "turn_started", "turn" => 1})
+    assert_json(socket, %{"type" => "flush"})
+
+    assert %{"reason" => "internal_error"} =
+             error = assert_json(socket, %{"type" => "error", "turn" => 1})
+
+    refute JSON.encode!(error) =~ "sk-secret"
+  end
+
+  test "reason codes are fixed strings for known shapes" do
+    code = &Connection.reason_code/1
+    assert code.(:busy) == "busy"
+    assert code.({:output, :closed}) == "output_failed"
+    assert code.({:task_exit, {:badarg, []}}) == "turn_crashed"
+    assert code.({:session_stop, :shutdown}) == "session_stopped"
+    assert code.({:exception, "secret"}) == "internal_error"
+    assert code.(%{token: "secret"}) == "internal_error"
+  end
+
+  @tag :capture_log
+  test "a rejected output chunk fails the turn and keeps the connection open" do
+    socket = connect(output_check: fn _ -> {:error, :blocked} end)
+    ready(socket)
+    Client.send_json(socket, %{type: "text", text: "Hi"})
+    assert_json(socket, %{"type" => "turn_started", "turn" => 1})
+    assert_json(socket, %{"type" => "text"})
+    assert_json(socket, %{"type" => "flush"})
+    assert_json(socket, %{"type" => "error", "turn" => 1, "reason" => "output_failed"})
+    Client.send_json(socket, %{type: "clear_history"})
+    assert_json(socket, %{"type" => "history_cleared"})
+  end
+
+  @tag :capture_log
+  test "an unresponsive or dead session becomes an error event" do
+    {:push, _ready, state} = AudioFlow.WebSocket.init(session: Demo.options())
+    on_exit(fn -> AudioFlow.WebSocket.terminate(:normal, state) end)
+    dead = spawn(fn -> :ok end)
+    ref = Process.monitor(dead)
+    assert_receive {:DOWN, ^ref, :process, ^dead, _}
+    state = %{state | session: dead}
+
+    for message <- [%{"type" => "text", "text" => "Hi"}, %{"type" => "cancel"}] do
+      assert {:push, [{:text, json}], _} =
+               AudioFlow.WebSocket.handle_in({JSON.encode!(message), opcode: :text}, state)
+
+      assert %{"type" => "error", "reason" => "session_unavailable"} = JSON.decode!(json)
+    end
+  end
+
+  test "a cancel that races a finished turn reports the turn as done" do
+    {:push, _ready, state} = AudioFlow.WebSocket.init(session: Demo.options())
+    on_exit(fn -> AudioFlow.WebSocket.terminate(:normal, state) end)
+    ref = make_ref()
+    session = state.session
+    state = %{state | turn: {ref, 7}}
+    send(self(), {AudioFlow, session, ref, {:text, "Hi"}})
+    send(self(), {AudioFlow, session, ref, {:done, %{events: 1}}})
+
+    assert {:push, [{:text, json}], state} =
+             AudioFlow.WebSocket.handle_in({~s({"type":"cancel"}), opcode: :text}, state)
+
+    assert %{"type" => "done", "turn" => 7} = JSON.decode!(json)
+    assert state.turn == nil
+  end
+
+  test "a cancel of a running turn reports it as cancelled" do
+    {:push, _ready, state} = AudioFlow.WebSocket.init(session: Demo.options())
+    on_exit(fn -> AudioFlow.WebSocket.terminate(:normal, state) end)
+    {:ok, ref} = AudioFlow.submit(state.session, %AudioFlow.Text{data: "Hi"})
+    state = %{state | turn: {ref, 3}}
+
+    assert {:push, [{:text, json}], _} =
+             AudioFlow.WebSocket.handle_in({~s({"type":"cancel"}), opcode: :text}, state)
+
+    assert %{"type" => "cancelled", "turn" => 3} = JSON.decode!(json)
   end
 
   test "closing the connection stops its session" do

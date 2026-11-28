@@ -54,6 +54,15 @@ it must discard its queued playback. After a cancellation, the connection
 drops output from the old turn. An invalid client message gets an `error`
 event, and the connection stays open.
 
+An `error` event has a stable `reason` code, and a `turn` when a turn failed.
+Atom reasons keep their name, for example `busy`, `timeout` or `invalid_audio`.
+Known failures use a fixed code: `output_failed`, `turn_crashed`,
+`session_stopped` and `unsupported_input`. Any other failure, such as an
+adapter exception, is `internal_error`. The server logs the full reason, and it
+never goes to the client. If the session does not answer a command in time, the
+reason is `session_unavailable`. When a cancel arrives after the turn finished,
+the client gets that turn's `done` event, not `cancelled`.
+
 The browser example uses the Demo adapters. Hold the button to speak, or type
 a message:
 

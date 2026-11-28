@@ -5,8 +5,15 @@ defmodule AudioFlow.Transport.Connection do
   Results contain structured `{:event, map}` and `{:audio, pcm}` events.
   Endpoints encode those events in their own wire format. An output check can
   reject PCM before the producer receives its acceptance acknowledgement.
+
+  By default the connection acknowledges a pushed chunk at once. With
+  `ack: :endpoint` it returns `{:accepted, {from, tag}, events, state}` instead,
+  and the endpoint sends `{tag, result}` to `from` when it is ready for more
+  audio. That lets an endpoint with a play-out queue apply back pressure.
+  Wire error reasons are stable codes. See `reason_code/1`.
   """
   @behaviour AudioFlow.Output
+  require Logger
   alias AudioFlow.Audio
   alias AudioFlow.Text
   alias AudioFlow.VoiceInput
@@ -72,13 +79,14 @@ defmodule AudioFlow.Transport.Connection do
       turn: nil,
       next_turn: 1,
       output_check: Keyword.get(options, :output_check, fn _ -> :ok end),
+      ack: Keyword.get(options, :ack, :immediate),
       output_rate: nil
     }
 
     session_options =
       options
       |> Keyword.fetch!(:session)
-      |> Keyword.merge(owner: self(), output: {__MODULE__, self()})
+      |> Keyword.merge(owner: self(), output: {__MODULE__, self()}, notify_audio: false)
 
     case AudioFlow.start_session(session_options) do
       {:ok, session} ->
@@ -128,9 +136,8 @@ defmodule AudioFlow.Transport.Connection do
     if state.session == session and match?({^ref, _}, state.turn) do
       case state.output_check.(audio) do
         :ok ->
-          send(from, {tag, :ok})
           {format, state} = output_format(audio.sample_rate, state)
-          reply(format ++ [{:audio, audio.data}], state)
+          accepted(format ++ [{:audio, audio.data}], {from, tag}, state)
 
         {:error, reason} ->
           send(from, {tag, {:error, reason}})
@@ -213,23 +220,32 @@ defmodule AudioFlow.Transport.Connection do
   defp voice_events(events, state), do: reply(voice_frames(events, state))
 
   defp voice_frames(events, state) do
-    Enum.reduce(events, {[], state}, fn event, {frames, state} ->
-      {new, state} =
-        case event do
-          :speech_started ->
-            {cancelled, state} = cancel(state)
-            {[event(%{type: :speech_started}) | cancelled], state}
+    collect(events, state, fn
+      :speech_started, state ->
+        {cancelled, state} = cancel(state)
+        {[event(%{type: :speech_started}) | cancelled], state}
 
-          {:utterance, audio, _reason} ->
-            submit(audio, state)
-        end
-
-      {frames ++ new, state}
+      {:utterance, audio, _reason}, state ->
+        submit(audio, state)
     end)
   end
 
+  @doc """
+  Maps `fun` over `items` and threads state. The function returns
+  `{frames, state}` and the result keeps the frames in order.
+  """
+  def collect(items, state, fun) do
+    {frames, state} =
+      Enum.reduce(items, {[], state}, fn item, {acc, state} ->
+        {new, state} = fun.(item, state)
+        {Enum.reverse(new, acc), state}
+      end)
+
+    {Enum.reverse(frames), state}
+  end
+
   defp submit(input, state) do
-    case AudioFlow.submit(state.session, input) do
+    case session_call(fn -> AudioFlow.submit(state.session, input) end) do
       {:ok, ref} ->
         id = state.next_turn
         {[event(%{type: :turn_started, turn: id})], %{state | turn: {ref, id}, next_turn: id + 1}}
@@ -241,13 +257,46 @@ defmodule AudioFlow.Transport.Connection do
 
   defp cancel(state) do
     frames =
-      case {AudioFlow.cancel(state.session), state.turn} do
+      case {session_call(fn -> AudioFlow.cancel(state.session) end), state.turn} do
         {:ok, nil} -> []
-        {:ok, {_ref, id}} -> [event(%{type: :cancelled, turn: id})]
+        {:ok, {ref, id}} -> [turn_outcome(state.session, ref, id)]
         {{:error, reason}, turn} -> [error(turn && elem(turn, 1), reason)]
       end
 
     {frames, %{state | turn: nil}}
+  end
+
+  # The turn can finish before the cancel reaches the session. Its final event
+  # is then already in the mailbox, and that outcome is the one to report.
+  defp turn_outcome(session, ref, id) do
+    receive do
+      {AudioFlow, ^session, ^ref, {:done, metrics}} ->
+        event(%{type: :done, turn: id, metrics: metrics})
+
+      {AudioFlow, ^session, ^ref, {:error, reason, _metrics}} ->
+        error(id, reason)
+
+      {AudioFlow, ^session, ^ref, {:cancelled, _metrics}} ->
+        event(%{type: :cancelled, turn: id})
+    after
+      0 -> event(%{type: :cancelled, turn: id})
+    end
+  end
+
+  defp session_call(fun) do
+    fun.()
+  catch
+    :exit, reason ->
+      Logger.warning("audio session call failed: #{inspect(reason)}")
+      {:error, :session_unavailable}
+  end
+
+  defp accepted(frames, {from, tag}, %{ack: :endpoint} = state),
+    do: {:accepted, {from, tag}, frames, state}
+
+  defp accepted(frames, {from, tag}, state) do
+    send(from, {tag, :ok})
+    reply(frames, state)
   end
 
   defp output_format(rate, %{output_rate: rate} = state), do: {[], state}
@@ -256,12 +305,26 @@ defmodule AudioFlow.Transport.Connection do
     do: {[event(%{type: :output_format, sample_rate: rate})], %{state | output_rate: rate}}
 
   defp error(turn, reason) do
-    message = %{type: :error, reason: reason_text(reason)}
+    Logger.log(
+      if(turn, do: :warning, else: :debug),
+      "audio connection error (turn #{inspect(turn)}): #{inspect(reason)}"
+    )
+
+    message = %{type: :error, reason: reason_code(reason)}
     event(if turn, do: Map.put(message, :turn, turn), else: message)
   end
 
-  defp reason_text(reason) when is_atom(reason), do: Atom.to_string(reason)
-  defp reason_text(reason), do: inspect(reason)
+  @doc """
+  Stable error code for a client. Atoms keep their names, known shapes map to
+  fixed codes, and anything else is `"internal_error"`. A full reason can hold
+  adapter options or secrets, so it only goes to the server log.
+  """
+  def reason_code(reason) when is_atom(reason), do: Atom.to_string(reason)
+  def reason_code({kind, _}) when kind in [:output, :output_flush], do: "output_failed"
+  def reason_code({:task_exit, _}), do: "turn_crashed"
+  def reason_code({:session_stop, _}), do: "session_stopped"
+  def reason_code({:unsupported_input, _}), do: "unsupported_input"
+  def reason_code(_reason), do: "internal_error"
 
   defp event(message), do: {:event, message}
 
