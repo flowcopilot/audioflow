@@ -17,9 +17,7 @@ defmodule Chat.Stage do
       stt: {__MODULE__, stage: :stt},
       llm: {__MODULE__, stage: :llm},
       tts: {__MODULE__, stage: :tts},
-      history: true,
-      timeout_ms: 120_000,
-      max_events: 4096
+      history: true
     ]
   end
 end
