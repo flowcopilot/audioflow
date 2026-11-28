@@ -14,6 +14,9 @@ This application does not depend on `:audio_flow`. Run it as its own release.
 - A **participant** (`AudioFlowSFU.Participant.WebRTC`) owns one
   `ExWebRTC.PeerConnection` for publish and subscribe. It forwards the RTP of
   its published tracks to its subscribers without transcoding.
+- A publisher sends packets straight into the `PeerConnection` of a WebRTC
+  subscriber once its subscription is negotiated. Other subscribers, such as
+  agents, get them as messages.
 - Slow receivers lose media instead of queueing it. A local subscriber with
   more than 1 000 queued messages gets no new packets, and a busy
   distribution connection drops them. Participant processes die above a

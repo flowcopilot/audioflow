@@ -86,6 +86,8 @@ defmodule AudioFlowSFU.Participant.Native do
           subscriptions: %{},
           # Own track SID => %{subscriber pid => monitor ref}.
           subscribers: %{},
+          # Own track SID => %{subscriber pid => {peer connection, track ID}}.
+          routes: %{},
           # Own track SID => RTP munger: one continuous sequence number and
           # timestamp domain for the subscribers, whatever the agent sends.
           mungers: %{}
@@ -150,7 +152,7 @@ defmodule AudioFlowSFU.Participant.Native do
         {packet, munger} = Munger.munge(munger(state, sid), packet)
         state = %{state | mungers: Map.put(state.mungers, sid, munger)}
 
-        Participant.forward(Map.keys(subscribers), sid, packet)
+        Participant.forward(Map.keys(subscribers), sid, packet, Map.get(state.routes, sid, %{}))
         |> Telemetry.dropped(sid, state.info, state.grants.room)
 
         {:noreply, state}
@@ -193,6 +195,17 @@ defmodule AudioFlowSFU.Participant.Native do
 
   def handle_info({Participant, :unsubscribe, sid, pid}, state),
     do: {:noreply, drop_subscriber(state, sid, pid)}
+
+  # A subscriber that can take packets straight into its peer connection.
+  def handle_info({Participant, :route, sid, pid, target}, state) do
+    case state.subscribers do
+      %{^sid => %{^pid => _}} ->
+        {:noreply, %{state | routes: Participant.put_route(state.routes, sid, pid, target)}}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
 
   def handle_info({Room, _, {event, info, pid}}, state)
       when event in [:participant_joined, :participant_updated] do
@@ -331,7 +344,12 @@ defmodule AudioFlowSFU.Participant.Native do
     case state.subscribers do
       %{^sid => %{^pid => ref} = subscribers} ->
         Process.demonitor(ref, [:flush])
-        %{state | subscribers: Map.put(state.subscribers, sid, Map.delete(subscribers, pid))}
+
+        %{
+          state
+          | subscribers: Map.put(state.subscribers, sid, Map.delete(subscribers, pid)),
+            routes: Participant.drop_route(state.routes, sid, pid)
+        }
 
       _ ->
         state

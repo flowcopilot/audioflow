@@ -186,7 +186,7 @@ defmodule AudioFlowSFU.Participant.WebRTC do
           published: %{},
           # Track SID => %{subscriber pid => monitor ref}.
           subscribers: %{},
-          # Track SID => %{subscriber pid => {PeerConnection, track ID}}: the
+          # Track SID => %{subscriber pid => {peer connection, track ID}}: the
           # subscribers that get packets straight from this publisher.
           routes: %{},
           # Track SID => %{publisher, publisher_sid, track, sender, mime_type, ready}.
@@ -343,7 +343,7 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   def handle_info({:ex_webrtc, pc, {:rtp, id, _rid, packet}}, %{pc: pc} = state) do
     with {:ok, sid} <- Map.fetch(state.published, id),
          {:ok, subscribers} <- Map.fetch(state.subscribers, sid) do
-      Participant.forward(Map.keys(subscribers), sid, packet)
+      Participant.forward(Map.keys(subscribers), sid, packet, Map.get(state.routes, sid, %{}))
       |> Telemetry.dropped(sid, state.info, state.grants.room)
     end
 
@@ -413,6 +413,17 @@ defmodule AudioFlowSFU.Participant.WebRTC do
 
   def handle_info({Participant, :unsubscribe, sid, pid}, state),
     do: {:noreply, drop_subscriber(state, sid, pid)}
+
+  # A subscriber that can take packets straight into its peer connection.
+  def handle_info({Participant, :route, sid, pid, target}, state) do
+    case state.subscribers do
+      %{^sid => %{^pid => _}} ->
+        {:noreply, %{state | routes: Participant.put_route(state.routes, sid, pid, target)}}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
 
   def handle_info({Room, _, {event, info, pid}}, state)
       when event in [:participant_joined, :participant_updated] do
@@ -700,7 +711,12 @@ defmodule AudioFlowSFU.Participant.WebRTC do
     case state.subscribers do
       %{^sid => %{^pid => ref} = subscribers} ->
         Process.demonitor(ref, [:flush])
-        %{state | subscribers: Map.put(state.subscribers, sid, Map.delete(subscribers, pid))}
+
+        %{
+          state
+          | subscribers: Map.put(state.subscribers, sid, Map.delete(subscribers, pid)),
+            routes: Participant.drop_route(state.routes, sid, pid)
+        }
 
       _ ->
         state
@@ -824,6 +840,9 @@ defmodule AudioFlowSFU.Participant.WebRTC do
   # After each exchange, every negotiated send-only transceiver gets the
   # publisher's codec again: ex_webrtc unselects a sender codec when a new
   # remote description changes its parameters (for example `stereo=1`).
+  # A publisher sends packets straight into this peer connection while the
+  # subscription is ready. Until the publisher handles the route change, it
+  # can send a few packets to a sender without a codec; ex_webrtc drops them.
   defp ready_subscriptions(state) do
     transceivers = PeerConnection.get_transceivers(state.pc)
 
@@ -831,6 +850,10 @@ defmodule AudioFlowSFU.Participant.WebRTC do
       Map.new(state.subscriptions, fn {sid, sub} ->
         {sid, ready(state.pc, sub, transceivers)}
       end)
+
+    for {sid, sub} <- subscriptions, sub.ready != state.subscriptions[sid].ready do
+      Participant.route(sub.publisher, sid, if(sub.ready, do: {state.pc, sub.track.id}))
+    end
 
     %{state | subscriptions: subscriptions}
   end

@@ -70,6 +70,45 @@ defmodule AudioFlowSFU.RoomTest do
     assert [%{identity: "alice"}] = Room.participants(Room.whereis(name))
   end
 
+  test "a ready subscription gets packets straight from the publisher" do
+    name = room()
+    {:ok, alice} = TestClient.start(name, "alice")
+    connected(alice)
+    assert_receive {:client, ^alice, {:track_published, %{sid: track}}}, 5000
+    {:ok, bob} = TestClient.start(name, "bob", can_publish: false)
+    connected(bob)
+    assert_forwarded(alice, bob)
+
+    alice_participant = TestClient.participant(alice)
+    bob_participant = TestClient.participant(bob)
+
+    until(fn ->
+      match?(%{^track => %{^bob_participant => {_, _}}}, :sys.get_state(alice_participant).routes)
+    end)
+
+    flush_rtp(bob)
+    :erlang.trace(bob_participant, true, [:receive])
+    for n <- 1..10, do: TestClient.send_audio(alice, payload(n))
+    for _ <- 1..10, do: assert_receive({:client, ^bob, {:rtp, _}}, 2000)
+    :erlang.trace(bob_participant, false, [:receive])
+
+    # The subscriber's process saw no media message.
+    refute_received {:trace, ^bob_participant, :receive, {AudioFlowSFU.Participant, :rtp, _, _}}
+
+    # A subscriber that leaves is taken off the route.
+    :ok = WebRTC.leave(bob_participant)
+
+    until(fn -> :sys.get_state(alice_participant).routes[track] in [nil, %{}] end)
+  end
+
+  defp until(fun, attempts \\ 100) do
+    cond do
+      fun.() -> :ok
+      attempts == 0 -> flunk("condition not met")
+      true -> Process.sleep(20) && until(fun, attempts - 1)
+    end
+  end
+
   test "a join to a running room does not call the room supervisor" do
     name = room()
     {:ok, _alice} = TestClient.start(name, "alice")
