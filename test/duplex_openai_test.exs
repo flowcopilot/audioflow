@@ -196,16 +196,19 @@ defmodule AudioFlow.DuplexOpenAITest do
   end
 
   test "continuous silence well past the input lead is accepted at the real-time rate" do
-    {duplex, _peer} = ready(max_input_lead_ms: 400)
+    clock = :atomics.new(1, [])
+    {duplex, _peer} = ready(max_input_lead_ms: 400, clock: fn -> :atomics.get(clock, 1) end)
 
-    # 2.4 s of silence at the browser rate, with no model output at all.
+    # 2.4 s of silence at the browser rate, with no model output at all. The
+    # clock moves by the length of each chunk.
     for _ <- 1..30 do
       assert :ok = Duplex.push(duplex, silence())
-      Process.sleep(80)
+      :atomics.add(clock, 1, 80)
     end
 
     # A burst far ahead of the clock is refused, and the call stays open.
     results = for _ <- 1..40, do: Duplex.push(duplex, silence())
+    assert Enum.count(results, &(&1 == :ok)) == 5
     assert {:error, :overloaded} in results
     assert Process.alive?(duplex)
     refute_received {Duplex, ^duplex, {:error, _}}
