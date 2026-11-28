@@ -5,7 +5,7 @@ description: Run the tests, the demo session, and the benchmark.
 
 ## Requirements
 
-Use the tool versions in the repository `mise.toml`, or Elixir 1.18 or later
+Use the tool versions in the repository `mise.toml`, or Elixir 1.20 or later
 with a compatible OTP version.
 
 ```sh

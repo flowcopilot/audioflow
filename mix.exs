@@ -5,7 +5,7 @@ defmodule AudioFlow.MixProject do
     [
       app: :audio_flow,
       version: "0.1.0",
-      elixir: "~> 1.18",
+      elixir: "~> 1.20",
       build_path: "_build/#{profile()}",
       elixirc_paths: paths(),
       deps: deps(),
@@ -33,9 +33,10 @@ defmodule AudioFlow.MixProject do
   defp aliases do
     [
       typecheck: [
-        "compile --force --warnings-as-errors",
+        "compile --warnings-as-errors",
         "test --warnings-as-errors --dry-run"
-      ]
+      ],
+      "bench.hot": "run bench/hot_paths.exs"
     ]
   end
 
