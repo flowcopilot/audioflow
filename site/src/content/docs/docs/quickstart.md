@@ -15,6 +15,33 @@ mise install
 mix deps.get
 ```
 
+## Use AudioFlow in your application
+
+Add the dependency to the `mix.exs` of your own project:
+
+```elixir
+def deps do
+  [{:audio_flow, github: "flowcopilot/audioflow"}]
+end
+```
+
+Optional parts compile only when their flag is set to `1` in the environment of
+`mix deps.get` and of every later `mix` command:
+
+- `AUDIOFLOW_ML=1`: local models (Bumblebee, EXLA).
+- `AUDIOFLOW_MEDIA=1`: Membrane input and PortAudio output.
+- `AUDIOFLOW_WEBRTC=1`: WebRTC transport.
+- `AUDIOFLOW_SFU=1`: the BEAM SFU pieces.
+
+```sh
+AUDIOFLOW_MEDIA=1 mix deps.get
+AUDIOFLOW_MEDIA=1 mix compile
+```
+
+Without flags you get the core and the HTTP adapters, which is enough for
+`AudioFlow.WebSocket` and the telephony transports. Your application also
+needs a web server such as Bandit to serve them.
+
 ## Run the core
 
 The core runs without model downloads. The demo adapters produce fixed text and
@@ -82,4 +109,10 @@ See [Local models](../guides/local-models/).
 | `examples/models.exs` | Shared model services for the other examples |
 | `examples/transcribe.exs` | Captions for a WAV file through any STT adapter |
 | `examples/websocket.exs` | The browser WebSocket demo |
+| `examples/cloud_agent.exs` | A voice agent on Deepgram, ReqLLM, and Cartesia (needs API keys) |
+| `examples/telephony-loopback.exs` | Twilio and Telnyx media streams against a local server, offline |
+| `examples/network/voice_agent.exs` | Two local WebRTC peers exchange synthetic voice (`AUDIOFLOW_WEBRTC=1`) |
+| `examples/rtvi-client` | A Pipecat JavaScript client over the RTVI WebSocket |
+| `examples/durable-call` | A call that survives the death of its agent node |
+| `examples/avatar` | A LiveAvatar viewer for provider audio and video |
 | `examples/chat` | A LiveView voice and text chat |
