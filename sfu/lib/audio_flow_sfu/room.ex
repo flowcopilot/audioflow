@@ -64,10 +64,14 @@ defmodule AudioFlowSFU.Room do
   def leave(room, sid), do: GenServer.call(room, {:leave, sid})
   def participants(room), do: GenServer.call(room, :participants)
 
+  # A join to a running room is a registry read. Only a missing room goes
+  # through the supervisor, which settles a race between two first joins.
   defp ensure_started(name) do
-    case DynamicSupervisor.start_child(AudioFlowSFU.Rooms, {__MODULE__, name}) do
-      {:ok, pid} -> pid
-      {:error, {:already_started, pid}} -> pid
+    with nil <- whereis(name) do
+      case DynamicSupervisor.start_child(AudioFlowSFU.Rooms, {__MODULE__, name}) do
+        {:ok, pid} -> pid
+        {:error, {:already_started, pid}} -> pid
+      end
     end
   end
 

@@ -70,6 +70,19 @@ defmodule AudioFlowSFU.RoomTest do
     assert [%{identity: "alice"}] = Room.participants(Room.whereis(name))
   end
 
+  test "a join to a running room does not call the room supervisor" do
+    name = room()
+    {:ok, _alice} = TestClient.start(name, "alice")
+    supervisor = Process.whereis(AudioFlowSFU.Rooms)
+    :erlang.trace(supervisor, true, [:receive])
+
+    info = %{sid: "PA_probe", identity: "probe", tracks: []}
+    assert {:ok, _room, [_alice]} = Room.join(name, info, self())
+
+    :erlang.trace(supervisor, false, [:receive])
+    refute_received {:trace, ^supervisor, :receive, {:"$gen_call", _, {:start_child, _}}}
+  end
+
   test "an empty room stops after the empty timeout" do
     Application.put_env(:audio_flow_sfu, :empty_timeout_ms, 50)
     on_exit(fn -> Application.put_env(:audio_flow_sfu, :empty_timeout_ms, 30_000) end)
