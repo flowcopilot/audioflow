@@ -15,7 +15,16 @@ defmodule AudioFlow.MixProject do
       appup: "appup.exs",
       compilers: Mix.compilers() ++ [:appup],
       dialyzer: [plt_add_apps: [:mix, :ex_unit]],
+      docs: docs(),
       start_permanent: Mix.env() == :prod
+    ]
+  end
+
+  defp docs do
+    [
+      main: "AudioFlow",
+      source_url: "https://github.com/flowcopilot/audioflow",
+      extras: ["README.md"]
     ]
   end
 
@@ -79,7 +88,8 @@ defmodule AudioFlow.MixProject do
       {:blitz_credo_checks, "~> 0.1.10", only: [:dev, :test], runtime: false},
       {:credo_unnecessary_reduce, "~> 0.4.0", only: [:dev, :test], runtime: false},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false},
-      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false}
+      {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
+      {:ex_doc, "~> 0.40", only: :dev, runtime: false}
     ] ++
       ml ++
       if(enabled?("AUDIOFLOW_WEBRTC"), do: [{:ex_webrtc, "~> 0.18.0"}], else: []) ++
