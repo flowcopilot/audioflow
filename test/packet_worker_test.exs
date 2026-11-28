@@ -16,6 +16,9 @@ defmodule AudioFlow.PacketWorkerTest do
       PacketWorker.start_link(executable: System.find_executable("escript"), args: [@script, log])
 
     on_exit(fn -> if Process.alive?(worker), do: GenServer.stop(worker) end)
+    # The program starts with the first request. Start it now, so that the short
+    # deadlines of the tests do not include its start-up time on a loaded machine.
+    assert {:ok, "echo warm"} = PacketWorker.request(worker, "echo warm", 10_000)
     {:ok, worker: worker, log: log}
   end
 
@@ -37,8 +40,6 @@ defmodule AudioFlow.PacketWorkerTest do
 
   test "a late reply that arrives while the worker is idle settles the timed-out request",
        %{worker: worker, log: log} do
-    # The program must be running first, or its start-up time counts as the delay.
-    assert {:ok, "echo warm"} = PacketWorker.request(worker, "echo warm", 5000)
     assert {:error, :timeout} = PacketWorker.request(worker, "slow:150", 50)
     # The late "slow" reply reaches the idle worker before the next request.
     Process.sleep(600)
